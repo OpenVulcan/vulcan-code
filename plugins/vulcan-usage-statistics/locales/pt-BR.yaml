@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: Geração de letras
   operation.embedding_create: Geração de vetores
   operation.rerank_documents: Reclassificação de documentos
+  serviceEntry.openvulcan-memory: "Memória gratuita na nuvem"
+  operation.cloud_memory_pcl1: "Verificação prévia L1"
+  operation.cloud_memory_pcl2: "Verificação prévia L2"
+  operation.cloud_memory_ptl1: "Análise posterior L1"
+  operation.cloud_memory_ptl2: "Análise posterior L2"
+  operation.cloud_memory_profile_instruction: "Resumo do perfil"
+  operation.cloud_memory_embedding: "Vetorização"
+  operation.cloud_memory_rerank: "Reclassificação"
   operation.web_search: Pesquisa na web
   operation.web_extract: Extração da web
   error.category: Categoria do erro

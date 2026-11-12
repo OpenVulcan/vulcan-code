@@ -187,6 +187,9 @@ const WorkbenchDialogs = React.lazy(() => import("@/components/workspace/workben
 const LazyProjectHome = React.lazy(() => import("@/components/project/project-home")
   .then((module) => ({ default: module.ProjectHome })));
 const SetupGuideDialog = React.lazy(() => import("@/components/features/onboarding/setup-guide-dialog"));
+// Defers the memory wizard until a signed-in installation actually needs setup.
+// 将记忆向导延迟至已登录且确实需要设置的安装。
+const MemoryOnboarding = React.lazy(() => import("@/components/features/memory/vmm-memory-onboarding"));
 // OpenVulcanAccountDialog loads only when onboarding or account management is opened.
 // OpenVulcanAccountDialog 仅在打开引导或账户管理时加载。
 const OpenVulcanAccountDialog = React.lazy(() => import("@/components/features/account/openvulcan-account-dialog"));
@@ -533,6 +536,19 @@ export function WorkbenchLayout(props: {
     setActiveArea("chat");
     setWorkspaceMainView("memory");
   }, []);
+  // Gives a withdrawn cloud choice an actionable notice while settings are closed.
+  // 设置关闭时，为已下架的云端选择提供可操作提示。
+  const cloudMemorySelectionChanged = workbenchState.vmmMemory?.runtime?.cloudMemorySelectionChanged;
+  React.useEffect(() => {
+    if (!cloudMemorySelectionChanged) return;
+    toast.warning(i18n.t("memory.cloud.selectionChanged"), {
+      id: "cloud-memory-selection-changed",
+      action: { label: i18n.t("memory.cloud.chooseAgain"), onClick: () => {
+        handleOpenWorkspaceMemory();
+        setActiveWorkbenchMemorySubArea("inference");
+      } },
+    });
+  }, [cloudMemorySelectionChanged, handleOpenWorkspaceMemory, i18n.t]);
   // handleOpenWorkspaceKnowledge opens knowledge library management under plugin management in the workbench main panel.
   // handleOpenWorkspaceKnowledge 在工作台主面板的插件管理下打开知识库管理。
   const handleOpenWorkspaceKnowledge = React.useCallback(() => {
@@ -1351,6 +1367,21 @@ export function WorkbenchLayout(props: {
     }
   }, [dialogsRequested]);
 
+  // Shares the memory service actions between the settings page and first-login wizard.
+  // 在设置页和首次登录向导之间共享记忆服务动作。
+  const memoryActions = {
+    onLoadProjectVmmConfig: loadProjectVmmConfig,
+    onRunVmmAction: runVmmMemoryAction,
+    onSaveVmmConfig: (request: Parameters<typeof saveVmmMemoryConfig>[0]) =>
+      applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
+  };
+  // Opens the credential settings from either memory entry.
+  // 从两个记忆入口打开凭据设置。
+  const openMemoryCredentials = () => {
+    setActiveSettingsSubArea("credential-management");
+    handleSelectTopFeatureArea("settings");
+  };
+
   return (
     <OpenVulcanAccountContext.Provider value={account}>
     <AppUpdateContext.Provider value={appUpdateHost}>
@@ -1424,10 +1455,7 @@ export function WorkbenchLayout(props: {
             onCreateProject={handleCreateProject}
             projectHome={projectHomeView}
             onOpenProjectHome={openProjectHome}
-            onOpenCredentialManagement={() => {
-              setActiveSettingsSubArea("credential-management")
-              handleSelectTopFeatureArea("settings")
-            }}
+            onOpenCredentialManagement={openMemoryCredentials}
             onOpenMemory={handleOpenWorkspaceMemory}
             onOpenKnowledge={handleOpenWorkspaceKnowledge}
             onOpenRuntimeDiagnostics={handleOpenRuntimeDiagnostics}
@@ -1446,11 +1474,7 @@ export function WorkbenchLayout(props: {
             luaSkillActions={luaSkillActions}
             agentSkillActions={agentSkillActions}
             agentActions={agentActions}
-            memoryActions={{
-              onLoadProjectVmmConfig: loadProjectVmmConfig,
-              onRunVmmAction: runVmmMemoryAction,
-              onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
-            }}
+            memoryActions={memoryActions}
             onSlashCommand={handleComposerSlashCommand}
             onSubmitPrompt={handleSubmitConversationPrompt}
             onSaveSessionGoal={handleSaveSessionGoal}
@@ -1556,6 +1580,13 @@ export function WorkbenchLayout(props: {
           setActiveSettingsSubArea("model-providers");
           handleSelectTopFeatureArea("settings");
         }} /></React.Suspense> : null}
+      {account.snapshot?.connected && !account.open && !setupGuide.open
+        && workbenchState.vmmMemory?.experienceState.deployment === "disabled"
+        ? <React.Suspense fallback={null}><MemoryOnboarding
+          snapshot={workbenchState.vmmMemory}
+          actions={memoryActions}
+          onOpenCredentialManagement={openMemoryCredentials}
+        /></React.Suspense> : null}
       {dialogsActivated ? <React.Suspense fallback={null}><WorkbenchDialogs
         archiveProjectSubmitting={archiveProjectSubmitting}
         archiveProjectTarget={archiveProjectTarget}

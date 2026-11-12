@@ -37,9 +37,9 @@ export const BUDGET_PARTS: ReadonlyArray<{ label: TranslationKey; part: MemoryBu
   { label: "memory.markdown.part.projectCatalog", part: "projectCatalog" },
 ];
 
-// MemoryModePage chooses the memory mode and the Markdown injection budget, and lists memory projects.
-// MemoryModePage 选择记忆模式与 Markdown 注入预算，并列出记忆项目。
-export function MemoryModePage() {
+// Shows the global mode and displays the supplied VMM controls when VMM is selected for configuration.
+// 显示全局记忆模式，并在选择配置 VMM 时展示传入的 VMM 控件。
+export function MemoryModePage({ vmmContent }: { vmmContent?: React.ReactNode }) {
   const { t } = useI18n();
   const settings = useMemorySettings();
   const loadError = useMemorySettingsLoadError();
@@ -111,7 +111,8 @@ export function MemoryModePage() {
         </PageRow>
       </> : null}
     </PageSection>
-    {settings.mode === "markdown" ? <MarkdownMemorySections /> : null}
+    {mode === "vmm" ? vmmContent : null}
+    {mode === "markdown" && settings.mode === "markdown" ? <MarkdownMemorySections /> : null}
   </>;
 }
 

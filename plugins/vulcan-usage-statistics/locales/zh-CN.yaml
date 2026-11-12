@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: 歌词生成
   operation.embedding_create: 向量生成
   operation.rerank_documents: 文档重排
+  serviceEntry.openvulcan-memory: "免费云端记忆"
+  operation.cloud_memory_pcl1: "预检 L1"
+  operation.cloud_memory_pcl2: "预检 L2"
+  operation.cloud_memory_ptl1: "事后分析 L1"
+  operation.cloud_memory_ptl2: "事后分析 L2"
+  operation.cloud_memory_profile_instruction: "画像总结"
+  operation.cloud_memory_embedding: "向量"
+  operation.cloud_memory_rerank: "重排"
   operation.web_search: 网页搜索
   operation.web_extract: 网页内容提取
   error.category: 错误类别

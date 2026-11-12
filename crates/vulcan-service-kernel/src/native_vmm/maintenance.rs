@@ -1000,6 +1000,17 @@ pub(crate) struct NativeVmmMaintenance {
 }
 
 impl NativeVmmMaintenance {
+    /// Returns the native-only cloud consent runtime when the host has initialized it.
+    /// 宿主完成初始化时返回原生专用云端同意运行时。
+    pub(crate) fn cloud_memory(&self) -> Option<Arc<super::cloud::CloudMemoryRuntime>> {
+        self.runtime.cloud_memory()
+    }
+
+    /// Checks personal model readiness before changing away from cloud memory.
+    /// 切离云端记忆之前检查自有模型就绪状态。
+    pub(super) fn validate_personal_ai(&self) -> Result<(), String> {
+        self.runtime.validate_personal_ai()
+    }
     /// Returns the latest native Host AI validation status without triggering inference work.
     /// 返回最近一次原生宿主 AI 校验状态，且不触发推理工作。
     ///

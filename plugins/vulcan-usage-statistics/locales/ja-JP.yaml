@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: 歌詞生成
   operation.embedding_create: ベクトル生成
   operation.rerank_documents: 文書の再順位付け
+  serviceEntry.openvulcan-memory: "無料クラウドメモリ"
+  operation.cloud_memory_pcl1: "事前確認 L1"
+  operation.cloud_memory_pcl2: "事前確認 L2"
+  operation.cloud_memory_ptl1: "事後分析 L1"
+  operation.cloud_memory_ptl2: "事後分析 L2"
+  operation.cloud_memory_profile_instruction: "プロフィール要約"
+  operation.cloud_memory_embedding: "埋め込み"
+  operation.cloud_memory_rerank: "リランキング"
   operation.web_search: ウェブ検索
   operation.web_extract: ウェブ情報抽出
   error.category: エラー分類

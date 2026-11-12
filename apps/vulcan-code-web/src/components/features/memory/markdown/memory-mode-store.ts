@@ -1,5 +1,5 @@
 import * as React from "react";
-import { loadMemorySettings } from "@/service/markdown-memory-service";
+import { loadMemorySettings, saveMemorySettings } from "@/service/markdown-memory-service";
 import { errorMessage } from "@/lib/display-format";
 import type { MemoryMode, MemorySettingsView } from "@/types";
 
@@ -24,8 +24,9 @@ export function isMarkdownMemorySection(section: string): section is MarkdownMem
 // memorySectionForMode returns the section the page can show under a mode; null keeps the request while loading.
 // memorySectionForMode 返回某模式下页面可显示的分区；模式加载中（null）时保留请求的分区。
 export function memorySectionForMode(section: string, mode: MemoryMode | null): string {
-  if (section === MEMORY_MODE_SECTION || mode === null) return section;
-  if (mode === "off") return MEMORY_MODE_SECTION;
+  if (section === MEMORY_MODE_SECTION) return "inference";
+  if (section === "inference" || section === "overview" || section === "advanced" || mode === null) return section;
+  if (mode === "off") return "inference";
   if (mode === "markdown") return isMarkdownMemorySection(section) ? section : "md_user";
   return isMarkdownMemorySection(section) ? "overview" : section;
 }
@@ -45,6 +46,17 @@ export function publishMemorySettings(settings: MemorySettingsView): void {
   current = settings;
   loadError = null;
   notify();
+}
+
+// Saves an explicit mode selection with the current persisted budget and republishes the returned settings.
+// 使用当前已保存的预算写入用户明确选择的模式，并发布服务返回的设置。
+export async function applyMemoryMode(mode: MemoryMode): Promise<void> {
+  // Use the persisted budget so a shortcut does not apply another form's draft.
+  // 使用已保存的预算，避免快捷操作应用其他表单的草稿。
+  const currentSettings = await loadMemorySettings();
+  publishMemorySettings(currentSettings.mode === mode
+    ? currentSettings
+    : await saveMemorySettings({ mode, budget: currentSettings.budget }));
 }
 
 // notify re-renders every reader.

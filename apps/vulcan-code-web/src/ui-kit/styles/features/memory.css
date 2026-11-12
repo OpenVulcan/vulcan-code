@@ -70,6 +70,8 @@
 /* Preserve shared modal controls and model-picker styling while giving names readable space. */
 /* 保留共享弹窗控件与模型选择器风格，同时为名称提供可读空间。 */
 .vmm-inference-routes { display: flex; flex-direction: column; container: memory-inference / inline-size; }
+.vmm-cloud-status-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); }
+.vmm-cloud-disclosure { min-width: 0; overflow-wrap: anywhere; }
 .vmm-inference-route, .vmm-inference-columns { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 2fr) 80px; align-items: center; gap: 8px 18px; padding: 12px 4px; border-bottom: var(--vk-bw) solid var(--vk-line); }
 .vmm-inference-columns { padding-top: 6px; padding-bottom: 8px; }
 .vmm-inference-mobile-label { display: none; }

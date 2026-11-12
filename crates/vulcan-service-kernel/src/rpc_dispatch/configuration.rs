@@ -116,6 +116,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_provider_extension_mode",
     "service_test_public_ai_provider_tool",
     "service_voice_input_settings",
+    "service_cloud_memory_setup",
+    "service_save_cloud_memory_choice",
     "service_voice_input_cloud_catalog",
     "service_save_voice_input_selection",
     "service_transcribe_voice_input",
@@ -813,6 +815,18 @@ pub(super) async fn dispatch(
                 .await,
         ),
         "service_voice_input_settings" => rpc_json_result(service_voice_input_settings(state)),
+        "service_cloud_memory_setup" => rpc_json_result(
+            crate::native_vmm::cloud::cloud_runtime(&state)?
+                .setup()
+                .await,
+        ),
+        "service_save_cloud_memory_choice" => rpc_json_result(
+            crate::native_vmm::cloud::save_cloud_choice(
+                &state,
+                rpc_required_param(params, "choice")?,
+            )
+            .await,
+        ),
         "service_voice_input_cloud_catalog" => {
             rpc_json_result(service_voice_input_cloud_catalog(state).await)
         }

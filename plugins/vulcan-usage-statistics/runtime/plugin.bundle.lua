@@ -1770,16 +1770,37 @@ local function estimate_tariffs(row, model, currency, tariff_usage)
     return combined
 end
 
--- Estimate both currencies for a usage row using the action's captured pricing configuration.
--- 根据本次 Action 固定的定价配置为用量行估算两种币种。
---
--- row contains the token-only core projection.
--- row 包含仅 Token 的核心投影。
--- config holds the exchange rate; cache reuses effective prices within the same provider and model.
--- config 持有汇率；cache 在相同供应商和模型范围内复用生效价格。
--- Updates the row and returns estimates with their coverage keyed by currency.
--- 更新用量行，并返回以币种为键、包含覆盖情况的估算。
+-- Identifies the host's dedicated, unbilled memory service in usage records.
+-- 标识用量记录中宿主专用且不扣费的记忆服务。
+local FREE_MEMORY_ENTRY = "openvulcan-memory"
+-- Retains this exact identity during grouped SQL pricing projection.
+-- 在分组 SQL 定价投影期间保留此准确标识。
+local FREE_MEMORY_SQL = "provider_id = 'openvulcan' AND service_entry_id = '" .. FREE_MEMORY_ENTRY .. "'"
+
+-- Keep free requests in usage coverage and cost totals, with an exact zero in both currencies.
+-- 免费请求保留用量及费用覆盖，两种币种均准确计零。
+local function attach_free_memory_estimate(row)
+    -- Each currency carries the same free rate while preserving the existing estimate shape.
+    -- 每个币种使用同一免费费率，并保留现有估算结构。
+    local rates = {}
+    for _, dimension in ipairs(PRICE_DIMENSIONS) do
+        rates[dimension.usd] = "0"
+    end
+    local usd = estimate_currency(row, rates, "USD")
+    local cny = estimate_currency(row, rates, "CNY")
+    row.tariffUsageJson, row.isOffPeak = nil, nil
+    row.estimatedCost, row.estimatedCurrency, row.pricingDetails = usd.amount, "USD", usd.details
+    row.pricingRevision, row.pricingSourceId = FREE_MEMORY_ENTRY, FREE_MEMORY_ENTRY
+    row.pricingMatchStatus, row.alternateEstimate = "catalog_exact", cny
+    return { USD = usd, CNY = cny }
+end
+
+-- Updates one usage row and returns currency-specific coverage using the captured pricing configuration.
+-- 使用已捕获的定价配置更新一条用量，并返回各币种的覆盖范围。
 local function attach_reference_estimate(row, config, cache, overrides)
+    if row.providerId == "openvulcan" and row.serviceEntryId == FREE_MEMORY_ENTRY then
+        return attach_free_memory_estimate(row)
+    end
     -- Reuse converted rates only within a provider and regional scope.
     -- 折算后的单价只在同一供应商与地区范围内复用。
     local scope_id = (overrides.providers[row.providerId] or DEFAULT_PRICING_CATALOG.provider_models[row.providerId])
@@ -2087,10 +2108,11 @@ scoped_attempts AS (
 ), recent_model_scope AS (
     SELECT * FROM timed_attempts
     WHERE ?9 = 'all'
-       OR (?9 = 'llm' AND operation IN ('conversation', 'conversation_respond', 'compact', 'warmup')
+       OR (?9 = 'llm' AND operation IN ('conversation', 'conversation_respond', 'compact', 'warmup',
+           'cloud_memory_pcl1', 'cloud_memory_pcl2', 'cloud_memory_ptl1', 'cloud_memory_ptl2', 'cloud_memory_profile_instruction')
            AND consumer_id NOT IN ('vulcan-code-permission-judge', 'vulcan-code-permission-review'))
-       OR (?9 = 'embedding' AND operation = 'embedding_create')
-       OR (?9 = 'rerank' AND operation = 'rerank_documents')
+       OR (?9 = 'embedding' AND operation IN ('embedding_create', 'cloud_memory_embedding'))
+       OR (?9 = 'rerank' AND operation IN ('rerank_documents', 'cloud_memory_rerank'))
        OR (?9 = 'decision' AND (operation = 'decision_evaluate'
            OR consumer_id IN ('vulcan-code-permission-judge', 'vulcan-code-permission-review')))
 ), recent_model_attempts AS (
@@ -2374,8 +2396,8 @@ FROM filtered_daily;
     local cost_page_size = 1000
     local cost_sql = tariff_sql .. [[
 , cost_basis AS (
-    SELECT CASE WHEN provider_id IN (SELECT key FROM json_each(?14, '$.providers')) THEN provider_id ELSE '' END AS pricing_provider,
-      CASE WHEN provider_id IN (SELECT key FROM json_each(?14, '$.entryRefs')) THEN service_entry_id ELSE '' END AS pricing_entry,
+    SELECT CASE WHEN (]] .. FREE_MEMORY_SQL .. [[) OR provider_id IN (SELECT key FROM json_each(?14, '$.providers')) THEN provider_id ELSE '' END AS pricing_provider,
+      CASE WHEN (]] .. FREE_MEMORY_SQL .. [[) OR provider_id IN (SELECT key FROM json_each(?14, '$.entryRefs')) THEN service_entry_id ELSE '' END AS pricing_entry,
       model_id, uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
       uncached_input_missing > 0 AS uncachedInputTokensMissing,
       cache_read_missing > 0 AS cacheReadTokensMissing,
@@ -2383,7 +2405,7 @@ FROM filtered_daily;
       output_missing > 0 AS outputTokensMissing
     FROM range_usage
     LEFT JOIN tariff_groups USING (provider_id, service_entry_id, consumer_id, operation, model_id)
-    WHERE ]] .. billing_model_sql("range_usage.model_id") .. [[ IN (SELECT value FROM json_each(?7))
+    WHERE ((]] .. FREE_MEMORY_SQL .. [[) OR ]] .. billing_model_sql("range_usage.model_id") .. [[ IN (SELECT value FROM json_each(?7)))
       AND tariffUsageJson IS NULL
 )
 SELECT * FROM (

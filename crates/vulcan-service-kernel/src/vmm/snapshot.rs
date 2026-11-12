@@ -748,6 +748,9 @@ pub(crate) fn vmm_runtime_summary(
             String::from("external")
         },
         backend_error,
+        cloud_memory_selection_changed: effective.enabled
+            && native
+            && native_host_ai_status.is_some_and(|status| status.cloud_memory_selection_changed),
         scope_ready,
         scope_error: vector_rebuild_error.clone(),
         precheck_ready: scope_ready && effective.precheck_enabled,

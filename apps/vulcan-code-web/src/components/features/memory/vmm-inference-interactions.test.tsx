@@ -6,12 +6,23 @@ import "./vmm-native-select.test-fixture"
 import { I18nProvider } from "@/i18n"
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip"
 import { loadPublicAiSettings, savePublicAiInferenceRoute } from "@/service/settings-actions-service"
-import type { PublicAiInferenceRoute, PublicAiInternalInferenceCandidate, PublicAiSettingsSnapshot } from "@/types"
+import { loadMemorySettings, saveMemorySettings } from "@/service/markdown-memory-service"
+import type { MemorySettingsView, PublicAiInferenceRoute, PublicAiInternalInferenceCandidate, PublicAiSettingsSnapshot } from "@/types"
 import { VmmInferenceSettings } from "./vmm-inference-settings"
+import { publishMemorySettings } from "./markdown/memory-mode-store"
 
 vi.mock("@/service/settings-actions-service", () => ({
   loadPublicAiSettings: vi.fn(), savePublicAiInferenceRoute: vi.fn(),
   testPublicAiInferenceRoute: vi.fn(), savePublicAiInternalModelOverrides: vi.fn(),
+}))
+vi.mock("@/service/markdown-memory-service", () => ({
+  loadMemorySettings: vi.fn(async () => {
+    // Supply a saved mode when the missing-route notice first mounts.
+    // 路由缺失提示首次挂载时提供已保存的模式。
+    const budget = { user: 50, spaceBase: 100, projectBase: 150, spaceCatalog: 200, projectCatalog: 250 }
+    return { mode: "vmm", budget, defaultBudget: budget, maxPartTokens: 2000, warningPercent: 80 }
+  }),
+  saveMemorySettings: vi.fn(),
 }))
 
 // jsdom has no layout observer; tooltip placement is verified separately in the live browser.
@@ -86,6 +97,37 @@ it("retries a failed initial catalog read without writing configuration", async 
     expect(view.container.querySelector('[aria-label="快速判断 · 模型"]')).not.toBeNull()
     expect(savePublicAiInferenceRoute).not.toHaveBeenCalled()
   } finally { await view.dispose() }
+})
+
+// Verify a user can use Markdown directly from the missing-routes page.
+// 验证用户可直接从路由缺失页面启用 Markdown。
+it("switches to Markdown from missing inference routes without saving a model", async () => {
+  // Persisted memory budget must survive switching away from the unavailable VMM routes.
+  // 从不可用的 VMM 路由切走时必须保留已保存的记忆预算。
+  const budget = { user: 50, spaceBase: 100, projectBase: 150, spaceCatalog: 200, projectCatalog: 250 }
+  // Publish the service settings before rendering the route diagnostics.
+  // 在渲染路由诊断前发布服务设置。
+  const settings: MemorySettingsView = { mode: "vmm", budget, defaultBudget: budget, maxPartTokens: 2000, warningPercent: 80 }
+  publishMemorySettings(settings)
+  vi.mocked(loadMemorySettings).mockResolvedValueOnce(settings)
+  vi.mocked(saveMemorySettings).mockResolvedValueOnce({ ...settings, mode: "markdown" })
+
+  // Use the real shortcut in the settings component, rather than calling the mode store directly.
+  // 使用设置组件的真实快捷入口，而非直接调用模式存储。
+  const view = await mount()
+  try {
+    // Find the shortcut by its behavior identifier.
+    // 根据行为标识定位快捷按钮。
+    const action = view.container.querySelector<HTMLButtonElement>("[data-memory-use-markdown]")
+    expect(action?.disabled).toBe(false)
+    await act(async () => action?.click())
+    expect(saveMemorySettings).toHaveBeenCalledExactlyOnceWith({ mode: "markdown", budget })
+    expect(savePublicAiInferenceRoute).not.toHaveBeenCalled()
+    expect(action?.disabled).toBe(true)
+  } finally {
+    publishMemorySettings(settings)
+    await view.dispose()
+  }
 })
 
 // A candidate refresh must not replace an unavailable saved account through a background effect.

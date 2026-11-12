@@ -12,6 +12,9 @@ import {
 } from "lucide-react"
 
 import { VmmInferenceSettings } from "@/components/features/memory/vmm-inference-settings"
+import { VmmCloudMemoryPicker } from "./vmm-cloud-memory"
+import type { CloudMemoryChoice } from "@/service/cloud-memory-service"
+import { UseMarkdownMemoryButton } from "./use-markdown-memory-button"
 import { formatSkillText } from "@/components/features/featureText"
 import { Alert, AlertDescription } from "@/ui-kit/primitives/alert"
 import { Button } from "@/ui-kit/primitives/button"
@@ -74,6 +77,9 @@ interface VmmQuickSetupCatalog {
 // VmmQuickSetupInput contains every visible decision committed by the setup workflow.
 // VmmQuickSetupInput 包含快速配置流程提交的全部可见决定。
 interface VmmQuickSetupInput extends VmmQuickSetupConnectionInput {
+  // Confirmed cloud choice, or null for user-configured inference.
+  // 已确认的云端选择，自有模型则为空。
+  cloudChoice: CloudMemoryChoice | null
   bindingMode: VmmProjectBindingMode
   userName: string
   nativeFixedProjectId: number
@@ -88,6 +94,12 @@ interface VmmQuickSetupInput extends VmmQuickSetupConnectionInput {
 // VmmSetupDialogProps 定义受控可见性与后端准备操作。
 interface VmmSetupDialogProps {
   open: boolean
+  // Opens the cloud picker directly when the user manages an existing selection.
+  // 管理现有选择时直接打开云端选择器。
+  openCloud?: boolean
+  // Saves a replacement without touching the bindings of an existing native installation.
+  // 为现有原生安装保存替换模型，保持项目绑定。
+  onReplaceCloud?: (choice: CloudMemoryChoice) => Promise<boolean>
   busy: boolean
   projects: VmmProjectScopeSummary[]
   notice: string
@@ -151,15 +163,23 @@ export function setupBindingTargetProjectId(input: {
 // VmmSetupDialog 引导用户完成后端、推理、绑定与确认配置。
 function VmmSetupDialog({
   open,
+  openCloud = false,
   busy,
   projects,
   notice,
   onOpenCredentialManagement,
   onOpenChange,
   onPrepare,
+  onReplaceCloud,
   onSubmit,
 }: VmmSetupDialogProps) {
   const { t } = useI18n()
+  // Let the user choose a memory system before asking for VMM connection details.
+  // 在询问 VMM 连接详情之前，先让用户选择记忆系统。
+  const [source, setSource] = React.useState<"choose" | "own" | "cloud">("choose")
+  // A cloud choice is valid only after the user has checked consent for the current controls.
+  // 只有用户针对当前控件勾选同意后，云端选择才有效。
+  const [cloudChoice, setCloudChoice] = React.useState<CloudMemoryChoice | null>(null)
   const [step, setStep] = React.useState(0)
   const [mode, setMode] = React.useState<VmmQuickSetupMode>("native")
   const [bindingMode, setBindingMode] = React.useState<VmmProjectBindingMode>("fixed")
@@ -182,6 +202,8 @@ function VmmSetupDialog({
 
   React.useEffect(() => {
     if (!open) return
+    setSource(openCloud ? "cloud" : "choose")
+    setCloudChoice(null)
     setStep(0)
     setMode("native")
     setBindingMode("fixed")
@@ -201,7 +223,7 @@ function VmmSetupDialog({
     setFailed(false)
     setPreparing(false)
     setSubmitting(false)
-  }, [open])
+  }, [open, openCloud])
 
   const nativeBindings = catalog?.native?.bindings ?? []
   const unboundProjects = mode === "native"
@@ -258,7 +280,7 @@ function VmmSetupDialog({
       }
       setCatalog(nextCatalog)
       initializeDecisions(mode, bindingMode, nextCatalog)
-      setStep(mode === "native" ? 1 : 2)
+      setStep(mode === "native" && source === "own" ? 1 : 2)
     } finally {
       setPreparing(false)
     }
@@ -273,6 +295,7 @@ function VmmSetupDialog({
     initializeDecisions,
     mode,
     onPrepare,
+    source,
   ])
 
   // updateBindingMode resets row defaults so the visible global policy and row decisions agree.
@@ -323,7 +346,7 @@ function VmmSetupDialog({
       && (bindingMode !== "fixed" || externalFixedComplete)
   const canAdvance = step === 1 ? inferenceReady : step === 2 ? bindingComplete : true
   const canSubmit = Boolean(catalog)
-    && (mode === "external" || inferenceReady)
+    && (source === "cloud" ? cloudChoice !== null : mode === "external" || inferenceReady)
     && bindingComplete
     && !effectiveBusy
 
@@ -336,6 +359,7 @@ function VmmSetupDialog({
     try {
       const completed = await onSubmit({
         mode,
+        cloudChoice: source === "cloud" ? cloudChoice : null,
         bindingMode,
         userName: userName.trim(),
         nativeFixedProjectId: Number(nativeFixedProjectId),
@@ -363,6 +387,7 @@ function VmmSetupDialog({
     bindingMode,
     bindingPlan,
     canSubmit,
+    cloudChoice,
     externalApiKey,
     externalEndpoint,
     externalFixedAction,
@@ -375,8 +400,27 @@ function VmmSetupDialog({
     nativeFixedProjectId,
     onOpenChange,
     onSubmit,
+    source,
     userName,
   ])
+  // Cloud setup has no self-hosted inference step.
+  // 云端引导没有自有推理配置步骤。
+  const visibleStep = source === "cloud" && step > 0 ? step : step + 1
+  const stepCount = source === "cloud" ? 3 : 4
+  // Existing native installations only need the new consent, not the setup steps for projects.
+  // 已配置的原生安装只需新同意，无需重走项目引导。
+  const replaceCloud = openCloud && source === "cloud" ? onReplaceCloud : undefined
+  const submitReplacement = async () => {
+    if (!replaceCloud || !cloudChoice) return
+    setSubmitting(true)
+    setFailed(false)
+    try {
+      if (await replaceCloud(cloudChoice)) onOpenChange(false)
+      else setFailed(true)
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!effectiveBusy) onOpenChange(nextOpen) }}>
@@ -388,16 +432,33 @@ function VmmSetupDialog({
             <BrainCircuit className="vk-icon" aria-hidden="true" />
             {t("vmm.setup.title")}
           </DialogTitle>
-          <DialogDescription>
-            {formatSkillText(t("vmm.setup.stepLabel"), { current: step + 1, total: 4 })}
-          </DialogDescription>
-          <Progress value={(step + 1) * 25} />
+          {replaceCloud ? <DialogDescription>{t("memory.cloud.title")}</DialogDescription> : source !== "choose" ? <DialogDescription>
+            {formatSkillText(t("vmm.setup.stepLabel"), { current: visibleStep, total: stepCount })}
+          </DialogDescription> : <DialogDescription>{t("memory.setup.chooseMode")}</DialogDescription>}
+          {source !== "choose" && !replaceCloud ? <Progress value={visibleStep * 100 / stepCount} /> : null}
         </DialogHeader>
 
         {/* The fixed-footer grid holds header, this scrolling body and the footer, so the actions stay reachable on short screens. */}
         {/* fixed-footer 网格只容纳标题区、此滚动正文与底部操作区，矮屏下操作按钮仍可点击。 */}
         <fieldset disabled={effectiveBusy} className="vk-dialog-body vk-form-loose">
-          {step === 0 ? (
+          {source === "choose" ? (
+            <div className="vk-form-grid">
+              <div className="vk-form-box vk-form-stack">
+                <p className="vk-form-note">{t("memory.setup.markdownHint")}</p>
+                <UseMarkdownMemoryButton onApplied={() => onOpenChange(false)} />
+              </div>
+              <div className="vk-form-box vk-form-stack">
+                <p className="vk-form-note">{t("memory.cloud.hint")}</p>
+                <Button onClick={() => { setMode("native"); setSource("cloud") }} type="button">{t("memory.cloud.title")}</Button>
+              </div>
+              <div className="vk-form-box vk-form-stack">
+                <p className="vk-form-note">{t("vmm.setup.mode.description")}</p>
+                <Button onClick={() => setSource("own")} variant="outline" type="button">{t("memory.setup.useOwnModel")}</Button>
+              </div>
+            </div>
+          ) : null}
+          {source === "cloud" && step === 0 ? <VmmCloudMemoryPicker choice={cloudChoice} onChoice={setCloudChoice} /> : null}
+          {source === "own" && step === 0 ? (
             <SetupModeStep
               apiKey={externalApiKey}
               endpoint={externalEndpoint}
@@ -423,6 +484,7 @@ function VmmSetupDialog({
                   <CircleAlert aria-hidden="true" />
                   <AlertDescription className="vk-form-bar">
                     <span>{t("vmm.setup.inference.required")}</span>
+                    <UseMarkdownMemoryButton onApplied={() => onOpenChange(false)} />
                     <Button
                       onClick={() => {
                         onOpenChange(false)
@@ -491,19 +553,22 @@ function VmmSetupDialog({
           <Button
             disabled={effectiveBusy}
             onClick={() => {
-              if (step === 0) onOpenChange(false)
-              else if (step === 2 && mode === "external") setStep(0)
+              if (source === "choose") onOpenChange(false)
+              else if (step === 0) { setSource("choose"); setCloudChoice(null) }
+              else if (step === 2 && (source === "cloud" || mode === "external")) setStep(0)
               else setStep((current) => current - 1)
             }}
             type="button"
             variant="outline"
           >
-            {step === 0 ? null : <ChevronLeft className="vk-icon" aria-hidden="true" />}
-            {step === 0 ? t("vmm.setup.cancel") : t("vmm.setup.previous")}
+            {source !== "choose" ? <ChevronLeft className="vk-icon" aria-hidden="true" /> : null}
+            {source !== "choose" ? t("vmm.setup.previous") : t("vmm.setup.cancel")}
           </Button>
-          {step < 3 ? (
+          {replaceCloud ? <Button type="button" disabled={effectiveBusy || !cloudChoice} onClick={() => void submitReplacement()}>
+            {t("vmm.setup.submit")}
+          </Button> : source !== "choose" && step < 3 ? (
             <Button
-              disabled={effectiveBusy || (step === 0 ? !connectionComplete : !canAdvance)}
+              disabled={effectiveBusy || (step === 0 ? !connectionComplete || (source === "cloud" && !cloudChoice) : !canAdvance)}
               onClick={() => {
                 if (step === 0) void handlePrepare()
                 else setStep((current) => current + 1)
@@ -513,12 +578,12 @@ function VmmSetupDialog({
               {t("vmm.setup.next")}
               <ChevronRight className="vk-icon" aria-hidden="true" />
             </Button>
-          ) : (
+          ) : source !== "choose" ? (
             <Button disabled={!canSubmit} onClick={() => void handleSubmit()} type="button">
               {effectiveBusy ? <LoaderCircle className="vk-spin" aria-hidden="true" /> : <Check className="vk-icon" aria-hidden="true" />}
               {t("vmm.setup.submit")}
             </Button>
-          )}
+          ) : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>

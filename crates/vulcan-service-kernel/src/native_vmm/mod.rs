@@ -3,6 +3,7 @@
 
 mod analysis_queue;
 mod client;
+pub(crate) mod cloud;
 mod dialogue;
 mod driver;
 mod lexical;

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, RwLock};
 pub use vulcan_memorymesh_core_config::{
     ConfigBundle, ConfigImpact, ConfigSnapshot, MAX_RESOURCE_FILE_BYTES,
     MEMORY_POLICY_SCHEMA_VERSION, MemoryPolicy, NoiseDecision, NoisePolicy, PiiRuleTestMatch,
-    PiiRuleTestResult, PiiScrubResult, PostActionTextPolicy, ProfileLifetimePolicy,
-    ProfileLifetimeRule, ProfilePolicy, ResourceIdentity, ResourceLayer,
+    PiiRuleTestResult, PiiScrubResult, PiiScrubber, PostActionTextPolicy, ProfileLifetimePolicy,
+    ProfileLifetimeRule, ProfilePolicy, ResourceIdentity, ResourceLayer, embedded_pii_scrubber,
     embedded_resource_identity, embedded_resource_paths, embedded_resource_text,
     sanitize_postaction_text, sanitize_postaction_text_with_policy, test_pii_rule,
 };

@@ -115,6 +115,42 @@ pub(super) struct NativeVmmResourceStore {
 }
 
 impl NativeVmmResourceStore {
+    /// Lists exact embedded PII selectors without depending on personal resource overrides.
+    /// 列出准确的内置 PII 地区，不依赖自定义资源覆盖。
+    pub(super) fn cloud_pii_regions() -> Result<Vec<String>, String> {
+        let paths = embedded_paths()?;
+        Ok(paths
+            .iter()
+            .map(|path| describe_resource(path))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|resource| resource.group == "pii" && resource.selector != "common")
+            .map(|resource| resource.selector)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
+    /// Reads the optional cloud consent record through the regular-file boundary.
+    /// 通过普通文件边界读取可选云端同意记录。
+    pub(super) fn read_cloud_consent(&self) -> Result<Option<Vec<u8>>, String> {
+        read_optional_regular_file(
+            &self.config_root,
+            &self.config_root.join("cloud-memory-consent.json"),
+            256 * 1024,
+        )
+    }
+
+    /// Atomically persists the versioned cloud consent record inside the local VMM directory.
+    /// 在本机 VMM 目录内原子保存版本化云端同意记录。
+    pub(super) fn write_cloud_consent(&self, bytes: &[u8]) -> Result<(), String> {
+        persist_file_atomically(
+            &self.config_root,
+            &self.config_root.join("cloud-memory-consent.json"),
+            bytes,
+        )
+    }
+
     /// Creates one resource store without materializing the override directory.
     /// 创建资源存储，但不提前物化覆盖目录。
     #[must_use]

@@ -156,6 +156,17 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "outputDurationMs": null,
                     "outputTokensPerSecond": null,
                     "timedAttemptCount": 0
+                },
+                {
+                    "providerId": "openvulcan", "serviceEntryId": "openvulcan-memory",
+                    "consumerId": "vulcan-code-native-vmm", "operation": "cloud_memory_embedding",
+                    "modelId": "fixture-cloud-embedding", "attemptCount": 1,
+                    "successfulAttemptCount": 1, "reportedUsageAttemptCount": 1,
+                    "inputTokens": 17, "uncachedInputTokens": null, "cacheReadTokens": null,
+                    "cacheWriteTokens": null, "outputTokens": null, "reasoningTokens": null,
+                    "totalTokens": 17, "aggregateRevision": 7, "requestDurationMs": 100,
+                    "firstTokenLatencyMs": null, "outputDurationMs": null,
+                    "outputTokensPerSecond": null, "timedAttemptCount": 0
                 }
             ])
         } else if sql.contains("AS attemptId") {
@@ -208,7 +219,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "schemaRevision": 1,
                 "aggregateRevision": 7,
                 "healthStatus": "ready"
-                ,"dailyCount": 3
+                ,"dailyCount": 4
                 ,"recentCount": 1
                 ,"recentModelsJson": "[{\"providerId\":\"provider-1\",\"modelId\":\"gpt-5.6-sol\"}]"
                 ,"consumerIdsJson": "[\"webui\"]"
@@ -218,7 +229,9 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 { "modelId": "gpt-5.6-sol", "rowCount": 1, "uncachedInputTokens": 8,
                   "cacheReadTokens": 2, "cacheWriteTokens": 0, "outputTokens": 20 },
                 { "modelId": "gpt-5.6-sol", "rowCount": 1, "uncachedInputTokens": 1,
-                  "cacheReadTokens": 0, "cacheWriteTokens": 0, "outputTokens": null }
+                  "cacheReadTokens": 0, "cacheWriteTokens": 0, "outputTokens": null },
+                { "providerId": "openvulcan", "serviceEntryId": "openvulcan-memory",
+                  "modelId": "fixture-cloud-embedding", "rowCount": 1 }
             ])
         } else if sql.contains("AS resultJson") {
             json!([{ "resultJson": "{\"totalCount\":1,\"models\":[{\"modelId\":\"private-model\",\"attempts\":1,\"aliases\":[]}]}" }])
@@ -390,10 +403,23 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
             .is_some_and(|count| count > 0)
     );
     assert_ne!(dashboard["summary"]["costs"][0]["amount"], priced_cost);
-    assert_eq!(dashboard["summary"]["costs"][0]["pricedRows"], 2);
+    assert_eq!(dashboard["summary"]["costs"][0]["pricedRows"], 3);
     assert_eq!(dashboard["summary"]["costs"][0]["unpricedRows"], 1);
     assert_eq!(dashboard["summary"]["costs"][0]["incompleteRows"], 0);
     assert_eq!(dashboard["summary"]["costs"][0]["hasPartialUsage"], true);
+    // A dedicated free route keeps actual tokens and contributes exact zero to both currency totals.
+    // 免费专用路由保留实际 Token，并向两种币种合计贡献准确零费用。
+    let cloud = dashboard["daily"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["operation"] == "cloud_memory_embedding")
+        })
+        .expect("cloud memory embedding usage");
+    assert_eq!(cloud["totalTokens"], 17);
+    assert_eq!(cloud["estimatedCost"], "0");
+    assert_eq!(cloud["alternateEstimate"]["amount"], "0");
+    assert_eq!(cloud["pricingDetails"]["hasPartialUsage"], false);
     assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
     assert_eq!(
         dashboard["recentModels"],

@@ -61,6 +61,9 @@ const NATIVE_VMM_REGISTRATION_ID: &str = "vmm-native:runtime";
 /// Stable owner identity for native VMM AI usage and diagnostics.
 /// 原生 VMM AI 用量与诊断使用的稳定所有者标识。
 const NATIVE_VMM_OWNER_ID: &str = "vmm-native";
+/// Shared caller identity for native memory usage rows, including the dedicated cloud route.
+/// 原生记忆用量行的共享调用方标识，包括云端专用路由。
+pub(super) const NATIVE_VMM_CALLER_ID: &str = "vulcan-code-native-vmm";
 /// Maximum LLM output budget accepted from one Core effect.
 /// 单个 Core Effect 接受的最大 LLM 输出预算。
 const NATIVE_VMM_LLM_OUTPUT_TOKENS: u64 = 8_192;
@@ -271,6 +274,9 @@ pub(crate) struct NativeVmmHostAiStatus {
     /// Active memories whose vectors belong to another generation, counted when the status is read.
     /// 向量属于其他代次的活动记忆数量，在读取状态时统计。
     pub(crate) active_vector_rebuild_required_memory_count: u64,
+    /// Whether an accepted cloud model must be explicitly selected again.
+    /// 已同意的云端模型是否需要明确重选。
+    pub(crate) cloud_memory_selection_changed: bool,
 }
 
 impl NativeVmmHostAiStatus {
@@ -307,6 +313,7 @@ impl NativeVmmHostAiStatus {
             error: None,
             vector_space_id: None,
             active_vector_rebuild_required_memory_count: 0,
+            cloud_memory_selection_changed: false,
         }
     }
 
@@ -333,6 +340,7 @@ impl NativeVmmHostAiStatus {
             error: Some(error.to_string()),
             vector_space_id: None,
             active_vector_rebuild_required_memory_count: 0,
+            cloud_memory_selection_changed: false,
         }
     }
 }
@@ -402,6 +410,7 @@ impl NativeVmmCoreRuntime {
             resources,
             host: NativeVmmHostDriver {
                 ai_port,
+                cloud: None,
                 capability: Arc::new(RwLock::new(None)),
                 ai_cancellation: Arc::new(NativeVmmHostAiCancellation::default()),
                 owner_session_id: None,
@@ -417,6 +426,38 @@ impl NativeVmmCoreRuntime {
         };
         runtime.host.recover_unfinished_core_mutations().await?;
         Ok(runtime)
+    }
+
+    /// Installs the dedicated cloud route before native VMM is exposed to callers.
+    /// 在原生 VMM 对调用方可用之前安装专用云端路由。
+    pub(crate) fn with_cloud_memory(
+        mut self,
+        state: &crate::state::SharedServiceBridgeState,
+        events: &vulcan_service_api::ServiceEventEmitter,
+    ) -> Self {
+        self.host.cloud = Some(Arc::new(super::cloud::CloudMemoryRuntime::new(
+            state,
+            self.resources.clone(),
+            events,
+        )));
+        self
+    }
+
+    /// Borrows the initialized consent runtime for the desktop settings RPCs.
+    /// 为桌面设置 RPC 借用已初始化的同意运行时。
+    pub(crate) fn cloud_memory(&self) -> Option<Arc<super::cloud::CloudMemoryRuntime>> {
+        self.host.cloud.clone()
+    }
+
+    /// Validates personal routes before deactivating an already selected cloud route.
+    /// 在停用已选云端路由之前校验自有路由。
+    pub(super) fn validate_personal_ai(&self) -> Result<(), String> {
+        let capability = self
+            .host
+            .personal_capability()
+            .map_err(|error| error.message)?;
+        native_vmm_embedding_route(&capability).map_err(|issue| issue.diagnostic())?;
+        Ok(())
     }
 
     /// Installs the host's non-owning committed-content projection before clients and workers are exposed.
@@ -789,6 +830,21 @@ impl NativeVmmCoreRuntime {
     /// The last completed validation state, or the initial unchecked state before validation.
     /// 返回最近完成的校验状态；首次校验前返回初始未校验状态。
     pub(crate) fn host_ai_status(&self) -> NativeVmmHostAiStatus {
+        if self
+            .host
+            .cloud
+            .as_ref()
+            .is_some_and(|cloud| cloud.needs_reselection())
+        {
+            return NativeVmmHostAiStatus {
+                checked: true,
+                cloud_memory_selection_changed: true,
+                error: Some(String::from(
+                    "The cloud memory model or its disclosures changed.",
+                )),
+                ..Default::default()
+            };
+        }
         let mut status = self
             .host_ai_status
             .read()
@@ -1455,6 +1511,23 @@ impl NativeVmmCoreRuntime {
                 .apply_memory_project_profile_policy(&mut bundle, project_id)
                 .map_err(native_resource_core_error)?;
         }
+        if handle.registration_id == super::cloud::CHANNEL {
+            let ranking = &mut bundle.memory_policy.retrieval_policy;
+            ranking.rerank_top_n = if handle.supports(AiOperation::RerankDocuments, None) {
+                let default_window = vulcan_memorymesh_core::MemoryPolicy::default()
+                    .retrieval_policy
+                    .rerank_top_n;
+                (if ranking.rerank_top_n == 0 {
+                    default_window
+                } else {
+                    ranking.rerank_top_n
+                })
+                .min(super::cloud::MAX_RERANK_DOCUMENTS)
+                .min(ranking.candidate_pool_max)
+            } else {
+                0
+            };
+        }
         let snapshot = self.core.register_config(bundle)?;
         self.core.activate_config(snapshot.name.as_str())?;
         Ok((handle, snapshot))
@@ -1478,6 +1551,9 @@ struct NativeVmmHostDriver {
     /// Unified host AI boundary shared with other native libraries.
     /// 与其他原生库共享的统一宿主 AI 边界。
     ai_port: Arc<dyn HostAiPort>,
+    /// Optional native-only cloud channel, absent in isolated host fixtures.
+    /// 可选的原生专用云端通道，隔离宿主测试中不存在。
+    cloud: Option<Arc<super::cloud::CloudMemoryRuntime>>,
     /// Request-scoped cancellation observed by all Host AI effects of one command.
     /// 单个命令全部宿主 AI Effect 观察的请求级取消信号。
     ai_cancellation: Arc<NativeVmmHostAiCancellation>,
@@ -1715,6 +1791,18 @@ impl NativeVmmHostDriver {
     /// Returns the existing VMM AI capability or registers it exactly once on first use.
     /// 返回现有 VMM AI 能力，或在首次使用时仅注册一次。
     fn capability(&self) -> Result<HostAiCapabilityHandle, HostAiError> {
+        if let Some(cloud) = &self.cloud
+            && let Some(handle) = cloud.capability(native_vmm_capability_registration())?
+        {
+            validate_native_vmm_required_capabilities(&handle)?;
+            return Ok(handle);
+        }
+        self.personal_capability()
+    }
+
+    /// Refreshes only the personal configured routes, independently of cloud consent.
+    /// 只刷新自有配置路由，独立于云端同意。
+    fn personal_capability(&self) -> Result<HostAiCapabilityHandle, HostAiError> {
         let mut guard = self
             .capability
             .write()
@@ -1745,6 +1833,33 @@ impl NativeVmmHostDriver {
             Err(error) => return Ok(ai_failure(EffectFailureKind::Llm, error)),
         };
         let body = prompt::render_llm_input(&effect.input)?;
+        if capability.registration_id == super::cloud::CHANNEL {
+            use vulcan_provider_adapters::MemoryPurpose;
+            let purpose = match effect.purpose {
+                LlmPurpose::PreCheckIntent => MemoryPurpose::Pcl1,
+                LlmPurpose::PreCheckReview => MemoryPurpose::Pcl2,
+                LlmPurpose::PostActionAnalysis => MemoryPurpose::Ptl1,
+                LlmPurpose::PostActionReview => MemoryPurpose::Ptl2,
+                LlmPurpose::ProfileInstruction => MemoryPurpose::ProfileInstruction,
+            };
+            let input = serde_json::from_str(&body)
+                .map_err(|_| core_effect_error("Could not decode cloud memory business input."))?;
+            let result = self
+                .cloud_effect(
+                    &capability,
+                    &self.effect_call_context(request),
+                    purpose,
+                    input,
+                )
+                .await;
+            let output = match result {
+                Ok(value) => value,
+                Err(error) => return Ok(ai_failure(EffectFailureKind::Llm, error)),
+            };
+            let encoded = serde_json::to_vec(&output)
+                .map_err(|_| core_effect_error("Could not encode cloud memory output."))?;
+            return llm_contract::parse_host_response(effect, &encoded).map(HostEffectResult::Llm);
+        }
         let schema_bytes = llm_contract::host_json_schema(effect.output_contract)?;
         let schema = serde_json::from_slice(&schema_bytes).map_err(|error| {
             core_effect_error(format!("failed to decode native VMM JSON Schema: {error}"))
@@ -1879,6 +1994,11 @@ impl NativeVmmHostDriver {
             }
         };
         let task = tasks.for_purpose(effect.purpose);
+        if capability.registration_id == super::cloud::CHANNEL {
+            return self
+                .execute_cloud_embedding(&capability, &context, task, effect)
+                .await;
+        }
         let inputs = effect
             .inputs
             .iter()
@@ -1970,6 +2090,44 @@ impl NativeVmmHostDriver {
             Ok(value) => value,
             Err(error) => return Ok(ai_failure(EffectFailureKind::Rerank, error)),
         };
+        if capability.registration_id == super::cloud::CHANNEL {
+            use vulcan_provider_adapters::MemoryPurpose;
+            let result = self
+                .cloud_effect(
+                    &capability,
+                    &self.effect_call_context(request),
+                    MemoryPurpose::Rerank,
+                    serde_json::json!({ "query": effect.query, "documents": effect.documents }),
+                )
+                .await;
+            let output = match result {
+                Ok(value) => value,
+                Err(error) => return Ok(ai_failure(EffectFailureKind::Rerank, error)),
+            };
+            let ranks: Vec<super::cloud::CloudRank> = serde_json::from_value(output)
+                .map_err(|_| core_effect_error("Cloud memory returned malformed rerank output."))?;
+            let mut indices = BTreeSet::new();
+            if ranks.len() != effect.documents.len()
+                || ranks.iter().any(|entry| {
+                    entry.index as usize >= effect.documents.len()
+                        || !entry.relevance_score.is_finite()
+                        || !indices.insert(entry.index)
+                })
+            {
+                return Err(core_effect_error(
+                    "Cloud memory returned invalid rerank indexes or scores.",
+                ));
+            }
+            return Ok(HostEffectResult::Rerank(
+                ranks
+                    .into_iter()
+                    .map(|rank| RerankEntry {
+                        input_index: rank.index,
+                        score: rank.relevance_score,
+                    })
+                    .collect(),
+            ));
+        }
         let candidates = effect
             .documents
             .iter()
@@ -2016,6 +2174,127 @@ impl NativeVmmHostDriver {
             })
             .collect();
         Ok(HostEffectResult::Rerank(entries))
+    }
+
+    /// Dispatches a bounded effect on the exact route frozen in the capability handle.
+    /// 在能力句柄冻结的准确路由上分派有界 Effect。
+    async fn cloud_effect(
+        &self,
+        capability: &HostAiCapabilityHandle,
+        context: &HostAiCallContext,
+        purpose: vulcan_provider_adapters::MemoryPurpose,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, HostAiError> {
+        let cloud = self
+            .cloud
+            .as_ref()
+            .ok_or_else(|| host_ai_internal_error("Cloud memory runtime is unavailable."))?;
+        let route = capability
+            .snapshot
+            .operations
+            .iter()
+            .filter_map(|operation| operation.route.as_ref())
+            .find(|route| route.action_binding_id.as_deref() == Some(purpose.id()))
+            .ok_or_else(|| {
+                HostAiError::new(
+                    HostAiErrorCode::CapabilityUnavailable,
+                    "This purpose is unavailable on the selected cloud memory route.",
+                )
+            })?;
+        cloud.infer(route, context, purpose, input).await
+    }
+
+    /// Embeds a native effect in ordered batches without mixing vector generations.
+    /// 按顺序分批嵌入原生 Effect，避免混用向量代次。
+    async fn execute_cloud_embedding(
+        &self,
+        capability: &HostAiCapabilityHandle,
+        context: &HostAiCallContext,
+        task: EmbeddingTask,
+        effect: &vulcan_memorymesh_core::EmbeddingEffect,
+    ) -> Result<HostEffectResult, CoreError> {
+        use vulcan_provider_adapters::MemoryPurpose;
+        let descriptor = vector_space_descriptor_from_capability(capability)?;
+        if descriptor.vector_space_id != effect.vector_space_id
+            || descriptor.embedding_dimension != effect.expected_dimension
+        {
+            return Err(core_effect_error(
+                "The cloud memory embedding generation changed before dispatch.",
+            ));
+        }
+        let task = match task {
+            EmbeddingTask::Document => "document",
+            EmbeddingTask::Query => "query",
+            _ => {
+                return Err(core_effect_error(
+                    "Cloud memory requires a query or document embedding task.",
+                ));
+            }
+        };
+        let mut vectors = Vec::with_capacity(effect.inputs.len());
+        for texts in effect.inputs.chunks(descriptor.rebuild_batch_limit.get()) {
+            let result = self
+                .cloud_effect(
+                    capability,
+                    context,
+                    MemoryPurpose::Embedding,
+                    serde_json::json!({ "task": task, "texts": texts }),
+                )
+                .await;
+            let output = match result {
+                Ok(value) => value,
+                Err(error) => return Ok(ai_failure(EffectFailureKind::Embedding, error)),
+            };
+            let batch: Vec<Vec<f32>> = serde_json::from_value(output).map_err(|_| {
+                core_effect_error("Cloud memory returned malformed embedding output.")
+            })?;
+            if batch.len() != texts.len()
+                || batch.iter().any(|vector| {
+                    vector.len() != effect.expected_dimension as usize
+                        || vector.iter().any(|value| !value.is_finite())
+                })
+            {
+                return Err(core_effect_error(
+                    "Cloud memory returned an invalid embedding batch.",
+                ));
+            }
+            vectors.extend(batch);
+        }
+        let count = u32::try_from(vectors.len())
+            .map_err(|_| core_effect_error("Cloud memory embedding index exceeds its domain."))?;
+        // The dedicated endpoint binds vector identity through the exact consent and checked width.
+        // 专用端点通过准确同意和已校验维度绑定向量身份。
+        let (operation, tasks, _) = native_vmm_embedding_route(capability)
+            .map_err(NativeVmmEmbeddingRouteIssue::core_error)?;
+        let route = operation.route.as_ref().ok_or_else(|| {
+            core_effect_error("The cloud memory embedding route lost its identity.")
+        })?;
+        let embedding = operation.embedding.as_ref().ok_or_else(|| {
+            core_effect_error("The cloud memory embedding route lost its capabilities.")
+        })?;
+        self.remember_embedding_fingerprint(
+            effect.vector_space_id.as_str(),
+            &EmbeddingSpaceFingerprint {
+                provider_id: route.provider_id.clone(),
+                service_entry_id: route.service_entry_id.clone(),
+                deployment_id: None,
+                secondary_route_id: route.secondary_route_id.clone(),
+                model_id: route.model_id.clone(),
+                binding_id: String::from(super::cloud::CHANNEL),
+                capability_revision: route.capability_revision.clone(),
+                task: tasks.document,
+                dimensions: descriptor.embedding_dimension,
+                output_kind: EmbeddingOutputKind::Dense,
+                encoding: EmbeddingEncoding::Float,
+                normalization: embedding.normalization,
+                distance_metric: embedding.distance_metric,
+            },
+        )?;
+        Ok(HostEffectResult::Embedding(EmbeddingBatchResult {
+            vectors,
+            result_indices: (0..count).collect(),
+            dropped: Vec::new(),
+        }))
     }
 
     /// Executes semantic reads with host-owned vector and lexical producers.
@@ -2966,7 +3245,7 @@ fn native_vmm_capability_registration() -> HostAiCapabilityRegistration {
         owner_id: String::from(NATIVE_VMM_OWNER_ID),
         consumer_profile_id: String::from(VMM_CONSUMER_PROFILE_ID),
         caller: InferenceCallerContext {
-            caller_id: String::from("vulcan-code-native-vmm"),
+            caller_id: String::from(NATIVE_VMM_CALLER_ID),
             allowed_consumer_profile_ids: BTreeSet::from([String::from(VMM_CONSUMER_PROFILE_ID)]),
             permissions: BTreeSet::from([
                 InferencePermission::Status,

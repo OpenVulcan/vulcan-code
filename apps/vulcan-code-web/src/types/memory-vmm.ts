@@ -367,6 +367,9 @@ export interface VmmProjectScopeSummary {
 // VmmRuntimeSummary describes selected-session VMM runtime side effects.
 // VmmRuntimeSummary 描述当前选中会话的 VMM 运行态副作用。
 export interface VmmRuntimeSummary {
+  // Signals that the active cloud choice requires new user consent.
+  // 表示当前云端选择需要用户重新确认。
+  cloudMemorySelectionChanged?: boolean
   processReady: boolean;
   // Active native or external backend state.
   // 当前原生或外置后端状态。

@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: Lyrics generation
   operation.embedding_create: Embeddings
   operation.rerank_documents: Document reranking
+  serviceEntry.openvulcan-memory: "Free cloud memory"
+  operation.cloud_memory_pcl1: "Precheck L1"
+  operation.cloud_memory_pcl2: "Precheck L2"
+  operation.cloud_memory_ptl1: "Postaction L1"
+  operation.cloud_memory_ptl2: "Postaction L2"
+  operation.cloud_memory_profile_instruction: "Profile summary"
+  operation.cloud_memory_embedding: "Embedding"
+  operation.cloud_memory_rerank: "Reranking"
   operation.web_search: Web search
   operation.web_extract: Web extraction
   error.category: Error category

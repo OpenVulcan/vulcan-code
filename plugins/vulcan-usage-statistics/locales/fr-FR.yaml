@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: Génération de paroles
   operation.embedding_create: Génération de vecteurs
   operation.rerank_documents: Reclassement des documents
+  serviceEntry.openvulcan-memory: "Mémoire cloud gratuite"
+  operation.cloud_memory_pcl1: "Contrôle préalable L1"
+  operation.cloud_memory_pcl2: "Contrôle préalable L2"
+  operation.cloud_memory_ptl1: "Analyse après action L1"
+  operation.cloud_memory_ptl2: "Analyse après action L2"
+  operation.cloud_memory_profile_instruction: "Résumé du profil"
+  operation.cloud_memory_embedding: "Vectorisation"
+  operation.cloud_memory_rerank: "Reclassement"
   operation.web_search: Recherche web
   operation.web_extract: Extraction web
   error.category: Catégorie d’erreur

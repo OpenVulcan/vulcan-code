@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: 歌詞生成
   operation.embedding_create: 向量生成
   operation.rerank_documents: 文件重新排序
+  serviceEntry.openvulcan-memory: "免費雲端記憶"
+  operation.cloud_memory_pcl1: "預檢 L1"
+  operation.cloud_memory_pcl2: "預檢 L2"
+  operation.cloud_memory_ptl1: "事後分析 L1"
+  operation.cloud_memory_ptl2: "事後分析 L2"
+  operation.cloud_memory_profile_instruction: "人物側寫摘要"
+  operation.cloud_memory_embedding: "向量"
+  operation.cloud_memory_rerank: "重新排序"
   operation.web_search: 網頁搜尋
   operation.web_extract: 網頁內容擷取
   error.category: 錯誤類別

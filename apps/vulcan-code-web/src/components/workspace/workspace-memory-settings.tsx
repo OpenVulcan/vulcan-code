@@ -5,7 +5,6 @@ import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/feat
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import {
   isMarkdownMemorySection,
-  MEMORY_MODE_SECTION,
   memorySectionForMode,
   useMemorySettings,
   useMemorySettingsSnapshot,
@@ -24,14 +23,16 @@ const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/mem
 // LazyMarkdownMemoryArea keeps the Markdown memory pages and the mode settings in their own chunk.
 // LazyMarkdownMemoryArea 将 Markdown 记忆页面与模式设置保留在独立分块中。
 const LazyMarkdownMemoryArea = React.lazy(() => import("@/components/features/memory/markdown/markdown-memory-area").then((module) => ({ default: module.MarkdownMemoryArea })));
+// Load the shared mode and model configuration only when opening a memory service page.
+// 仅在打开记忆服务页面时加载共享的模式和模型配置。
+const LazyMemoryModePage = React.lazy(() => import("@/components/features/memory/markdown/memory-mode-page").then((module) => ({ default: module.MemoryModePage })));
 
-// MARKDOWN_SECTION_KEYS binds the Markdown and mode sections to their navigation copy and icon.
-// MARKDOWN_SECTION_KEYS 将 Markdown 与模式分区绑定到导航文案与图标。
+// MARKDOWN_SECTION_KEYS binds Markdown content sections to their navigation copy and icon.
+// MARKDOWN_SECTION_KEYS 将 Markdown 内容分区绑定到导航文案与图标。
 const MARKDOWN_SECTION_KEYS: Record<string, { detail: TranslationKey; icon: React.ReactNode; label: TranslationKey }> = {
   md_user: { detail: "memory.markdown.detail.user", icon: <UserRound size={16} />, label: "memory.markdown.nav.user" },
   md_space: { detail: "memory.markdown.detail.space", icon: <Globe size={16} />, label: "memory.markdown.nav.space" },
   md_project: { detail: "memory.markdown.detail.project", icon: <Folder size={16} />, label: "memory.markdown.nav.project" },
-  [MEMORY_MODE_SECTION]: { detail: "memory.markdown.detail.mode", icon: <SlidersHorizontal size={16} />, label: "memory.markdown.nav.mode" },
 };
 
 // WorkspaceMemorySettings renders the embedded VMM memory settings page.
@@ -60,7 +61,7 @@ export function WorkspaceMemorySettings(props: {
   const mode = useMemorySettings()?.mode ?? null;
   const activeSubArea = effectiveMemorySubArea(props.activeSubArea, workbench, mode);
 
-  if (activeSubArea === MEMORY_MODE_SECTION || isMarkdownMemorySection(activeSubArea)) {
+  if (isMarkdownMemorySection(activeSubArea)) {
     return (
       <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body vk-atmosphere" pageKey={activeSubArea}>
         <React.Suspense fallback={null}>
@@ -73,19 +74,25 @@ export function WorkspaceMemorySettings(props: {
     );
   }
 
-  // The section menu lives in the navigation panel beside the rail (MemoryWorkspaceNavigation).
-  // 分区菜单位于轨道旁的导航面板中（MemoryWorkspaceNavigation）。
+  // Keep the saved mode and service tab independent so switching modes never loses the settings entry.
+  // 独立维护已保存模式和服务页签，切换模式时仍能留在设置入口。
+  const servicePage = serviceSections.includes(activeSubArea);
+  // The VMM controls keep their existing service actions and diagnostics.
+  // VMM 控件复用现有服务操作和诊断。
+  const vmmContent = (
+    <LazyMemoryArea
+      activeSection={activeSubArea}
+      actions={memoryActions}
+      onOpenCredentialManagement={props.onOpenCredentialManagement}
+      onSelectSection={props.onSelectSubArea}
+      snapshot={workbench.vmmMemory}
+    />
+  );
   return (
     <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body vk-atmosphere" pageKey={activeSubArea}>
-      <MemoryServiceTabs activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
+      {mode === "vmm" ? <MemoryServiceTabs activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} /> : null}
       <React.Suspense fallback={null}>
-        <LazyMemoryArea
-          activeSection={activeSubArea}
-          actions={memoryActions}
-          onOpenCredentialManagement={props.onOpenCredentialManagement}
-          onSelectSection={props.onSelectSubArea}
-          snapshot={workbench.vmmMemory}
-        />
+        {servicePage ? <LazyMemoryModePage vmmContent={vmmContent} /> : vmmContent}
       </React.Suspense>
     </WorkspaceDirectoryLayout>
   );
@@ -135,28 +142,29 @@ export function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
   // groups 将阅读排在管理与配置之前；模式决定存在哪些页面。
   const groups = mode === "markdown" ? [
     { label: t("memory.workspace.read"), ids: ["md_user", "md_space", "md_project"] },
-    { label: t("memory.workspace.settings"), ids: [MEMORY_MODE_SECTION] },
+    { label: t("memory.workspace.settings"), ids: ["service"] },
   ] : mode === "off" ? [
-    { label: t("memory.workspace.settings"), ids: [MEMORY_MODE_SECTION] },
+    { label: t("memory.workspace.settings"), ids: ["service"] },
   ] : [
     { label: t("memory.workspace.read"), ids: ["content", "profile"] },
     { label: t("memory.workspace.manage"), ids: ["identity_projects", "maintenance"] },
-    { label: t("memory.workspace.settings"), ids: ["rules", "service", "resource_rules", MEMORY_MODE_SECTION] },
+    { label: t("memory.workspace.settings"), ids: ["service", "rules", "resource_rules"] },
   ];
   return <nav className="vk-dir" aria-label={t("workspaceToolPanel.memorySettingsMenu")}>
     {groups.map((group) => <div className="vk-dir-group" key={group.label}>
       <p className="vk-dir-head vk-label">{group.label}</p>
       {group.ids.map((id) => {
-        // row resolves service navigation to the first supported destination.
-        // row 将服务导航解析到首个受支持的目标。
-        const row = id === "service"
-          ? rows.find((item) => item.id === "inference") ?? rows.find((item) => item.id === "overview")
-          : rows.find((item) => item.id === id);
+        // Configuration has a stable entry even when the VMM service has no available sections.
+        // 即使 VMM 服务没有可用分区，配置也有稳定入口。
+        if (id === "service") {
+          return <DirectoryRow active={serviceSections.includes(activeSubArea)} icon={<SlidersHorizontal size={16} />}
+            key={id} label={t("memory.workspace.service")} onSelect={() => props.onSelectSubArea("inference")} />;
+        }
+        // Resolve the remaining entries against the backend's visible section catalog.
+        // 根据后端的可见分区目录解析其余入口。
+        const row = rows.find((item) => item.id === id);
         if (!row) return null;
-        // active also highlights the parent when a service subpage is selected.
-        // active 在服务子页面被选中时也高亮其父入口。
-        const active = id === "service" ? serviceSections.includes(activeSubArea) : activeSubArea === id;
-        return <DirectoryRow active={active} icon={row.icon} key={id} label={id === "service" ? t("memory.workspace.service") : row.label}
+        return <DirectoryRow active={activeSubArea === id} icon={row.icon} key={id} label={row.label}
           onSelect={() => props.onSelectSubArea(row.id)} />;
       })}
     </div>)}
@@ -168,12 +176,18 @@ export function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
 function MemoryServiceTabs(props: MemoryNavigationProps) {
   const { t } = useI18n();
   if (!serviceSections.includes(props.activeSubArea)) return null;
+  // Use the status tab when the selected backend has no separate inference page.
+  // 当前后端没有独立推理页时，高亮状态页签。
+  const rows = memoryMenuRows(props.workbench, t).filter((row) => serviceSections.includes(row.id));
+  // A single service page needs no tab strip.
+  // 只有一个服务页面时无需页签栏。
+  if (rows.length < 2) return null;
   return <PageTabs
     ariaLabel={t("memory.workspace.service")}
     className="vmm-page-tabs"
     onValueChange={props.onSelectSubArea}
-    options={memoryMenuRows(props.workbench, t).filter((row) => serviceSections.includes(row.id)).map((row) => ({ label: row.label, value: row.id }))}
-    value={props.activeSubArea}
+    options={rows.map((row) => ({ label: row.label, value: row.id }))}
+    value={rows.some((row) => row.id === props.activeSubArea) ? props.activeSubArea : "overview"}
   />;
 }
 

@@ -741,6 +741,10 @@ pub struct VmmProjectScopeSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmmRuntimeSummary {
+    /// Whether active cloud memory requires a new consent.
+    /// 当前云端记忆是否需要重新确认。
+    #[serde(default)]
+    pub cloud_memory_selection_changed: bool,
     /// Whether the active VMM process or externally probed endpoint is ready.
     /// 当前 VMM 进程或已显式探测的外部端点是否已就绪。
     pub process_ready: bool,

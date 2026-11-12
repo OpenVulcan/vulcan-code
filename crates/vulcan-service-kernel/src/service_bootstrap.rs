@@ -1412,7 +1412,8 @@ fn run_service_bootstrap(
                 native_vmm_data_plane.clone(),
             )
             .await
-            .map_err(|error| format!("Native VMM Core initialization failed: {error}"))?,
+            .map_err(|error| format!("Native VMM Core initialization failed: {error}"))?
+            .with_cloud_memory(state, event_emitter),
         );
         // Install committed-content publication before any client or background worker can mutate Core.
         // 在任何客户端或后台工作器可以变更 Core 之前安装已提交内容发布。

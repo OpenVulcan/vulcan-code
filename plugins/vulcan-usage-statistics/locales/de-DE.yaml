@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: Liedtexterzeugung
   operation.embedding_create: Vektorerzeugung
   operation.rerank_documents: Dokumentenneusortierung
+  serviceEntry.openvulcan-memory: "Kostenloser Cloud-Speicher"
+  operation.cloud_memory_pcl1: "Vorprüfung L1"
+  operation.cloud_memory_pcl2: "Vorprüfung L2"
+  operation.cloud_memory_ptl1: "Nachanalyse L1"
+  operation.cloud_memory_ptl2: "Nachanalyse L2"
+  operation.cloud_memory_profile_instruction: "Profilzusammenfassung"
+  operation.cloud_memory_embedding: "Embedding"
+  operation.cloud_memory_rerank: "Neusortierung"
   operation.web_search: Websuche
   operation.web_extract: Webextraktion
   error.category: Fehlerkategorie

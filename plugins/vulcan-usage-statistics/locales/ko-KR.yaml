@@ -102,6 +102,14 @@ messages:
   operation.lyrics_generate: 가사 생성
   operation.embedding_create: 임베딩 생성
   operation.rerank_documents: 문서 재순위화
+  serviceEntry.openvulcan-memory: "무료 클라우드 메모리"
+  operation.cloud_memory_pcl1: "사전 검사 L1"
+  operation.cloud_memory_pcl2: "사전 검사 L2"
+  operation.cloud_memory_ptl1: "사후 분석 L1"
+  operation.cloud_memory_ptl2: "사후 분석 L2"
+  operation.cloud_memory_profile_instruction: "프로필 요약"
+  operation.cloud_memory_embedding: "임베딩"
+  operation.cloud_memory_rerank: "재정렬"
   operation.web_search: 웹 검색
   operation.web_extract: 웹 내용 추출
   error.category: 오류 분류

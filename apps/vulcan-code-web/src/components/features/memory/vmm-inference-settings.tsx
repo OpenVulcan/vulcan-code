@@ -46,6 +46,7 @@ import type {
   PublicAiSettingsSnapshot,
 } from "@/types"
 import { errorMessage } from "@/lib/display-format"
+import { UseMarkdownMemoryButton } from "./use-markdown-memory-button"
 import "@/ui-kit/styles/features/settings-forms.css";
 import "@/ui-kit/styles/features/memory.css"
 
@@ -334,6 +335,12 @@ export function VmmInferenceSettings({
           : <Button type="button" variant="outline" onClick={() => setLoadRevision((current) => current + 1)}>{t("settings.modelExperience.retryLoad")}</Button>
       ) : (
         <>
+          {!requiredRoutesReady && !onRequiredRouteReady ? (
+            <div className="vk-form-bar">
+              <span>{t("vmm.setup.inference.required")}</span>
+              <UseMarkdownMemoryButton disabled={routesDisabled} />
+            </div>
+          ) : null}
           <div className="vmm-inference-routes">
             <div className="vmm-inference-columns vk-faint vk-form-xs" aria-hidden="true">
               <span>{t("memory.workspace.purpose")}</span>

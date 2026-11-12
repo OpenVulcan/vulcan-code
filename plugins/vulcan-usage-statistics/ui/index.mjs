@@ -1072,7 +1072,8 @@ export function createPluginPanel(sdk) {
         }),
         estimates.length > 0 ? facts([[text("pricing.source", "Price source"), text(
           record.pricingSourceId?.startsWith("plugin.config.providerOverrides:") ? "pricing.providerOverride"
-            : record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]]) : null,
+            : record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override"
+              : record.pricingSourceId === "openvulcan-memory" ? "serviceEntry.openvulcan-memory" : "pricing.default", "Reference price")]]) : null,
         h("p", null, text("cost.referenceOnly", "Estimates use recorded usage and reference rates, including subscription requests. Actual charges and subscription credits may differ.")),
       ) }),
     );

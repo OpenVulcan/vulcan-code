@@ -1,6 +1,12 @@
 import * as React from "react"
 import "@/ui-kit/styles/features/memory.css"
 import { useI18n } from "@/i18n"
+import { errorMessage } from "@/lib/display-format"
+import { toast } from "@/ui-kit/primitives/toast"
+import { Button } from "@/ui-kit/primitives/button"
+import { applyMemoryMode } from "./markdown/memory-mode-store"
+import { saveCloudMemoryChoice, type CloudMemoryChoice } from "@/service/cloud-memory-service"
+import { VmmCloudMemoryStatus } from "./vmm-cloud-memory"
 
 import type { VmmConfigDraftSummary, VmmMemorySnapshot } from "@/types"
 
@@ -125,117 +131,12 @@ export function shouldRouteAdvancedSaveToSetup(
   return draftBackend !== savedBackend
 }
 
-// MemoryArea renders the VMM memory management workbench.
-// MemoryArea 渲染 VMM 记忆管理工作台。
-export function MemoryArea(props: {
-  // Active VMM section selected from the shared feature sidebar.
-  // 从共享功能侧栏选中的当前 VMM 分区。
-  activeSection: MemorySubAreaId
-  // Service-backed VMM actions.
-  // 服务端支持的 VMM 动作。
-  actions: MemoryActionProps
-  // Opens model credential management when required inference routes cannot be configured.
-  // 在无法配置必需推理路由时打开模型凭据管理。
-  onOpenCredentialManagement: () => void
-  // Detailed VMM snapshot.
-  // 详细 VMM 快照。
-  snapshot: VmmMemorySnapshot
-  // Selects another VMM section from actions rendered inside the page.
-  // 从页面内部操作选择另一个 VMM 分区。
-  onSelectSection: (section: MemorySubAreaId) => void
-}) {
+// Prepares and commits the existing project binding workflow for each memory source.
+// 为各记忆来源准备并提交现有项目绑定流程。
+function useVmmQuickSetup({ applyDraft, globalDraft, runAction }: Pick<
+  ReturnType<typeof useMemoryAreaController>, "applyDraft" | "globalDraft" | "runAction"
+>) {
   const { t } = useI18n()
-  // activeSection falls back to overview when stale navigation references an unavailable page.
-  // activeSection 在旧导航引用不可用页面时回退到总览。
-  const activeSection = props.activeSection === "content" && props.snapshot.experienceState.deployment === "disabled" ? "overview" : vmmVisibleSection(props.activeSection)
-  // controller owns exact draft routes and the exclusive asynchronous operation channel.
-  // controller 持有准确草稿路由与独占异步操作通道。
-  const controller = useMemoryAreaController({
-    actions: props.actions,
-    snapshot: props.snapshot,
-  });
-  // Controller fields expose the rendered scope, exact drafts, and guarded action callbacks.
-  // 控制器字段暴露渲染作用域、准确草稿与受保护动作回调。
-  const {
-    applyDraft,
-    clearFeedback,
-    globalDraft,
-    notice,
-    operationBusy,
-    result,
-    runAction,
-    saveDraft,
-    setGlobalDraft,
-  } = controller;
-  // Leaving project-rule editing restores the normal management action scope.
-  // 离开项目规则编辑时恢复普通管理动作范围。
-  React.useEffect(() => {
-    if (activeSection !== "rules" && !operationBusy) controller.selectScope("global")
-  }, [activeSection, operationBusy, controller.selectScope])
-  // setupDialogOpen controls the first-time native or external VMM setup workflow.
-  // setupDialogOpen 控制首次原生或外置 VMM 快速配置流程。
-  const [setupDialogOpen, setSetupDialogOpen] = React.useState(false)
-  // nativeDeployment is the saved service authority; an unsaved settings draft must not reroute pages.
-  // nativeDeployment 是已保存的服务端权威；未保存的设置草稿不得改写页面路由。
-  const nativeDeployment = vmmUsesNativeMemoryMaintenance(
-    props.snapshot.experienceState.deployment,
-  )
-  // A repair link opens the vector index tab while ordinary maintenance navigation keeps its saved default.
-  // 修复入口直达向量索引页，普通维护导航仍保留原有默认页。
-  const [maintenanceEntryView, setMaintenanceEntryView] = React.useState<"recycle" | "index">("recycle")
-  // A successfully saved embedding route invalidates the health reading shown on this page.
-  // 成功保存向量路由后，当前页面展示的健康状态必须重新读取。
-  const [vectorStatusRevision, setVectorStatusRevision] = React.useState(0)
-  // openVectorRepair selects the guarded native rebuild workflow without starting a mutation.
-  // openVectorRepair 仅导航到受保护的原生重建流程，不启动任何写入。
-  const openVectorRepair = () => {
-    setMaintenanceEntryView("index")
-    props.onSelectSection("maintenance")
-  }
-  React.useEffect(() => {
-    // Leaving maintenance resets the ordinary sidebar entry to the recycle view.
-    // 离开内部维护后，普通侧栏入口恢复到回收站视图。
-    if (activeSection !== "maintenance") setMaintenanceEntryView("recycle")
-  }, [activeSection])
-  // catalogLoadRequested prevents repeated automatic directory requests during snapshot refreshes.
-  // catalogLoadRequested 防止快照刷新期间重复发起自动目录请求。
-  const catalogLoadRequested = React.useRef(false)
-
-  // Page navigation starts a new feedback generation so an earlier page cannot leak notices.
-  // 页面导航会开启新的反馈代次，避免先前页面泄漏提示。
-  React.useEffect(() => {
-    clearFeedback()
-  }, [activeSection, clearFeedback])
-
-  React.useEffect(() => {
-    const catalog = props.snapshot.managementCatalog
-    if (!props.snapshot.runtime.processReady) {
-      catalogLoadRequested.current = false
-    }
-    if (!shouldRequestVmmManagementCatalog({
-      activeSection,
-      deployment: props.snapshot.experienceState.deployment,
-      operationBusy,
-      processReady: props.snapshot.runtime.processReady,
-      requestIssued: catalogLoadRequested.current,
-      catalog,
-    })) {
-      return
-    }
-    catalogLoadRequested.current = true
-    // One automatic request is enough for this ready process generation. A failed request remains
-    // visible and user-retryable instead of creating an unbounded background retry loop.
-    // 当前就绪进程代次只自动请求一次；失败会保持可见并允许用户重试，避免产生无界后台重试循环。
-    void runAction("load_users_projects")
-  }, [
-    activeSection,
-    operationBusy,
-    props.snapshot.experienceState.deployment,
-    props.snapshot.managementCatalog,
-    props.snapshot.runtime.processReady,
-    runAction,
-  ])
-
   // handleQuickSetupPrepare verifies one disabled backend and returns its authoritative project catalog.
   // handleQuickSetupPrepare 校验一个禁用状态的后端并返回其权威项目目录。
   const handleQuickSetupPrepare = React.useCallback(async (
@@ -314,7 +215,21 @@ export function MemoryArea(props: {
     const fixedPlan = input.mode === "external" && input.bindingMode === "fixed"
       ? materializeExternalFixedBindingPlan(input.bindingPlan, Number(projectId))
       : input.bindingPlan
+    if (input.mode === "native") {
+      try {
+        await saveCloudMemoryChoice(input.cloudChoice)
+      } catch (error) {
+        toast.error(t("memory.cloud.saveFailed"), { description: errorMessage(error) })
+        return false
+      }
+    }
     if (!await applyDraft("global", null, enabledDraft, fixedPlan)) return false
+    try {
+      await applyMemoryMode("vmm")
+    } catch (error) {
+      toast.error(t("memory.markdown.saveFailed"), { description: errorMessage(error) })
+      return false
+    }
     if (input.mode === "external") {
       await runAction("healthz")
       await runAction("load_users_projects")
@@ -322,7 +237,181 @@ export function MemoryArea(props: {
       await runAction("native_project_catalog")
     }
     return true
-  }, [applyDraft, globalDraft, runAction])
+  }, [applyDraft, globalDraft, runAction, t])
+  return { handleQuickSetupPrepare, handleQuickSetup }
+}
+
+// MemoryArea renders the VMM memory management workbench.
+// MemoryArea 渲染 VMM 记忆管理工作台。
+export function MemoryArea(props: {
+  // Active VMM section selected from the shared feature sidebar.
+  // 从共享功能侧栏选中的当前 VMM 分区。
+  activeSection: MemorySubAreaId
+  // Service-backed VMM actions.
+  // 服务端支持的 VMM 动作。
+  actions: MemoryActionProps
+  // Opens model credential management when required inference routes cannot be configured.
+  // 在无法配置必需推理路由时打开模型凭据管理。
+  onOpenCredentialManagement: () => void
+  // Detailed VMM snapshot.
+  // 详细 VMM 快照。
+  snapshot: VmmMemorySnapshot
+  // Selects another VMM section from actions rendered inside the page.
+  // 从页面内部操作选择另一个 VMM 分区。
+  onSelectSection: (section: MemorySubAreaId) => void
+  // The first-login shell mounts only the dialog and receives its close action.
+  // 首次登录外壳仅挂载对话框，并接收关闭动作。
+  setupOnlyOnClose?: () => void
+}) {
+  const { t } = useI18n()
+  // activeSection falls back to overview when stale navigation references an unavailable page.
+  // activeSection 在旧导航引用不可用页面时回退到总览。
+  const activeSection = props.activeSection === "content" && props.snapshot.experienceState.deployment === "disabled" ? "overview" : vmmVisibleSection(props.activeSection)
+  // controller owns exact draft routes and the exclusive asynchronous operation channel.
+  // controller 持有准确草稿路由与独占异步操作通道。
+  const controller = useMemoryAreaController({
+    actions: props.actions,
+    snapshot: props.snapshot,
+  });
+  // Controller fields expose the rendered scope, exact drafts, and guarded action callbacks.
+  // 控制器字段暴露渲染作用域、准确草稿与受保护动作回调。
+  const {
+    applyDraft,
+    clearFeedback,
+    globalDraft,
+    notice,
+    operationBusy,
+    result,
+    runAction,
+    saveDraft,
+    setGlobalDraft,
+  } = controller;
+  // Leaving project-rule editing restores the normal management action scope.
+  // 离开项目规则编辑时恢复普通管理动作范围。
+  React.useEffect(() => {
+    if (activeSection !== "rules" && !operationBusy) controller.selectScope("global")
+  }, [activeSection, operationBusy, controller.selectScope])
+  // setupDialogOpen controls the first-time native or external VMM setup workflow.
+  // setupDialogOpen 控制首次原生或外置 VMM 快速配置流程。
+  const [setupDialogOpen, setSetupDialogOpen] = React.useState(Boolean(props.setupOnlyOnClose))
+  // Tracks whether setup starts on cloud selection and whether a saved cloud route owns native VMM.
+  // 记录引导是否从云端选择开始，以及已保存云端路由是否控制原生 VMM。
+  const [openCloudSetup, setOpenCloudSetup] = React.useState(false)
+  const [cloudSelected, setCloudSelected] = React.useState(false)
+  const [cloudRevision, setCloudRevision] = React.useState(0)
+  // nativeDeployment is the saved service authority; an unsaved settings draft must not reroute pages.
+  // nativeDeployment 是已保存的服务端权威；未保存的设置草稿不得改写页面路由。
+  const nativeDeployment = vmmUsesNativeMemoryMaintenance(
+    props.snapshot.experienceState.deployment,
+  )
+  // A repair link opens the vector index tab while ordinary maintenance navigation keeps its saved default.
+  // 修复入口直达向量索引页，普通维护导航仍保留原有默认页。
+  const [maintenanceEntryView, setMaintenanceEntryView] = React.useState<"recycle" | "index">("recycle")
+  // A successfully saved embedding route invalidates the health reading shown on this page.
+  // 成功保存向量路由后，当前页面展示的健康状态必须重新读取。
+  const [vectorStatusRevision, setVectorStatusRevision] = React.useState(0)
+  // openVectorRepair selects the guarded native rebuild workflow without starting a mutation.
+  // openVectorRepair 仅导航到受保护的原生重建流程，不启动任何写入。
+  const openVectorRepair = () => {
+    setMaintenanceEntryView("index")
+    props.onSelectSection("maintenance")
+  }
+  React.useEffect(() => {
+    // Leaving maintenance resets the ordinary sidebar entry to the recycle view.
+    // 离开内部维护后，普通侧栏入口恢复到回收站视图。
+    if (activeSection !== "maintenance") setMaintenanceEntryView("recycle")
+  }, [activeSection])
+  // catalogLoadRequested prevents repeated automatic directory requests during snapshot refreshes.
+  // catalogLoadRequested 防止快照刷新期间重复发起自动目录请求。
+  const catalogLoadRequested = React.useRef(false)
+
+  // Page navigation starts a new feedback generation so an earlier page cannot leak notices.
+  // 页面导航会开启新的反馈代次，避免先前页面泄漏提示。
+  React.useEffect(() => {
+    clearFeedback()
+  }, [activeSection, clearFeedback])
+
+  React.useEffect(() => {
+    const catalog = props.snapshot.managementCatalog
+    if (!props.snapshot.runtime.processReady) {
+      catalogLoadRequested.current = false
+    }
+    if (!shouldRequestVmmManagementCatalog({
+      activeSection,
+      deployment: props.snapshot.experienceState.deployment,
+      operationBusy,
+      processReady: props.snapshot.runtime.processReady,
+      requestIssued: catalogLoadRequested.current,
+      catalog,
+    })) {
+      return
+    }
+    catalogLoadRequested.current = true
+    // One automatic request is enough for this ready process generation. A failed request remains
+    // visible and user-retryable instead of creating an unbounded background retry loop.
+    // 当前就绪进程代次只自动请求一次；失败会保持可见并允许用户重试，避免产生无界后台重试循环。
+    void runAction("load_users_projects")
+  }, [
+    activeSection,
+    operationBusy,
+    props.snapshot.experienceState.deployment,
+    props.snapshot.managementCatalog,
+    props.snapshot.runtime.processReady,
+    runAction,
+  ])
+
+  const { handleQuickSetupPrepare, handleQuickSetup } = useVmmQuickSetup({ applyDraft, globalDraft, runAction })
+
+  // Updates a cloud selection for an existing native installation without editing project bindings.
+  // 为现有原生安装更新云端选择，不修改项目绑定。
+  const replaceCloud = async (choice: CloudMemoryChoice): Promise<boolean> => {
+    try {
+      await saveCloudMemoryChoice(choice)
+      await applyMemoryMode("vmm")
+      setCloudSelected(true)
+      setCloudRevision((value) => value + 1)
+      setVectorStatusRevision((value) => value + 1)
+      return true
+    } catch (error) {
+      toast.error(t("memory.cloud.saveFailed"), { description: errorMessage(error) })
+      return false
+    }
+  }
+
+  // Opens first-time setup or jumps directly to the cloud picker.
+  // 打开首次引导，或直接进入云端选择器。
+  const openMemorySetup = (cloud: boolean) => {
+    setOpenCloudSetup(cloud)
+    setSetupDialogOpen(true)
+  }
+
+  // Reuses one controlled wizard across the service status and inference pages.
+  // 在服务状态与推理页面复用同一个受控向导。
+  const setupDialog = <VmmSetupDialog
+    busy={operationBusy}
+    notice={notice}
+    onOpenCredentialManagement={props.onOpenCredentialManagement}
+    onOpenChange={(open) => {
+      setSetupDialogOpen(open)
+      if (!open) props.setupOnlyOnClose?.()
+    }}
+    onPrepare={handleQuickSetupPrepare}
+    onReplaceCloud={nativeDeployment && globalDraft.enabled ? replaceCloud : undefined}
+    onSubmit={async (input) => {
+      // Refreshes the source and vector diagnostics after the complete setup is accepted.
+      // 完整引导被接受后，刷新来源和向量诊断。
+      const saved = await handleQuickSetup(input)
+      if (saved && input.mode === "native") {
+        setCloudSelected(input.cloudChoice !== null)
+        setCloudRevision((value) => value + 1)
+        setVectorStatusRevision((value) => value + 1)
+      }
+      return saved
+    }}
+    open={setupDialogOpen}
+    openCloud={openCloudSetup}
+    projects={props.snapshot.projectScopes}
+  />
 
   // saveAdvancedDraft routes backend switches through setup so every unbound project has a decision.
   // saveAdvancedDraft 将后端切换转入快速配置，使每个未绑定项目都有明确决定。
@@ -337,6 +426,7 @@ export function MemoryArea(props: {
     }
     return saveDraft("global")
   }, [globalDraft.backendMode, props.onSelectSection, props.snapshot.globalDraft.backendMode, saveDraft])
+  if (props.setupOnlyOnClose) return setupDialog
 
   // overviewPage is the safe product fallback for stale navigation and first-time setup.
   // overviewPage 是旧导航与首次配置共用的安全产品回退页。
@@ -355,19 +445,10 @@ export function MemoryArea(props: {
               await runAction(action)
             }}
             onOpenAdvanced={() => props.onSelectSection("advanced")}
-            onOpenSetup={() => setSetupDialogOpen(true)}
+            onOpenSetup={() => openMemorySetup(false)}
             snapshot={props.snapshot}
           />
-          <VmmSetupDialog
-            busy={operationBusy}
-            notice={notice}
-            onOpenCredentialManagement={props.onOpenCredentialManagement}
-            onOpenChange={setSetupDialogOpen}
-            onPrepare={handleQuickSetupPrepare}
-            onSubmit={handleQuickSetup}
-            open={setupDialogOpen}
-            projects={props.snapshot.projectScopes}
-          />
+          {setupDialog}
         </main>
       </div>
     </section>
@@ -383,13 +464,21 @@ export function MemoryArea(props: {
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
+            <VmmCloudMemoryStatus onConfigure={() => openMemorySetup(true)}
+              onCloudSelected={setCloudSelected} revision={cloudRevision} />
+            {cloudSelected ? <div className="vk-form-bar">
+              <Button type="button" size="sm" variant="outline" onClick={() => openMemorySetup(false)}>
+                {t("memory.setup.useOwnModel")}
+              </Button>
+            </div> : null}
             <VmmNativeVectorHealthAlert
               key={vectorStatusRevision}
               onRunAction={props.actions.onRunVmmAction}
               onOpenRepair={openVectorRepair}
               onOpenEmbeddingSettings={() => props.onSelectSection("inference")}
             />
-            <VmmInferenceSettings onEmbeddingRouteSaved={() => setVectorStatusRevision((revision) => revision + 1)} />
+            {!cloudSelected ? <VmmInferenceSettings onEmbeddingRouteSaved={() => setVectorStatusRevision((revision) => revision + 1)} /> : null}
+            {setupDialog}
           </main>
         </div>
       </section>
