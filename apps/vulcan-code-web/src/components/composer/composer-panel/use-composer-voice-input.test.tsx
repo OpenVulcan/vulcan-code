@@ -214,6 +214,32 @@ it("records while held, holds sending, and inserts the selected transcript at th
   expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([6, 11]);
 });
 
+it("stops and submits the held recording once when the duration limit elapses", async () => {
+  transcribe.mockResolvedValue({ text: "world" });
+  // Exercise the microphone button without releasing it when the countdown elapses.
+  // 倒计时结束时保持麦克风按钮按下，验证自动停止。
+  const { button } = await render(CONFIGURED);
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    await key(button, "keydown", " ");
+    expect(state.busy).toBe(true);
+
+    now += CONFIGURED.maxDurationSeconds * 1_000 + 100;
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    await settle();
+
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(encodeVoiceInputWav).toHaveBeenCalledWith(expect.any(Blob), CONFIGURED.maxDurationSeconds);
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(state).toEqual({ draft: "Hello world", busy: false });
+
+    await key(button, "keyup", " ");
+    expect(transcribe).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("joins CJK transcripts without a separating space", async () => {
   transcribe.mockResolvedValue({ text: CJK_TRANSCRIPT });
   const { button } = await render(CONFIGURED, CJK_DRAFT);

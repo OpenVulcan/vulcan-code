@@ -14,19 +14,24 @@ const PCM_SAMPLE_BYTES = 2;
  * 解码已录制完成的浏览器音频，返回一个供转写使用的单声道 PCM WAV Blob。
  * @param recording A complete recording produced by MediaRecorder.
  * recording 是 MediaRecorder 生成的完整录音。
+ * @param maxDurationSeconds The recording limit reported by the voice service, in seconds.
+ * maxDurationSeconds 是语音服务公布的录音时长上限，单位为秒。
  * @returns A 16 kHz WAV blob, or null when every encoded PCM sample is silent.
  * 返回采样率为 16 kHz 的 WAV Blob；所有编码后的 PCM 采样为静音时返回 null。
  */
-export async function encodeVoiceInputWav(recording: Blob): Promise<Blob | null> {
+export async function encodeVoiceInputWav(recording: Blob, maxDurationSeconds: number): Promise<Blob | null> {
   // The offline decoder resamples to its context rate without playing the microphone recording.
   // 离线解码器会重采样至上下文的采样率，且不会播放麦克风录音。
   const decoder = new OfflineAudioContext(1, 1, VOICE_SAMPLE_RATE);
   // The decoded PCM buffer keeps its original channel count.
   // 解码后的 PCM 缓冲区保留原声道数量。
   const audio = await decoder.decodeAudioData(await recording.arrayBuffer());
-  // Store one PCM sample per decoded frame after mixing the channels.
-  // 混合声道后，每个解码帧保存一个 PCM 采样。
-  const sampleBytes = audio.length * PCM_SAMPLE_BYTES;
+  // Browser timers and recorder stop can run late, but the service enforces the limit by PCM byte count.
+  // 浏览器计时器和录音器停止可能延迟，而服务按 PCM 字节数强制限制时长。
+  const frameCount = Math.min(audio.length, maxDurationSeconds * audio.sampleRate);
+  // Store one PCM sample per retained frame after mixing the channels.
+  // 混合声道后，每个保留帧保存一个 PCM 采样。
+  const sampleBytes = frameCount * PCM_SAMPLE_BYTES;
   // Allocate the header and sample data together for a single WAV blob.
   // 为文件头和采样数据分配同一块缓冲区，生成一个 WAV Blob。
   const bytes = new ArrayBuffer(WAV_HEADER_BYTES + sampleBytes);
@@ -53,7 +58,7 @@ export async function encodeVoiceInputWav(recording: Blob): Promise<Blob | null>
   // Use quantized samples to avoid dropping a genuinely quiet recording by an arbitrary loudness cutoff.
   // 根据量化后的采样判断静音，避免以任意响度阈值丢弃声音较轻的录音。
   let hasSignal = false;
-  for (let frame = 0; frame < audio.length; frame += 1) {
+  for (let frame = 0; frame < frameCount; frame += 1) {
     // Sum this frame across all channels for the mono mix.
     // 累加本帧的各声道采样，用于混合成单声道。
     let sum = 0;

@@ -162,7 +162,7 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
       if (session.current !== current) return;
       // Decode after stopping so cancelled recordings never incur conversion or a provider call.
       // 停止后再解码，取消的录音无需转换或调用供应商。
-      const recording = current.chunks.length ? await encodeVoiceInputWav(new Blob(current.chunks, { type: mimeType })) : null;
+      const recording = current.chunks.length ? await encodeVoiceInputWav(new Blob(current.chunks, { type: mimeType }), maxDurationSeconds) : null;
       if (session.current !== current) return;
       const text = recording ? (await transcribeVoiceInput(recording)).text.trim() : "";
       if (session.current !== current) return;
@@ -176,7 +176,7 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
         setPhase("idle");
       }
     }
-  }, [onTranscript, t]);
+  }, [maxDurationSeconds, onTranscript, t]);
 
   // start opens the microphone for the supplied chord or button press, returning when recording begins or fails.
   // start 为指定组合键或按钮按压打开麦克风，录音开始或失败后返回。
