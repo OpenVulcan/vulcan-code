@@ -52,6 +52,9 @@ export interface ConversationBlock {
   // Compact summary shown before opening the detail view.
   // 打开详情视图前展示的紧凑摘要。
   summary: string;
+  // A host-owned display note rendered as a compact status row.
+  // 以紧凑状态行展示的宿主显示提示。
+  statusNotice?: true;
   // Optional status text detected from legacy transcript formats.
   // 从旧转录格式中识别出的可选状态文本。
   status?: string;

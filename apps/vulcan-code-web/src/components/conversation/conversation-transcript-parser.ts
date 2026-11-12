@@ -1,4 +1,3 @@
-import { isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
 import type { ConversationMessage } from "@/types";
 import { blockTitle } from "@/components/conversation/conversation-classifiers";
 import { generatedMediaAttachmentsFromMetadata } from "@/components/conversation/conversation-generated-media";
@@ -111,6 +110,14 @@ function parseMessageBlocks(
       return [conversationMarkdownBlock(message.id, 0, message.body)];
     }
     const primaryBlock = conversationSpecialBlock(message.id, 0, structuredKind, message.body, attributes, message.metadata);
+    // Plain display notes belong to the host, while recall and injection retain their expandable details.
+    // 普通显示提示归宿主所有，召回和注入继续保留可展开的详情。
+    if (message.recordKind === "display-note" && structuredKind === "notice") {
+      const noticeKind = metadataString(message.metadata, ["notice_kind"]);
+      if (noticeKind !== "memory_recall" && noticeKind !== "context_injection") {
+        primaryBlock.statusNotice = true;
+      }
+    }
     const planArtifact = planArtifactAttributesFromMetadata(message.metadata);
     if (!planArtifact || structuredKind === "plan-artifact") {
       return [primaryBlock];
@@ -155,19 +162,12 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
     return "tool-result";
   }
   if (message.recordKind === "display-note") {
-    // noticeKind identifies backend-owned display notes that use the generic notice surface.
-    // noticeKind 标识使用通用提示界面的后端自有显示备注。
-    const noticeKind = metadataString(message.metadata, ["notice_kind"]);
-    if (
-      noticeKind === "provider_retry"
-      || noticeKind === "goal_status"
-      || noticeKind === "model_switch"
-      || noticeKind === "reasoning_effort_switch"
-      || noticeKind === "memory_recall"
-      || noticeKind === "context_injection"
-      || isDedicatedMemoryNoticeKind(noticeKind)
-    ) return "notice";
-    if (isSubagentFeedbackMetadata(message.metadata)) return "tool-result";
+    // A named host notice takes precedence over legacy subagent feedback carried as a display note.
+    // 具名宿主提示优先于通过显示提示承载的旧版子代理反馈。
+    if (!metadataString(message.metadata, ["notice_kind"]) && isSubagentFeedbackMetadata(message.metadata)) {
+      return "tool-result";
+    }
+    return "notice";
   }
   if (message.recordKind === "thinking-output") return "thinking";
   if (message.recordKind === "turn-stats") return "turn-stats";

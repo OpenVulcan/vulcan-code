@@ -403,6 +403,31 @@ function retryDiagnostic(requestId: string): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  // Host process notes use a system row even when their text resembles assistant Markdown.
+  // 即使文字看起来像助手 Markdown，宿主过程提示也使用系统行。
+  it("renders process notices as system status rows beside ordinary assistant text", () => {
+    // Keep a real assistant reply in the same turn so the two display paths can be compared.
+    // 在同一回合保留真实助手回复，以验证两条显示路径。
+    const history = completeTurnEvents().filter(({ event }) => event.kind === "user_input" || event.kind === "assistant_text");
+    // These durable notice kinds formerly fell through to assistant Markdown.
+    // 这些持久提示类型此前会落入助手 Markdown 分支。
+    const noticeKinds = ["resumed", "compaction_completed", "interrupted", "stopped"] as const;
+    for (const [index, noticeKind] of noticeKinds.entries()) {
+      history.push(eventSummary(100 + index, {
+        kind: "display_note", notice_kind: noticeKind, reason_code: noticeKind,
+        severity: "info", redacted_detail: `**${noticeKind} fixture**`,
+      }, "ui_only"));
+    }
+    // Inspect the rendered row role, accessibility marker and literal status text.
+    // 检查渲染后的行角色、无障碍标记及状态原文。
+    const host = document.createElement("div");
+    host.innerHTML = renderWorkspace(history, "inline_output");
+    const statuses = Array.from(host.querySelectorAll('[data-role="system"] .vk-note[role="note"]'));
+    expect(statuses.map((status) => status.textContent)).toEqual(noticeKinds.map((kind) => `**${kind} fixture**`));
+    expect(host.querySelector('[data-role="assistant"]')).not.toBeNull();
+    expect(host.querySelector(".vk-error-card")).toBeNull();
+  });
+
   // Both Core terminal warning types must use the error card, including across history pages.
   // 两种 Core 终态警告都必须使用错误卡片，包括统计跨历史分页的情况。
   it.each(["balance", "network"] as const)("renders a %s failure warning as a terminal error card", (warning) => {

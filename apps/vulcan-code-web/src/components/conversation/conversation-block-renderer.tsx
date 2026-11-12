@@ -295,7 +295,7 @@ function SpecialConversationBlock(props: {
   const { t } = useI18n();
   // systemProviderError keeps canonical provider failures inside the existing transcript card surface.
   // systemProviderError 让规范 Provider 失败保持在现有转录卡片界面内。
-  const systemProviderError = props.block.kind === "notice"
+  const systemProviderError = props.block.kind === "notice" && !props.block.statusNotice
     ? parseSystemProviderError(props.block.body)
     : null;
   if (systemProviderError) {
@@ -373,6 +373,17 @@ function SpecialConversationBlock(props: {
 
   const Icon = blockIcon(props.block.kind);
   const displayTitle = localizedConversationBlockTitle(props.block, t);
+  // Render host status as literal text in the shared notice row, outside the assistant Markdown surface.
+  // 使用共享提示行显示宿主状态原文，避免进入助手 Markdown 界面。
+  if (props.block.statusNotice) {
+    return (
+      <aside aria-label={t("conversation.block.notice")} className="vk-note" role="note"
+        data-tone={metadataString(props.block.rawMetadata, ["status"]) === "warning" ? "warn" : undefined}>
+        <Icon aria-hidden="true" />
+        <div className="vk-note-text"><span>{props.block.summary || displayTitle}</span></div>
+      </aside>
+    );
+  }
   // Only a diff fence from an answer opens the review dialog; every tool and runtime card opens in place.
   // 只有回答中的 diff 围栏打开审阅弹窗；所有工具与运行时卡片都就地展开。
   if (props.block.kind !== "diff") {

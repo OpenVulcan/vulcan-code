@@ -601,7 +601,7 @@ function conversationMessagesForV1Event(
       if (changeKind === "thinking") {
         return [{
           ...base,
-          role: "assistant",
+          role: "system",
           recordKind: "display-note",
           title: "Reasoning effort",
           body: "Reasoning effort changed",
@@ -616,7 +616,7 @@ function conversationMessagesForV1Event(
       }
       return [{
         ...base,
-        role: "assistant",
+        role: "system",
         recordKind: "display-note",
         title: "Model selection",
         body: "Model selection changed",
@@ -959,7 +959,7 @@ function displayNoteMessage(
   }
   return {
     ...base,
-    role: "assistant",
+    role: "system",
     recordKind: "display-note",
     title: event.notice_kind,
     body: displayNoteTitle(event, t),
@@ -1062,7 +1062,7 @@ function memoryRecallMessage(
   }
   return {
     ...base,
-    role: "assistant",
+    role: "system",
     recordKind: "display-note",
     title: t("conversation.memoryRecall.title"),
     body: sections.join("\n\n"),
@@ -1183,7 +1183,7 @@ function contextInjectionNotice(
   ]);
   return {
     ...base,
-    role: "assistant",
+    role: "system",
     recordKind: "display-note",
     title: categories.length === 1 && categories[0] === "memoryExpiration"
       ? t("conversation.contextInjection.memoryExpirationTitle")
@@ -1247,6 +1247,10 @@ function displayNoteTitle(event: Extract<ConversationEventBody, { kind: "display
   if (event.notice_kind === "goal_status") return goalNoticeTitle(event.reason_code, t);
   if (event.reason_code === "queued_turn_dispatch_failed") return t("conversationActions.acceptedDispatchFailed");
   if (isDedicatedMemoryNoticeKind(event.notice_kind)) return dedicatedMemoryNoticeTitle(event.notice_kind, t);
+  if (event.redacted_detail === undefined && event.notice_kind === "compaction_completed") return t("contextCompaction.title.completed");
+  if (event.redacted_detail === undefined && (event.notice_kind === "stopped" || event.notice_kind === "interrupted")) {
+    return t("conversation.block.status.stopped");
+  }
   return event.redacted_detail ?? event.reason_code;
 }
 

@@ -182,6 +182,11 @@
 
 上述规则以 `session_runtime_registry_v1/compaction_continuation.rs`、物理请求准备和领域 Continue 状态机为实现权威；调整压缩投影、提交边界或 Continue 交接时，同步验证 `provider_v1_sink/tests/compaction_continuation.rs`、`compaction_continuation/vmm_epoch.rs`、`compaction_budget.rs`、`remote_checkpoint.rs` 及 `session_runtime_registry_v1/tests/request_preparation/continuation.rs`。
 
+## 会话时间线提示
+
+- 宿主产生的显示提示由结构化记录类型决定展示方式。普通过程提示使用系统状态行，文字原样显示。记忆召回和上下文注入继续提供可展开详情，重试等既有提示使用其对应的状态组件。
+- 请求失败按终态事实进入错误卡片，包含 Core 标记为警告的余额不足和网络断开。WebUI 的展示与回归入口为 `conversation-branch-presentation-v1.ts`、`conversation-transcript-parser.ts` 和 `conversation-branch-workspace-v1.test.tsx`。
+
 ## 当前实现与验证入口
 
 | 职责 | 入口 |
