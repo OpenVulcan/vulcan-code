@@ -1829,7 +1829,9 @@ impl NativeVmmHostDriver {
     /// 返回现有 VMM AI 能力，或在首次使用时仅注册一次。
     fn capability(&self) -> Result<HostAiCapabilityHandle, HostAiError> {
         if let Some(cloud) = &self.cloud
-            && let Some(handle) = cloud.capability(native_vmm_capability_registration())?
+            && let Some(handle) = cloud
+                .capability(native_vmm_capability_registration())
+                .map_err(|error| *error)?
         {
             validate_native_vmm_required_capabilities(&handle)?;
             return Ok(handle);

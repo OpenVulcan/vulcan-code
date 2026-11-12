@@ -45,16 +45,22 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
 
 /// Forces one context compaction after a provider/tool boundary reported a verified budget overflow.
 /// 在 Provider/工具边界报告已验证预算溢出后强制执行一次上下文压缩。
+/// `pending` pairs the request with its preparation, and `reason` selects the pressure mode.
+/// `pending` 配对请求及其准备结果，`reason` 选择压力模式。
+/// Returns the refreshed request when compaction commits, or the shared compaction outcome.
+/// 压缩提交时返回刷新后的请求，其余情况返回共享压缩流程的结果。
 pub(crate) async fn force_auto_compact_webui_session_after_provider_boundary(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     active_stream_task_id: Uuid,
-    request: &ExecutionPreparationRequest,
-    preparation: &ExecutionPreparation,
+    pending: (&ExecutionPreparationRequest, &ExecutionPreparation),
     reason: &str,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
+    // Carry the pending request and its preparation through the same restart.
+    // 在同一次重启中传递待发请求及其准备结果。
+    let (request, preparation) = pending;
     maybe_auto_compact_webui_session_with_mode(
         app,
         state,

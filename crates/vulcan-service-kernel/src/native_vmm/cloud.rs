@@ -19,7 +19,7 @@ use vulcan_ai_contract::{
     INFERENCE_CONTRACT_VERSION, InferenceCapabilitySnapshot, InferenceOperationCapability,
     InferenceUsageScope,
 };
-use vulcan_memorymesh_core::{PiiScrubber, embedded_pii_scrubber};
+use vulcan_memorymesh_core::{CoreError, PiiScrubber, embedded_pii_scrubber};
 use vulcan_provider_adapters::{
     MemoryCatalog, MemoryOffer, MemoryPurpose, MemoryTransportError, MemoryUsage, OpenVulcanRegion,
     request_openvulcan_memory_catalog, request_openvulcan_memory_inference,
@@ -221,19 +221,18 @@ impl CloudMemoryRuntime {
             Ok(Some((account, secret))) => match request_openvulcan_memory_catalog(&secret).await {
                 Ok(catalog) => {
                     let mut stale = false;
-                    if let Some(saved) = saved {
-                        let same_account =
-                            saved.matches_account(&account, secret.openvulcan_region());
+                    if let Some(active) = &active {
+                        let same_account = active
+                            .choice
+                            .matches_account(&account, secret.openvulcan_region());
                         let still_offered = catalog.models.iter().any(|offer| {
-                            offer.id == saved.offer.id
-                                && offer.consent_revision == saved.offer.consent_revision
+                            offer.id == active.choice.offer.id
+                                && offer.consent_revision == active.choice.offer.consent_revision
                         });
                         if same_account && !still_offered {
-                            if let Some(active) = &active {
-                                self.reject(active, &state).await;
-                            }
+                            self.reject(active, &state).await;
                         }
-                        stale = !same_account || !still_offered || self.is_rejected(saved);
+                        stale = !same_account || !still_offered || self.is_rejected(&active.choice);
                     }
                     let status = if stale {
                         "selection_changed"
@@ -331,15 +330,17 @@ impl CloudMemoryRuntime {
 
     /// Returns a snapshot for the saved route; withdrawn selections cannot fall back to personal models.
     /// 返回已保存路由的快照；已下架的选择不能回退到自有模型。
+    /// Uses the caller's registration requirements and preserves the full Host AI error on failure.
+    /// 使用调用方的注册要求，失败时保留完整的宿主 AI 错误。
     pub(super) fn capability(
         &self,
         registration: HostAiCapabilityRegistration,
-    ) -> Result<Option<HostAiCapabilityHandle>, HostAiError> {
+    ) -> Result<Option<HostAiCapabilityHandle>, Box<HostAiError>> {
         let Some(active) = self.consent().map_err(configuration_error)? else {
             return Ok(None);
         };
         if self.is_rejected(&active.choice) {
-            return Err(transport_error(MemoryTransportError::SelectionChanged));
+            return Err(transport_error(MemoryTransportError::SelectionChanged).into());
         }
         active.choice.capability(registration).map(Some)
     }
@@ -383,7 +384,8 @@ impl CloudMemoryRuntime {
         if !saved.matches_account(&account, secret.openvulcan_region()) {
             return Err(transport_error(MemoryTransportError::SignIn));
         }
-        scrub_business_value(&active.scrubber, &mut input, None, true)?;
+        scrub_business_value(&active.scrubber, &mut input, None, true)
+            .map_err(|_| configuration_error("Local PII filtering failed."))?;
         if self
             .consent()
             .map_err(configuration_error)?
@@ -501,10 +503,12 @@ impl CloudConsent {
 
     /// Projects cloud metadata into the native readiness and vector-identity contract.
     /// 将云端元数据投影到原生就绪状态与向量身份协议。
+    /// Returns a validated handle for the requested registration or its exact Host AI error.
+    /// 返回与所请求注册对应的已验证句柄，或精确的宿主 AI 错误。
     fn capability(
         &self,
         registration: HostAiCapabilityRegistration,
-    ) -> Result<HostAiCapabilityHandle, HostAiError> {
+    ) -> Result<HostAiCapabilityHandle, Box<HostAiError>> {
         let operations = registration
             .requirements
             .into_iter()
@@ -523,7 +527,11 @@ impl CloudConsent {
                     }
                     (AiOperation::EmbeddingCreate, None) => MemoryPurpose::Embedding,
                     (AiOperation::RerankDocuments, None) => MemoryPurpose::Rerank,
-                    _ => return Err(configuration_error("Unexpected native memory requirement.")),
+                    _ => {
+                        return Err(
+                            configuration_error("Unexpected native memory requirement.").into()
+                        );
+                    }
                 };
                 let route = self
                     .offer
@@ -584,7 +592,7 @@ impl CloudConsent {
                     rerank: None,
                 })
             })
-            .collect::<Result<Vec<_>, HostAiError>>()?;
+            .collect::<Result<Vec<_>, Box<HostAiError>>>()?;
         let snapshot = InferenceCapabilitySnapshot {
             contract_version: INFERENCE_CONTRACT_VERSION,
             consumer_profile_id: registration.consumer_profile_id.clone(),
@@ -597,23 +605,23 @@ impl CloudConsent {
             registration.caller,
             snapshot,
         )
+        .map_err(Box::new)
     }
 }
 
 /// Filters nested business text, keeping known Core references intact for response reconciliation.
 /// 过滤嵌套业务文本，并保留已知 Core 引用供响应对账。
+/// The scrubber rewrites `value` in place and returns its local validation error on failure.
+/// 清洗器就地改写 `value`，失败时返回本机校验错误。
 fn scrub_business_value(
     scrubber: &PiiScrubber,
     value: &mut Value,
     field: Option<&str>,
     preserve_references: bool,
-) -> Result<(), HostAiError> {
+) -> Result<(), CoreError> {
     match value {
         Value::String(text) if !preserve_references || !is_native_reference(field, text) => {
-            *text = scrubber
-                .scrub(text)
-                .map_err(|_| configuration_error("Local PII filtering failed."))?
-                .text;
+            *text = scrubber.scrub(text)?.text;
         }
         Value::Array(items) => {
             for item in items {

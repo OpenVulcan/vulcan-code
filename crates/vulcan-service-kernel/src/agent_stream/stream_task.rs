@@ -1647,8 +1647,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             &controller_runtime,
                             &agent_runtime,
                             active_stream_task_id,
-                            &compaction_request,
-                            preparation,
+                            (&compaction_request, preparation),
                             &reason,
                         )
                         .await;
