@@ -774,6 +774,49 @@ fn retire_invalid_inactive_sources(
     Ok(())
 }
 
+/// Returns the completed final business answer from this turn's exact API group.
+/// 从本回合的精确 API 组取出已完成的业务最终答复。
+fn final_answer(events: &[&ConversationEvent]) -> Option<String> {
+    // Compaction and auxiliary question executions cannot supply the business answer.
+    // 压缩和辅助答疑执行不能作为业务最终答复。
+    let ApiStatsEvent {
+        api_call_id,
+        status,
+        ..
+    } = events.iter().rev().find_map(|event| match &event.event {
+        EventBody::ApiStats(stats)
+            if !matches!(
+                stats.purpose,
+                ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution
+            ) =>
+        {
+            Some(stats)
+        }
+        _ => None,
+    })?;
+    if *status != ApiCallStatus::Completed
+        || events.iter().any(|event| matches!(&event.event, EventBody::ToolCall(tool) if tool.api_call_id == *api_call_id))
+    {
+        return None;
+    }
+    // The stream already orders completed text fragments exactly.
+    // 事件流已经按顺序记录已完成的正文片段。
+    let mut parts = events.iter().filter_map(|event| match &event.event {
+        EventBody::AssistantText(text)
+            if text.api_call_id == *api_call_id
+                && text.status == AssistantSemanticStatus::Completed =>
+        {
+            Some(text.text.as_str())
+        }
+        _ => None,
+    });
+    // Require a recorded text fragment even if the response text was empty.
+    // 即使答复正文为空也要求存在已记录的正文片段。
+    let mut answer = parts.next()?.to_owned();
+    answer.extend(parts);
+    Some(answer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,47 +909,4 @@ mod tests {
         assert_eq!(history, CleanedHistory::default());
         Ok(())
     }
-}
-
-/// Returns the completed final business answer from this turn's exact API group.
-/// 从本回合的精确 API 组取出已完成的业务最终答复。
-fn final_answer(events: &[&ConversationEvent]) -> Option<String> {
-    // Compaction and auxiliary question executions cannot supply the business answer.
-    // 压缩和辅助答疑执行不能作为业务最终答复。
-    let ApiStatsEvent {
-        api_call_id,
-        status,
-        ..
-    } = events.iter().rev().find_map(|event| match &event.event {
-        EventBody::ApiStats(stats)
-            if !matches!(
-                stats.purpose,
-                ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution
-            ) =>
-        {
-            Some(stats)
-        }
-        _ => None,
-    })?;
-    if *status != ApiCallStatus::Completed
-        || events.iter().any(|event| matches!(&event.event, EventBody::ToolCall(tool) if tool.api_call_id == *api_call_id))
-    {
-        return None;
-    }
-    // The stream already orders completed text fragments exactly.
-    // 事件流已经按顺序记录已完成的正文片段。
-    let mut parts = events.iter().filter_map(|event| match &event.event {
-        EventBody::AssistantText(text)
-            if text.api_call_id == *api_call_id
-                && text.status == AssistantSemanticStatus::Completed =>
-        {
-            Some(text.text.as_str())
-        }
-        _ => None,
-    });
-    // Require a recorded text fragment even if the response text was empty.
-    // 即使答复正文为空也要求存在已记录的正文片段。
-    let mut answer = parts.next()?.to_owned();
-    answer.extend(parts);
-    Some(answer)
 }
