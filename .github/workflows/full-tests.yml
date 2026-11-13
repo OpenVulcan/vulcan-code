@@ -46,7 +46,9 @@ jobs:
         run: |
           set -eu
           node scripts/install-locked-tools.mjs nextest
-          echo "$PWD/target/ci-tools/bin" >> "$GITHUB_PATH"
+          # Git Bash reports a POSIX path, but the runner passes PATH to native Windows Cargo.
+          # Git Bash 给出 POSIX 路径，而运行器会把 PATH 交给 Windows 原生 Cargo。
+          node -p 'require("node:path").resolve("target/ci-tools/bin")' >> "$GITHUB_PATH"
           node scripts/install-locked-tools.mjs bundled
           node scripts/install-locked-tools.mjs judge-runtime
           if [ "$RUNNER_OS" = Windows ]; then make_entry='pwsh ./make.ps1'; else make_entry='sh ./make.sh'; fi
@@ -54,7 +56,9 @@ jobs:
           node scripts/managed-node.mjs output
           $make_entry sync
       - name: Full nextest set, isolated callbacks and doctests
-        run: node scripts/test-rust.mjs full
+        run: |
+          cargo nextest --version
+          node scripts/test-rust.mjs full
       # Quarantined tests report results without failing the run; their outcomes decide when they leave the list.
       # 被隔离的测试只报告结果，不使本次运行失败；其结果决定何时移出清单。
       - name: Quarantined tests
