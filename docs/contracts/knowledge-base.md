@@ -103,6 +103,8 @@ AI 使用 `knowledge_list`、`knowledge_read`、`knowledge_search`、`knowledge_
 
 ## WebUI 与 TUI
 
+WebUI 左侧快捷栏默认固定「知识库」，点击进入现有的知识库管理页。用户可通过「显示在侧栏」调整，已保存的布局优先。
+
 两端按需读取逻辑目录，使用服务游标；当前和历史正文使用不同精确接口并按返回 `nextLine` 续读。
 历史摘要以最后实际显示序号续读，详情与向量失败页使用服务 `nextOffset`，不假定序号连续。
 WebUI 复用会话 Markdown，TUI 以共享只读正文行保留缩进与空行；两端不复制内容解析或编辑管线。
