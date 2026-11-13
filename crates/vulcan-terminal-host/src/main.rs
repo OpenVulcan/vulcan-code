@@ -86,7 +86,7 @@ impl TerminalHostEventWriter {
             .map_err(|_| io::Error::other("terminal-host stdout lock was poisoned"))?;
         let sequence = self
             .next_sequence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| {

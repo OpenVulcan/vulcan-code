@@ -610,7 +610,7 @@ impl ProjectTerminalRuntime {
         let terminal_id = Uuid::new_v4();
         let creation_order = self
             .next_creation_order
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| String::from("Project terminal creation sequence was exhausted."))?;

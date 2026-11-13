@@ -39,7 +39,7 @@ impl VmmWritebackPermit {
         // Checked allocation prevents a stale receipt from ever matching a recycled process identity.
         // 经检查分配防止旧回执匹配被重复使用的进程身份。
         let id = NEXT_PERMIT_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| {

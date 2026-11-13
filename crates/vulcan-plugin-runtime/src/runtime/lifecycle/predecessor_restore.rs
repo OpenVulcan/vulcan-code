@@ -183,7 +183,7 @@ impl VulcanPluginRuntimeManager {
         catalog.revision = self
             .state
             .next_revision
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |revision| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |revision| {
                 revision.checked_add(1)
             })
             .map_err(|_| VulcanPluginRuntimeError::new("Plugin catalog revision is exhausted."))?;
