@@ -65,6 +65,24 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 }
 `;
 
+// Validate the export check boundary against synthetic Cargo output and the selected distribution.
+// 使用模拟的 Cargo 制品和所选发行目录验证导出检查的调用边界。
+const macLuaExportFixture = `
+param([string]$RuntimeRoot, [string]$CoreExecutable)
+$ErrorActionPreference = 'Stop'
+
+# Check the runtime root for this profile and the freshly built Core rather than stale output.
+# 检查当前模式的运行时目录和刚构建的 Core，确保未读取旧发行物。
+$owned = if ($env:VULCAN_FIXTURE_PROFILE -eq 'release') { 'output-release' } else { 'output' }
+$expectedRuntime = Join-Path $env:VULCAN_FIXTURE_ROOT $owned 'lua_runtime'
+$expectedCore = Join-Path $env:VULCAN_FIXTURE_ROOT 'cargo artifacts' $env:VULCAN_FIXTURE_PROFILE 'vulcan-code-service'
+if ($RuntimeRoot -cne $expectedRuntime -or $CoreExecutable -cne $expectedCore -or
+    (Get-Content -LiteralPath $CoreExecutable -Raw) -cne 'new:vulcan-code-service') {
+    throw 'Unexpected macOS Lua export check inputs.'
+}
+[IO.File]::WriteAllText((Join-Path $env:VULCAN_FIXTURE_ROOT 'lua-export-checked'), $CoreExecutable)
+`;
+
 // Each case must replace every stale executable with the selected profile's current artifact, or publish nothing.
 // 每个用例必须用所选模式的当前制品替换全部旧二进制，否则不得发布任何内容。
 for (const scenario of [
@@ -92,6 +110,7 @@ for (const scenario of [
         await copyFile(path.join(sourceScripts, script), path.join(root, 'scripts', script));
       }
       await writeFile(path.join(root, 'scripts/desktop-runtime.mjs'), runtimeFixture);
+      await writeFile(path.join(root, 'scripts/macos-lua-runtime.ps1'), macLuaExportFixture);
       await writeFile(path.join(root, 'scripts/install-electron.mjs'),
         'process.exit(process.env.VULCAN_FAIL_ELECTRON === "1" ? 23 : 0);\n');
       await writeFile(path.join(root, 'fake-bin/cargo'), '#!' + process.execPath + '\n' + cargoFixture, { mode: 0o755 });
@@ -103,10 +122,15 @@ for (const scenario of [
       const result = spawnSync('sh', [path.join(root, 'scripts/build_tauri.sh'), ...(scenario.profile === 'release' ? ['--release'] : [])], {
         cwd: root, encoding: 'utf8', timeout: 30000,
         env: { ...process.env, PATH: path.join(root, 'fake-bin') + path.delimiter + process.env.PATH,
-          VULCAN_FIXTURE_ROOT: root, VULCAN_OMIT_ARTIFACT: scenario.omit, VULCAN_FAIL_ELECTRON: scenario.electronFailure ? '1' : '0' },
+          VULCAN_FIXTURE_ROOT: root, VULCAN_FIXTURE_PROFILE: scenario.profile, VULCAN_OMIT_ARTIFACT: scenario.omit,
+          VULCAN_FAIL_ELECTRON: scenario.electronFailure ? '1' : '0' },
       });
       assert.equal(result.error, undefined);
       assert.equal(result.status, scenario.electronFailure ? 23 : scenario.omit ? 1 : 0, result.stdout + result.stderr);
+      if (process.platform === 'darwin' && result.status === 0) {
+        assert.equal(await readFile(path.join(root, 'lua-export-checked'), 'utf8'),
+          path.join(root, 'cargo artifacts', scenario.profile, 'vulcan-code-service'));
+      }
       for (const item of shippedRustPackages) {
         assert.equal(await readFile(path.join(root, owned, 'bin', shippedFileName(item)), 'utf8'),
           (scenario.omit || scenario.electronFailure ? 'old:' : 'new:') + item.package);
