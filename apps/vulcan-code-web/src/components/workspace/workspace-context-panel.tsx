@@ -65,6 +65,7 @@ import {
   useConversationTransientReasoningStatus,
 } from "@/state/conversation-live-stream-context";
 import { useConversationSessionEventWindowOwnerV1 } from "@/state/conversation-session-event-window-owner-v1";
+import { useConversationTranscriptSnapshot } from "@/components/conversation/conversation-transcript-stream";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
   VmmMemoryActionRequest,
@@ -1041,6 +1042,9 @@ function WorkspaceSubagentPanel(args: {
     parentSessionId: parentConversationId,
     sessionId: taskId,
   });
+  // The child panel only reprojects when its transcript structure changes.
+  // 子会话面板仅在其转录结构变化时重新投影。
+  const transcriptSnapshot = useConversationTranscriptSnapshot(transcriptOwner.reader, Boolean(task?.isRunning));
   // handleStopConfirmed executes the single-task stop after confirmation.
   // handleStopConfirmed 在确认后执行单任务停止。
   // Parameters: none; the mounted tab owns the parent/task ids. Returns after the request or visible failure handling finishes.
@@ -1130,7 +1134,7 @@ function WorkspaceSubagentPanel(args: {
   }, [subagentScrollController, transientReasoningStatusVisible]);
   // transcriptHasEvents distinguishes a full empty-state failure from a non-blocking refresh warning.
   // transcriptHasEvents 区分完整空状态失败与不阻塞内容的刷新警告。
-  const transcriptHasEvents = transcriptOwner.snapshot.events.length > 0;
+  const transcriptHasEvents = transcriptSnapshot.events.length > 0;
   if (!parentConversationId || !taskId) {
     return <WorkspaceSubagentEmptyState title={workspaceContextTabDefaultTitle("subagent", t)} />;
   }
@@ -1167,7 +1171,8 @@ function WorkspaceSubagentPanel(args: {
         scrollRef={scrollRef}
         sessionId={taskId}
         sessionRunning={Boolean(task?.isRunning)}
-        snapshot={transcriptOwner.snapshot}
+        snapshot={transcriptSnapshot}
+        snapshotReader={transcriptOwner.reader}
         suppressEmptyPlaceholder={transcriptOwner.loading}
         transientReasoningStatus={providerRetryStatus ? (
           <ProviderRetryCountdownLine countdown={providerRetryStatus} />
@@ -1179,7 +1184,7 @@ function WorkspaceSubagentPanel(args: {
         onPreserveHistoryPrepend={subagentScrollController.preserveHistoryPrepend}
         onScrollStateChange={subagentScrollController.handleScroll}
       />
-      {transcriptOwner.loading && transcriptOwner.snapshot.events.length === 0 ? (
+      {transcriptOwner.loading && transcriptSnapshot.events.length === 0 ? (
         <StreamPlaceholder className="vk-stream-overlay" fill label={t("conversation.subagent.loadingTranscript")} />
       ) : null}
       {transcriptOwner.error && !transcriptHasEvents ? (

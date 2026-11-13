@@ -29,9 +29,9 @@ export interface ConversationEventWindowOwnedStore
   status(): SelectedConversationEventWindowStatus;
 }
 
-/** Stable adapter consumed by React useSyncExternalStore.
- * React useSyncExternalStore 消费的稳定适配器。 */
-export interface ConversationEventWindowExternalStore {
+/** Stable frame-coalesced snapshot reader consumed by React useSyncExternalStore.
+ * React useSyncExternalStore 消费的稳定按帧合并快照读取器。 */
+export interface ConversationEventWindowSnapshotReader {
   /** Subscribes to complete atomic controller publications.
    * 订阅控制器完整原子发布。 */
   subscribe(listener: ConversationEventWindowControllerListener): () => void;
@@ -41,6 +41,11 @@ export interface ConversationEventWindowExternalStore {
   /** Returns the same authoritative snapshot during server rendering.
    * 在服务端渲染期间返回同一份权威快照。 */
   getServerSnapshot(): ConversationEventWindowControllerSnapshot;
+}
+
+/** Selected-session reader with lifecycle and owner-bound commands.
+ * 带生命周期与归属绑定命令的选中会话读取器。 */
+export interface ConversationEventWindowExternalStore extends ConversationEventWindowSnapshotReader {
   /** Returns commands bound to the selected owner visible in the current snapshot.
    * 返回绑定到当前快照可见选中归属的命令。 */
   getCommands(): SelectedConversationEventWindowCommands;
@@ -198,11 +203,24 @@ export function createConversationEventWindowExternalStore(
 export function useConversationEventWindowSnapshot(
   controller: ConversationEventWindowReadableStore,
 ): ConversationEventWindowControllerSnapshot {
+  const reader = useConversationEventWindowSnapshotReader(controller);
+  return React.useSyncExternalStore(reader.subscribe, reader.getSnapshot, reader.getServerSnapshot);
+}
+
+/** Adapts a component-owned controller to stable, frame-coalesced snapshot reads.
+ * 将组件持有的控制器适配为稳定的按帧合并快照读取器。
+ * @param controller canonical event-window controller.
+ *                   规范事件窗口控制器。
+ * @returns a reader shared by the transcript and its active Markdown leaves.
+ *          供转录和其活动 Markdown 叶子共用的读取器。 */
+export function useConversationEventWindowSnapshotReader(
+  controller: ConversationEventWindowReadableStore,
+): ConversationEventWindowSnapshotReader {
   // readableStore changes only when controller ownership changes, preserving callback identities across renders;
   // it publishes at most one snapshot per frame so streaming bursts cannot queue renders.
   // readableStore 仅在控制器归属变化时改变，从而跨渲染保持回调身份稳定；它每帧至多发布一份快照，使流式突发
   // 无法堆积渲染。
-  const readableStore = React.useMemo(() => {
+  return React.useMemo(() => {
     const publication = createFrameCoalescedPublication(
       (listener) => controller.subscribe(listener),
       () => controller.snapshot(),
@@ -214,11 +232,6 @@ export function useConversationEventWindowSnapshot(
       getServerSnapshot: publication.read,
     };
   }, [controller]);
-  return React.useSyncExternalStore(
-    readableStore.subscribe,
-    readableStore.getSnapshot,
-    readableStore.getServerSnapshot,
-  );
 }
 
 /** Provides the stable selected-session external store without rendering it.

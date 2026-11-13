@@ -40,6 +40,9 @@ export interface ConversationBlock {
   // Authoritative backend message identity that produced this parsed block.
   // 生成当前解析块的权威后端消息身份。
   sourceMessageId?: string;
+  // Canonical event sequence when this Markdown block owns a full streaming reply.
+  // 当前 Markdown 块持有整条流式回复时对应的规范事件序号。
+  streamingAnswerSeq?: number;
   // Semantic block kind used for component selection.
   // 用于选择组件的语义块类型。
   kind: ConversationBlockKind;

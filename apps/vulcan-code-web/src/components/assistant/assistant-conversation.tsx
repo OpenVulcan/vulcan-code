@@ -49,7 +49,10 @@ export function AssistantConversation(props: { assistant: AssistantEntry }) {
     parentSessionId: null,
     live: true,
   });
-  const turn = React.useMemo(() => projectAssistantLastTurn(owner.snapshot.events), [owner.snapshot.events]);
+  // The compact assistant surface consumes the full canonical reply in its own renderer.
+  // 紧凑助手界面在自己的渲染器中消费完整的规范回复。
+  const snapshot = React.useSyncExternalStore(owner.reader.subscribe, owner.reader.getSnapshot, owner.reader.getServerSnapshot);
+  const turn = React.useMemo(() => projectAssistantLastTurn(snapshot.events), [snapshot.events]);
   const resources = useConversationSessionResourcesV1(props.assistant.id, turn.resourceIds);
   const promptAttachments = React.useMemo(
     () => turn.resourceIds.map((resourceId) => composerAttachmentForResource(resourceId, resources)),
@@ -95,7 +98,7 @@ export function AssistantConversation(props: { assistant: AssistantEntry }) {
         assistant={props.assistant}
         onOpenMedia={setMediaPlayer}
         running={running}
-        sessionConfig={owner.snapshot.session_config}
+        sessionConfig={snapshot.session_config}
       />
       {mediaPlayer ? <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} /> : null}
     </div>

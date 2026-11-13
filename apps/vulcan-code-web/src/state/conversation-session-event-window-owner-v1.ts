@@ -5,13 +5,10 @@ import {
   type BrowserServiceConnectionDetail,
 } from "@/service";
 import { createConversationEventWindowClient } from "@/service/conversation-event-window-client";
-import {
-  ConversationEventWindowController,
-  type ConversationEventWindowControllerSnapshot,
-} from "@/service/conversation-event-window-controller";
+import { ConversationEventWindowController } from "@/service/conversation-event-window-controller";
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
 import { serviceClient } from "@/service/webui-service-runtime";
-import { useConversationEventWindowSnapshot } from "@/state/conversation-event-window-react";
+import { useConversationEventWindowSnapshotReader, type ConversationEventWindowSnapshotReader } from "@/state/conversation-event-window-react";
 
 /** Inputs for one component-owned durable V1 session event window.
  * 单个组件持有的可靠 V1 会话事件窗口输入。 */
@@ -30,9 +27,9 @@ export interface ConversationSessionEventWindowOwnerV1Options {
 /** React state exposed by one component-owned V1 event-window controller.
  * 单个组件持有的 V1 事件窗口控制器暴露的 React 状态。 */
 export interface ConversationSessionEventWindowOwnerV1 {
-  /** Atomic controller snapshot for the exact session owner.
-   * 精确会话归属的原子控制器快照。 */
-  snapshot: ConversationEventWindowControllerSnapshot;
+  /** Coalesced controller reader for the exact session owner.
+   * 精确会话归属的合并发布控制器读取器。 */
+  reader: ConversationEventWindowSnapshotReader;
   /** Commands permanently bound to this controller instance.
    * 永久绑定到当前控制器实例的命令。 */
   commands: SelectedConversationEventWindowCommands;
@@ -49,8 +46,8 @@ export interface ConversationSessionEventWindowOwnerV1 {
  *
  * @param options exact child identity, indexed parent identity, and live ownership state.
  *                精确子会话身份、已索引父会话身份与实时归属状态。
- * @returns the atomic snapshot, owner-bound commands, and loading state.
- *          原子快照、归属绑定命令与加载状态。 */
+ * @returns the snapshot reader, owner-bound commands, and loading state.
+ *          快照读取器、归属绑定命令与加载状态。 */
 export function useConversationSessionEventWindowOwnerV1(
   options: ConversationSessionEventWindowOwnerV1Options,
 ): ConversationSessionEventWindowOwnerV1 {
@@ -78,9 +75,9 @@ export function useConversationSessionEventWindowOwnerV1(
       generation: controllerOwnershipRef.current.generation,
     };
   }
-  // snapshot is read through React's tear-free external-store contract.
-  // snapshot 通过 React 无撕裂外部存储契约读取。
-  const snapshot = useConversationEventWindowSnapshot(controller);
+  // Expose the same publication to consumers that choose either full or structural reads.
+  // 向按需读取完整快照或结构快照的消费者暴露同一份发布。
+  const reader = useConversationEventWindowSnapshotReader(controller);
   // loading covers the first live hydration or one-shot persisted snapshot read.
   // loading 覆盖首次实时 hydration 或一次性持久化快照读取。
   const [loading, setLoading] = React.useState(Boolean(options.sessionId));
@@ -206,5 +203,5 @@ export function useConversationSessionEventWindowOwnerV1(
     };
   }, [controller, options.live]);
 
-  return { snapshot, commands, loading, error };
+  return { reader, commands, loading, error };
 }

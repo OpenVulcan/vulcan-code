@@ -1,5 +1,6 @@
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { MarkdownMessage } from "./conversation-markdown";
+import { useConversationStreamingAnswerText } from "./conversation-transcript-stream";
 
 // StreamingMarkdownDocument renders the current canonical V1 event body with the restored Markdown surface.
 // StreamingMarkdownDocument 使用恢复后的 Markdown 界面渲染当前规范 V1 事件正文。
@@ -14,6 +15,9 @@ export function StreamingMarkdownDocument(props: {
   // Stable V1 event-derived presentation identity.
   // 从 V1 事件派生的稳定展示身份。
   messageId: string;
+  // Canonical event sequence for a complete reply served directly by the transcript reader.
+  // 由转录读取器直接提供完整回复时对应的规范事件序号。
+  streamingAnswerSeq?: number;
   // Canonical body from the latest V1 event revision.
   // 来自最新 V1 事件修订的规范正文。
   fallbackContent: string;
@@ -24,6 +28,9 @@ export function StreamingMarkdownDocument(props: {
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
+  // Only the active reply leaf subscribes to its own cumulative text.
+  // 仅活动回复叶子订阅自身累计正文。
+  const content = useConversationStreamingAnswerText(props.conversationId, props.streamingAnswerSeq, props.fallbackContent);
   return (
     <div
       className="vk-md-stream"
@@ -32,7 +39,7 @@ export function StreamingMarkdownDocument(props: {
       data-stream-lifecycle={props.fallbackStreaming ? "active" : "sealed"}
     >
       <MarkdownMessage
-        content={props.fallbackContent}
+        content={content}
         eager
         onOpenMedia={props.onOpenMedia}
         streaming={props.fallbackStreaming}

@@ -32,7 +32,7 @@ vi.mock("react", () => ({
 vi.mock("@/service", () => ({ BROWSER_SERVICE_CONNECTION_EVENT: "test-service-connection" }));
 vi.mock("@/service/webui-service-runtime", () => ({ serviceClient: {} }));
 vi.mock("@/service/conversation-event-window-client", () => ({ createConversationEventWindowClient: () => ({}) }));
-vi.mock("@/state/conversation-event-window-react", () => ({ useConversationEventWindowSnapshot: () => ({}) }));
+vi.mock("@/state/conversation-event-window-react", () => ({ useConversationEventWindowSnapshotReader: () => ({}) }));
 vi.mock("@/service/conversation-event-window-controller", () => ({
   // Only hydration and connection recovery participate in these effect-lifetime tests.
   // 这些 effect 生命周期测试仅涉及 hydration 与连接恢复。

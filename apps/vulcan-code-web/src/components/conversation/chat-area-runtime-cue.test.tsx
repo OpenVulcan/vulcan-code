@@ -25,8 +25,8 @@ const liveStatus: { reasoning: TransientReasoningStatus | null } = { reasoning: 
 // dockRenders 记录 ChatArea 每次渲染时交给输入区层的属性。
 const dockRenders: Record<string, unknown>[] = [];
 
-// transcriptRenders counts transcript renders, which must follow every streamed frame.
-// transcriptRenders 统计转录渲染次数，转录必须跟随每个流式帧。
+// transcriptRenders counts structural transcript renders separately from leaf updates.
+// transcriptRenders 单独统计转录结构渲染，不包含叶子更新。
 let transcriptRenders = 0;
 
 // The event window owns one visible user prompt for the selected session; no service is started.
@@ -271,7 +271,7 @@ describe("session runtime cue placement", () => {
     expect(host.querySelector("[data-runtime-cue]")).not.toBeNull();
   });
 
-  it("re-renders only the transcript while reply text streams", async () => {
+  it("keeps the transcript and composer stable until the reply structure changes", async () => {
     // reply is one streaming answer row whose text grows in place.
     // reply 是一条正文原位增长的流式回答记录。
     const reply: ConversationEventSummary = {
@@ -290,8 +290,13 @@ describe("session runtime cue placement", () => {
         event: { kind: "assistant_text", api_call_id: 2, status: "streaming", text },
       }]);
     }
-    expect(transcriptRenders - transcriptBefore).toBe(2);
+    expect(transcriptRenders).toBe(transcriptBefore);
     expect(dockRenders.length).toBe(dockBefore);
+    await stream([...initialEvents, {
+      ...reply, event_revision: 4,
+      event: { kind: "assistant_text", api_call_id: 2, status: "completed", text: "first second third" },
+    }]);
+    expect(transcriptRenders).toBeGreaterThan(transcriptBefore);
   });
 
   it("shows the selected session's reasoning when another session streamed the same row identity", async () => {

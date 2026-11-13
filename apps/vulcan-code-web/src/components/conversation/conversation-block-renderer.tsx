@@ -206,6 +206,7 @@ export function ConversationBlocksView(props: {
             fallbackContent={block.body}
             fallbackStreaming
             messageId={block.sourceMessageId}
+            streamingAnswerSeq={block.streamingAnswerSeq}
             onOpenMedia={props.onOpenMedia}
           />
         </AnswerCodeSnapshotsProvider>

@@ -50,6 +50,15 @@ export function parseConversationBlocks(
   t?: (key: TranslationKey) => string,
 ): ConversationBlock[] {
   const blocks = parseMessageBlocks(message, t);
+  // Only a canonical, full-body Markdown reply can subscribe directly to its event text.
+  // 只有规范事件投影出的整段 Markdown 回复可以直接订阅事件正文。
+  const eventSeq = metadataValue(message.metadata, ["v1_seq"]);
+  if (message.role === "assistant" && message.recordKind === undefined
+    && metadataValue(message.metadata, ["v1_event"]) === true
+    && metadataValue(message.metadata, ["stream_state"]) === "active"
+    && typeof eventSeq === "number" && isFullMarkdownBlock(blocks, normalizeTranscriptMarkdown(message.body))) {
+    blocks[0].streamingAnswerSeq = eventSeq;
+  }
   // Every Markdown block of a sealed reply resolves its `ui-code` fences against the same captures.
   // 已封口回答的每个 Markdown 块都以同一组抓取结果解析其 `ui-code` 围栏。
   const snapshots = message.answerCodeSnapshots;
@@ -140,13 +149,47 @@ function parseMessageBlocks(
     ];
   }
 
-  const source = message.body.replace(/\r\n/g, "\n");
-  const directiveBlocks = parseDirectiveConversationBlocks(message.id, source);
+  return parseUnstructuredConversationBlocks(message.id, normalizeTranscriptMarkdown(message.body));
+}
+
+/** Normalizes Markdown line endings as required by the transcript parser.
+ * 按转录解析器的要求统一 Markdown 换行。
+ * @param source original event text. 原始事件正文。
+ * @returns text with LF line endings. 使用 LF 换行的正文。 */
+export function normalizeTranscriptMarkdown(source: string): string {
+  return source.replace(/\r\n/g, "\n");
+}
+
+/** Determines whether a streaming reply can still be represented by one Markdown block.
+ * 判断流式回复是否仍能用一个 Markdown 块表示。
+ * @param source normalized reply text. 规范化后的回复正文。
+ * @returns true when the shared parser keeps the complete source in a single Markdown block.
+ *          共享解析器将完整正文保存在单个 Markdown 块中时返回 true。 */
+export function isFullTranscriptMarkdown(source: string): boolean {
+  return isFullMarkdownBlock(parseUnstructuredConversationBlocks("", source), source);
+}
+
+/** Checks the parsed block count, kind and body for exact Markdown ownership.
+ * 检查解析后的块数量、类型与正文，确定完整 Markdown 的归属。
+ * @param blocks parsed transcript blocks. 已解析的转录块。
+ * @param source normalized Markdown source. 规范化的 Markdown 正文。
+ * @returns true when one Markdown block owns the entire source. 单个 Markdown 块持有完整正文时返回 true。 */
+function isFullMarkdownBlock(blocks: ConversationBlock[], source: string): boolean {
+  return blocks.length === 1 && blocks[0].kind === "markdown" && blocks[0].body === source;
+}
+
+/** Parses text-only transcript markup through the existing directive and legacy rules.
+ * 通过现有指令和旧格式规则解析纯文本转录标记。
+ * @param messageId owning message identity. 所属消息标识。
+ * @param source normalized text to parse. 待解析的规范化文本。
+ * @returns Markdown and any recognized special blocks. Markdown 与识别出的专用块。 */
+function parseUnstructuredConversationBlocks(messageId: string, source: string): ConversationBlock[] {
+  const directiveBlocks = parseDirectiveConversationBlocks(messageId, source);
   if (directiveBlocks.some((block) => block.kind !== "markdown")) {
     return directiveBlocks;
   }
 
-  return parseFallbackConversationBlocks(message.id, source);
+  return parseFallbackConversationBlocks(messageId, source);
 }
 
 // structuredMessageBlockKind maps service-provided record kinds to WebUI block kinds.

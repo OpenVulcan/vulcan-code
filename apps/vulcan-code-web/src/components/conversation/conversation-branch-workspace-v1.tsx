@@ -29,7 +29,8 @@ import type { ToolDetailPayload } from "@/components/conversation/conversation-d
 import { useI18n } from "@/i18n";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import { selectDedicatedMemory } from "@/service/dedicated-memory";
-import { conversationSelectionEqual, useEqualValue } from "@/state/conversation-event-window-react";
+import { conversationSelectionEqual, useEqualValue, type ConversationEventWindowSnapshotReader } from "@/state/conversation-event-window-react";
+import { ConversationTranscriptStreamContext } from "./conversation-transcript-stream";
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
 import type {
   ConversationEventSummary,
@@ -100,6 +101,9 @@ export interface ConversationBranchWorkspaceV1Props {
   // Atomic selected-session V1 window.
   // 当前选中会话的原子 V1 窗口。
   snapshot: ConversationEventWindowControllerSnapshot;
+  // Optional live reader for a surface that subscribes to structural snapshots.
+  // 供订阅结构快照的界面使用的可选实时读取器。
+  snapshotReader?: ConversationEventWindowSnapshotReader;
   // Commands permanently bound to the same selected owner generation.
   // 永久绑定到同一选中所有者 generation 的命令。
   commands: SelectedConversationEventWindowCommands;
@@ -175,6 +179,15 @@ export interface ConversationBranchWorkspaceV1Props {
 // ConversationBranchWorkspaceV1 仅从规范 V1 事件渲染完整分支界面。
 export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspaceV1Props) {
   const { t } = useI18n();
+  // Preserve the stream context across structural updates that keep the same exact owner.
+  // 保持同一精确归属下的结构更新前后流式上下文稳定。
+  const streamOwner = props.snapshot.owner;
+  const serviceEpoch = props.snapshot.service_epoch;
+  const stream = React.useMemo(() => props.snapshotReader ? {
+    reader: props.snapshotReader,
+    owner: streamOwner,
+    serviceEpoch,
+  } : null, [props.snapshotReader, streamOwner, serviceEpoch]);
   // Membership creates cards once; individual cards subscribe to argument revisions.
   // 成员创建一次卡片；各卡片分别订阅参数修订。
   const requestDrafts = useConversationToolRequestMembership(props.sessionId);
@@ -360,6 +373,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   }, [props.onRootInputGenerationAction]);
 
   return (
+    <ConversationTranscriptStreamContext.Provider value={stream}>
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>
     <ConversationAgentInteractionActionsContext.Provider value={collaborationActions}>
     <ConversationCollaborationStateContext.Provider value={collaborationState}>
@@ -407,6 +421,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     </ConversationCollaborationStateContext.Provider>
     </ConversationAgentInteractionActionsContext.Provider>
     </ThinkingPopupContext.Provider>
+    </ConversationTranscriptStreamContext.Provider>
   );
 }
 
