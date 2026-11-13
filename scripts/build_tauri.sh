@@ -190,6 +190,13 @@ for RequiredBinaryPath in "$BuiltJudgeHostPath" "$BuiltTuiPath" "$BuiltLanceLibr
     fi
 done
 
+# Check the actual Core exports before publishing a macOS distribution.
+# 发布 macOS 发行目录前校验实际 Core 的导出。
+if [ "$(uname -s)" = Darwin ]; then
+    pwsh -NoProfile -File "$ScriptDir/macos-lua-runtime.ps1" \
+        -RuntimeRoot "$OutputRootDir/lua_runtime" -CoreExecutable "$BuiltBinaryPath"
+fi
+
 # Debug distributions also serve a complete static WebUI through Core.
 # 调试发行物同样通过 Core 提供完整静态网页。
 if [ "$Release" = "0" ]; then

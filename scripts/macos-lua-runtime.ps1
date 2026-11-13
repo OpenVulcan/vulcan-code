@@ -1,6 +1,6 @@
 # When invoked directly, validate the prepared native payload before synchronization.
 # 直接调用时，在同步前校验已准备的原生载荷。
-param([string]$RuntimeRoot, [switch]$Smoke)
+param([string]$RuntimeRoot, [switch]$Smoke, [string]$CoreExecutable)
 
 # Replace the module suffix expected by LuaSkills while leaving native library aliases intact.
 # 改为 LuaSkills 查找的模块后缀，保留共享库的原有别名。
@@ -231,8 +231,41 @@ function Test-MacLuaNativeLoading {
     }
 }
 
+# Check the final Core binary against every native Lua module's actual imports.
+# 用各原生 Lua 模块的实际导入校验最终 Core 二进制。
+# Root is the runtime directory and Executable is the built Core. Returns normally only when every import is exported.
+# Root 是运行时目录，Executable 是已构建的 Core。只有所有导入都有对应导出时才正常返回。
+function Confirm-MacCoreLuaExports {
+    param([string]$Root, [string]$Executable)
+
+    # Exported records defined external symbols in the executable, excluding undefined imports.
+    # Exported 保存可执行文件中已定义的外部符号，不含未定义导入。
+    $Exported = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    & nm -gUj $Executable | ForEach-Object { [void]$Exported.Add($_) }
+    if ($LASTEXITCODE -ne 0) { throw "Failed to inspect Core exports: $Executable" }
+    # Modules covers the actual prepared payload, including native modules in subdirectories.
+    # Modules 覆盖实际已准备的载荷，包括子目录中的原生模块。
+    $Modules = Get-ChildItem -LiteralPath (Join-Path $Root 'lua_packages/lib/lua') -Recurse -File -Filter '*.dylib'
+    if (-not $Modules) { throw "No native Lua modules found in $Root." }
+    # Missing collects every Lua symbol an actual module imports but Core cannot supply.
+    # Missing 收集原生模块实际导入但 Core 无法提供的所有 Lua 符号。
+    $Missing = [Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($Module in $Modules) {
+        & nm -guj $Module.FullName | ForEach-Object {
+            if ($_ -cmatch '^_(lua|luaL|luaJIT|luaopen)_\w+$' -and -not $Exported.Contains($_)) {
+                [void]$Missing.Add($_)
+            }
+        }
+        if ($LASTEXITCODE -ne 0) { throw "Failed to inspect Lua imports: $($Module.FullName)" }
+    }
+    if ($Missing.Count -ne 0) {
+        throw "Core does not export the Lua symbols required by its native modules: $($Missing -join ', ')"
+    }
+}
+
 if ($PSBoundParameters.ContainsKey('RuntimeRoot')) {
     $ErrorActionPreference = 'Stop'
     Confirm-MacLuaRuntime -Root $RuntimeRoot
     if ($Smoke) { Test-MacLuaNativeLoading -Root $RuntimeRoot }
+    if ($CoreExecutable) { Confirm-MacCoreLuaExports -Root $RuntimeRoot -Executable $CoreExecutable }
 }

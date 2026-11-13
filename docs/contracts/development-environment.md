@@ -176,6 +176,8 @@ macOS 运行时最低支持 15.0。`make deps lua` 解压已校验的 LuaSkills 
 
 `make sync` 和 `make sync release` 在复制前检查已准备的 macOS 原生库，替换发行目录中的旧原生库目录，并用本机工具链构建探针。探针通过随包 LuaJIT 从同步后的目录加载原生模块，验证 OpenSSL 随机数、AES-GCM 和 cURL HTTPS 句柄创建，不发起外部请求。更新 LuaSkills、官方归档或 macOS 支持下限时须复核这些加载规则和系统 libcurl 的 ABI。
 
+macOS Core 静态链接的 LuaJIT 为随包原生模块提供 Lua C API。Core 的构建脚本显式保留两种架构的模块导入，发行前用 `nm` 核对实际 Core 导出和实际模块导入，缺失符号直接中止打包。更新原生模块时同步更新 Core 的符号清单。
+
 Rust 工具已存在时会只打印版本并跳过安装，不会重复编译或覆盖现有工具。Windows 通过 `make.ps1` 执行，类 Unix 环境通过 `make.sh` 转发到同一套 PowerShell 依赖入口。
 
 单独安装 Rust 工作区工具可以执行：
