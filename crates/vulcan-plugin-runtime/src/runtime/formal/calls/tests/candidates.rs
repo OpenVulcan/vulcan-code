@@ -573,12 +573,20 @@ fn formal_candidate_probe_cancellation_retains_original_request_ownership() {
             // The original formal receipt points to the actual initialized core session.
             // 原正式回执指向实际初始化核心会话。
             let call = fixture.admitted().await;
-            assert!(
-                call.lock()
+            // Native callback entry can precede publication of the core operation handle.
+            // 原生回调可以先于核心操作句柄的发布进入。
+            tokio::time::timeout(WAIT, async {
+                while call
+                    .lock()
                     .expect("actual initialized checkpoint")
                     .initialized
-                    .is_some()
-            );
+                    .is_none()
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("core operation handle published");
             Arc::downgrade(
                 call.source
                     .activation()
