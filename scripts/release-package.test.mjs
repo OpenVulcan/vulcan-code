@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { checksumFileName, createReleaseArchive, releaseAssetName, requiredGlibc, writeChecksums } from './release-package.mjs';
+import { verifyLinuxLuaRuntime } from './linux-lua-runtime.mjs';
 
 // targets is every platform the release supports, with the archive suffix each must get.
 // targets 是发行支持的全部平台及各自应得的归档后缀。
@@ -123,4 +124,29 @@ test('the glibc floor is the newest symbol version any binary references', () =>
   await Promise.all(files.map((file, index) => writeFile(file, bodies[index])));
   assert.equal(await requiredGlibc(files), '2.34');
   assert.equal(await requiredGlibc([files[2]]), null);
+}));
+
+// Build real ELF fixtures to exercise the loader contract and the publisher's rejection path.
+// 构建真实 ELF 夹具，验证动态加载约定和发布检查的拒绝路径。
+test('Linux release validation requires exported Lua symbols and relocatable native modules', { skip: process.platform !== 'linux' }, () => withRoot(async root => {
+  // The module imports a symbol from the executable and searches for its own libraries beside the runtime.
+  // 模块从可执行文件导入符号，并从运行时目录寻找其依赖库。
+  const runtime = path.join(root, 'lua_runtime');
+  const modules = path.join(runtime, 'lua_packages/lib/lua');
+  const core = path.join(root, 'core');
+  const module = path.join(modules, '_openssl.so');
+  await mkdir(modules, { recursive: true });
+  await mkdir(path.join(runtime, 'libs'));
+  execFileSync('cc', ['-shared', '-fPIC', '-Wl,-rpath,$ORIGIN/../../../libs', '-x', 'c', '-o', module, '-'], {
+    input: 'extern int lua_gettop(void); int luaopen__openssl(void) { return lua_gettop(); }',
+  });
+  // The same executable compiled with and without the export models the fixed and previous Core.
+  // 对同一可执行文件分别启用和禁用导出，模拟修复前后的 Core。
+  const source = 'int lua_gettop(void) { return 0; } int main(void) { return lua_gettop(); }';
+  const baseline = execFileSync('getconf', ['GNU_LIBC_VERSION'], { encoding: 'utf8' }).trim().split(' ')[1];
+  execFileSync('cc', ['-x', 'c', '-o', core, '-'], { input: source });
+  assert.throws(() => verifyLinuxLuaRuntime(runtime, core, baseline), /cannot resolve Lua symbols from Core: lua_gettop/);
+  execFileSync('cc', ['-Wl,--export-dynamic-symbol=lua_gettop', '-x', 'c', '-o', core, '-'], { input: source });
+  verifyLinuxLuaRuntime(runtime, core, baseline);
+  assert.throws(() => verifyLinuxLuaRuntime(runtime, core, '2.0'), /requires glibc/);
 }));

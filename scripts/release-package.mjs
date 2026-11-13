@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { managedRuntimePlatformKey, validateRuntimeLayoutIdentity, verifyPackagedLayout } from './desktop-runtime.mjs';
+import { verifyLinuxLuaRuntime } from './linux-lua-runtime.mjs';
 
 const execFileAsync = promisify(execFile);
 // The repository is resolved from this script rather than the caller's working directory.
@@ -116,6 +117,13 @@ export async function inspectReleaseDistribution() {
   // The version comes from the built service itself, so a stale layout cannot mislabel the package.
   // 版本取自已构建服务本身，过期布局无法给安装包贴错标签。
   const service = path.join(root, layout.serviceExecutable);
+  if (layout.platform === 'linux') {
+    // A release job supplies its supported baseline. A local package must at least run on its build host.
+    // 发布作业提供支持基线。本地包至少应能在构建宿主上运行。
+    const ceiling = process.env.VULCAN_RELEASE_GLIBC_BASELINE
+      ?? execFileSync('getconf', ['GNU_LIBC_VERSION'], { encoding: 'utf8' }).trim().split(' ')[1];
+    verifyLinuxLuaRuntime(path.join(root, 'lua_runtime'), service, ceiling);
+  }
   const description = JSON.parse((await execFileAsync(service, ['--describe'], { windowsHide: true, timeout: 20_000 })).stdout);
   if (description.profile !== 'release') throw new Error(`The service in ${root} is a ${description.profile} build.`);
   return { root, layout, version: description.serviceVersion };
