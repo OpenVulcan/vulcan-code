@@ -181,7 +181,19 @@ echo "==> Syncing packaged system Agent Skills..."
 copy_directory_contents "$SourceSystemPromptSkillsDir" "$OutputSystemPromptSkillsDir" 1
 
 echo "==> Syncing LuaSkills runtime payload..."
+case "$BundledToolsHostIdentity" in
+    Darwin:*)
+        pwsh -NoProfile -File "$ScriptDir/macos-lua-runtime.ps1" -RuntimeRoot "$SourceLuaRuntimeDir"
+        # Replace only native directories so an older sync cannot leave broken modules or libraries behind.
+        # 仅替换原生目录，防止旧同步留下失效的模块或共享库。
+        remove_output_directory "$OutputLuaRuntimeDir/lua_packages/lib/lua"
+        remove_output_directory "$OutputLuaRuntimeDir/libs"
+        ;;
+esac
 copy_directory_contents "$SourceLuaRuntimeDir" "$OutputLuaRuntimeDir" 0
+case "$BundledToolsHostIdentity" in
+    Darwin:*) pwsh -NoProfile -File "$ScriptDir/macos-lua-runtime.ps1" -RuntimeRoot "$OutputLuaRuntimeDir" -Smoke ;;
+esac
 
 # BundledToolNames are the tools the build-input lock declares for this host.
 # BundledToolNames 是构建输入锁文件为当前宿主声明的工具。

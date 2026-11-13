@@ -520,6 +520,9 @@ end
 -- Returns status without plaintext, ciphertext, key fragments, or headers.
 -- 返回不含明文、密文、Key 片段或 Header 的状态。
 local function credential_status_value()
+    -- The first settings read can run before any lifecycle callback has initialized storage.
+    -- 首次读取设置时，生命周期回调可能还未初始化存储。
+    ensure_schema()
     -- rows combine the credential envelope and both validation metadata values in one host query.
     -- rows 通过一次宿主查询合并凭据信封与两项验证元数据值。
     local rows = sqlite_query([[
@@ -1748,7 +1751,6 @@ end
 -- Returns local aggregates, non-secret credential status, quota, and revision.
 -- 返回本地聚合、非密钥凭据状态、配额与修订号。
 function M.usage_get(args)
-    ensure_schema()
     -- input is the exact schema-validated usage query.
     -- input 是经过 Schema 精确校验的用量查询。
     local input = action_arguments(args)

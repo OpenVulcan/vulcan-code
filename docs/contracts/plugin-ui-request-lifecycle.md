@@ -76,7 +76,7 @@ SDK 的 `invoke(action, arguments, { refresh, signal })` 中，`signal` 表示�
 ## 三个内置插件
 
 - RTK 基础设置只读取设置；进入统计区域后才执行统计，统计有效期只在清单声明。
-- Context7 保持单次初始化投影，不做隐式联网测试。
+- Context7 的凭据状态和用量读取共享幂等初始化，首次打开不依赖启用回调已经执行；初始化只补建缺失的凭据记录，不覆盖已有 Key、用量或配额。读取不做隐式联网测试。
 - 使用统计按当前区域、精确时间范围和分页读取，筛选替换撤回旧订阅；价格写入成功后刷新当前页面范围。
 
 ## 验证入口
@@ -86,3 +86,4 @@ SDK 的 `invoke(action, arguments, { refresh, signal })` 中，`signal` 表示�
 - `plugin-ui-query-runtime.test.ts`：十次导航去重、筛选撤回、失效、刷新、写入屏障与新服务隔离。
 - 三个插件的 `ui/index.test.mjs`：实际插件组件与宿主查询协调器集成。
 - `plugin_storage_runtime_tests.rs`：真实内置插件、原生依赖、隔离 SQLite 的空数据、百条和十万条测量；通过环境变量显式指定只读原生包来源。
+- 同文件的 `context7_credential_and_usage_open_from_cold_storage` 使用真实原生模块与 SQLite，验证无表、有表无凭据行、以及已有加密凭据与用量配额时的首次界面读取。

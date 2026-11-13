@@ -307,7 +307,25 @@ Write-Host "==> Syncing packaged system Agent Skills..."
 Copy-DirectoryContents -SourceDirectory $SourceSystemPromptSkillsDir -DestinationDirectory $OutputSystemPromptSkillsDir -Clean
 
 Write-Host "==> Syncing LuaSkills runtime payload..."
+if ($BundledToolsTarget.EndsWith('-apple-darwin')) {
+    . (Join-Path $PSScriptRoot 'macos-lua-runtime.ps1')
+    Confirm-MacLuaRuntime -Root $SourceLuaRuntimeDir
+    # Replace only native directories so an older sync cannot leave broken modules or libraries behind.
+    # 仅替换原生目录，防止旧同步留下失效的模块或共享库。
+    foreach ($NativeDirectory in @('lua_packages/lib/lua', 'libs')) {
+        # NativeOutput is an exact descendant of the validated distribution root.
+        # NativeOutput 是经过校验的发行根目录下的精确路径。
+        $NativeOutput = Join-Path $OutputLuaRuntimeDir $NativeDirectory
+        if ((Test-Path -LiteralPath $NativeOutput) -and -not (Remove-ItemAllowLocked -LiteralPath $NativeOutput -Recurse)) {
+            throw "Could not replace macOS Lua native directory: $NativeOutput"
+        }
+    }
+}
 Copy-DirectoryContents -SourceDirectory $SourceLuaRuntimeDir -DestinationDirectory $OutputLuaRuntimeDir
+if ($BundledToolsTarget.EndsWith('-apple-darwin')) {
+    Confirm-MacLuaRuntime -Root $OutputLuaRuntimeDir
+    Test-MacLuaNativeLoading -Root $OutputLuaRuntimeDir
+}
 
 # BundledToolBinarySuffix selects the executable suffix required by the current host.
 # BundledToolBinarySuffix 选择当前宿主所需的可执行文件后缀。
