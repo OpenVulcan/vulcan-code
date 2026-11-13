@@ -36,3 +36,7 @@ export const ANSWER_CODE_MAX_EXCERPTS = 16;
 /** System default answer mode for users who never chose one.
  * 从未选择回答模式的用户所用的系统默认回答模式。 */
 export const DEFAULT_ANSWER_MODE = "interactive";
+
+/** Maximum CSS-pixel width or height accepted by the Core browser viewport.
+ * Core 浏览器视口接受的最大 CSS 像素宽度或高度。 */
+export const BROWSER_HOST_MAX_VIEWPORT_DIMENSION = 4096;

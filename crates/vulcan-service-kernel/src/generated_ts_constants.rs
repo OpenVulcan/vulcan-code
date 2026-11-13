@@ -24,6 +24,16 @@ enum Constant {
     Text(&'static str, &'static str, &'static str, &'static str),
 }
 
+/// Shares the generated viewport bound and its documentation between both TypeScript clients.
+/// 在两个 TypeScript 客户端之间共享生成的视口边界值及其说明。
+#[cfg(test)]
+const BROWSER_VIEWPORT_LIMIT: Constant = Constant::Number(
+    "BROWSER_HOST_MAX_VIEWPORT_DIMENSION",
+    crate::browser::host::BROWSER_HOST_MAX_VIEWPORT_DIMENSION as u64,
+    "Maximum CSS-pixel width or height accepted by the Core browser viewport.",
+    "Core 浏览器视口接受的最大 CSS 像素宽度或高度。",
+);
+
 /// Renders one generated module with its bilingual header and documented constants.
 /// 渲染一个带双语文件头与文档化常量的生成模块。
 ///
@@ -53,8 +63,8 @@ fn render(quote: char, constants: &[Constant]) -> String {
     text
 }
 
-/// Renders the WebUI module consumed by conversation, resource and terminal clients.
-/// 渲染会话、资源与终端客户端使用的 WebUI 模块。
+/// Renders the WebUI module consumed by clients enforcing Core protocol bounds.
+/// 渲染客户端执行 Core 协议边界时使用的 WebUI 模块。
 fn web_module() -> String {
     render(
         '"',
@@ -113,6 +123,7 @@ fn web_module() -> String {
                 "System default answer mode for users who never chose one.",
                 "从未选择回答模式的用户所用的系统默认回答模式。",
             ),
+            BROWSER_VIEWPORT_LIMIT,
         ],
     )
 }
@@ -154,6 +165,7 @@ fn desktop_browser_host_module() -> String {
                 "Schema version of the control discovery document.",
                 "控制发现文档的架构版本。",
             ),
+            BROWSER_VIEWPORT_LIMIT,
         ],
     )
 }

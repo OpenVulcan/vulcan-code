@@ -20,3 +20,7 @@ export const BROWSER_HOST_CONTROL_DISCOVERY_FILENAME = 'browser-host-control.jso
 /** Schema version of the control discovery document.
  * 控制发现文档的架构版本。 */
 export const BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION = 1;
+
+/** Maximum CSS-pixel width or height accepted by the Core browser viewport.
+ * Core 浏览器视口接受的最大 CSS 像素宽度或高度。 */
+export const BROWSER_HOST_MAX_VIEWPORT_DIMENSION = 4096;

@@ -278,6 +278,13 @@ async function verifyDomViewers(discovery, sessionId) {
     url.searchParams.set('service', origin);
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     context.setDefaultTimeout(5_000);
+    // Count viewport writes from both clients to detect duplicate or automatic fits.
+    // 统计双客户端的视口写入，检测重复适配或自动适配。
+    let viewportWrites = 0;
+    context.on('request', request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/rpc'
+        && request.postDataJSON().method === 'browser.viewport.set') viewportWrites++;
+    });
     let originRequests = 0;
     await context.route(`${pageUrl}**`, route => { originRequests++; return route.abort(); });
     const clients = [];
@@ -352,8 +359,59 @@ async function verifyDomViewers(discovery, sessionId) {
     for (const client of clients) {
       await frame(client).getByText('Popup reached').waitFor({ timeout: 15_000 });
     }
+    // The active viewport is a shared Core value confirmed by both rendered DOM surfaces.
+    // 当前视口是共享的 Core 值，由两个 DOM 投影界面共同确认。
+    async function expectViewport(expected) {
+      await until(async () => {
+        for (const client of clients) {
+          const viewport = await frame(client).locator('body').evaluate(body => ({
+            width: body.ownerDocument.defaultView.innerWidth,
+            height: body.ownerDocument.defaultView.innerHeight,
+          }));
+          assert.deepEqual(viewport, expected);
+        }
+        return true;
+      }, 10_000);
+    }
+    // Read the same drawable CSS-pixel area used by the toolbar command.
+    // 读取工具栏命令使用的同一块可绘制 CSS 像素区域。
+    const panelSize = client => client.locator('[data-browser-viewport]').evaluate(panel => ({
+      width: panel.clientWidth, height: panel.clientHeight,
+    }));
+    const viewportMenu = controller.getByRole('button', { name: 'Resize viewport' });
+    await viewportMenu.click();
+    await controller.getByRole('menuitemradio', { name: /Google Pixel 7.*915×412/ }).click();
+    await expectViewport({ width: 915, height: 412 });
+    await viewportMenu.click();
+    await controller.getByRole('menuitem', { name: 'Custom size…' }).click();
+    const custom = controller.getByRole('dialog');
+    await custom.getByRole('spinbutton', { name: 'Viewport width' }).fill('710');
+    await custom.getByRole('spinbutton', { name: 'Viewport height' }).fill('510');
+    await custom.getByRole('button', { name: 'Apply size' }).click();
+    await expectViewport({ width: 710, height: 510 });
+    const firstFit = await panelSize(controller);
+    await viewportMenu.click();
+    await controller.getByRole('menuitem', { name: /Fit to current window/ }).click();
+    await expectViewport(firstFit);
+    assert.equal(viewportWrites, 3);
+    await controller.setViewportSize({ width: 1040, height: 710 });
+    await observer.setViewportSize({ width: 870, height: 650 });
+    assert.notDeepEqual(await panelSize(controller), firstFit);
+    assert.notDeepEqual(await panelSize(observer), firstFit);
+    await expectViewport(firstFit);
+    assert.equal(viewportWrites, 3);
     await controller.getByRole('button', { name: 'Release control' }).click({ timeout: 5_000 });
     await controller.getByRole('button', { name: 'Take control' }).waitFor({ timeout: 5_000 });
+    await observer.bringToFront();
+    await observer.getByRole('button', { name: 'Take control' }).click();
+    const secondFit = await panelSize(observer);
+    await observer.getByRole('button', { name: 'Resize viewport' }).click();
+    await observer.getByRole('menuitem', { name: /Fit to current window/ }).click();
+    await expectViewport(secondFit);
+    assert.equal(viewportWrites, 4);
+    await observer.getByRole('button', { name: 'Release control' }).click();
+    await observer.getByRole('button', { name: 'Take control' }).waitFor();
+    console.log('Viewport presets, custom dimensions, and one-shot fitting passed in two clients.');
     console.log('Both DOM viewers followed the new Playwright tab.');
   } finally {
     await browser.close().catch(() => {});
@@ -473,6 +531,12 @@ try {
     .find(candidate => candidate.url === new URL('/popup', pageUrl).href);
   assert.ok(viewerPopup);
   await rpc('browser.page.close', { ...projectionParams, pageId: viewerPopup.pageId, leaseSecret: lease.leaseSecret });
+  // Restore the original size for the legacy fixtures that use fixed click coordinates.
+  // 恢复原始尺寸，供使用固定点击坐标的旧夹具使用。
+  await rpc('browser.viewport.set', {
+    sessionId: session.sessionId, leaseSecret: lease.leaseSecret,
+    width: projected.result.width, height: projected.result.height,
+  });
   await rpc('browser.session.navigate', {
     sessionId: session.sessionId, pageId: page.pageId, leaseSecret: lease.leaseSecret, url: pageUrl,
   });

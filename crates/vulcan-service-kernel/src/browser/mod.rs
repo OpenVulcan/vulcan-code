@@ -3129,7 +3129,9 @@ impl BrowserManager {
         height: u32,
         lease_secret: &str,
     ) -> Result<BrowserSessionProjection, String> {
-        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+        if !(1..=host::BROWSER_HOST_MAX_VIEWPORT_DIMENSION).contains(&width)
+            || !(1..=host::BROWSER_HOST_MAX_VIEWPORT_DIMENSION).contains(&height)
+        {
             return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
         }
         let gate = self.dispatch_gate(session_id)?;

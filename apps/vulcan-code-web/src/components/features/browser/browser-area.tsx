@@ -1,13 +1,14 @@
 import * as React from "react";
-import { ArrowRight, Download, Globe, Hand, Keyboard, MonitorSmartphone, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
+import { ArrowRight, Download, Globe, Hand, Keyboard, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
 import { PageEmptyState, PageNotice } from "@/components/page";
+import { BROWSER_HOST_MAX_VIEWPORT_DIMENSION } from "@/generated/protocol-limits";
 
 import { Button } from "@/ui-kit/primitives/button";
 import { CoreBrowserRuntimeControls } from "./core-browser-runtime-controls";
 import { BrowserDomAssets, type BrowserDomReply, type BrowserDomRevision, type BrowserDomUpdate, type BrowserDomViewport } from "./browser-dom-assets";
 import { BrowserDomSurface } from "./browser-dom-surface";
+import { BrowserViewportMenu } from "./browser-viewport-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { formatMessage, useI18n } from "@/i18n";
 import {
   requestCoreBrowser,
@@ -93,7 +94,13 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   const [selectedPageId, setSelectedPageId] = React.useState<string | null>(null);
   // Auxiliary controls open explicitly so the page keeps the available panel area.
   // 辅助控件按需展开，让页面占据可用面板区域。
-  const [showViewport, setShowViewport] = React.useState(false);
+  // A pending resize is scoped to its initiating browser, even when selection changes.
+  // 在途调整限定在发起操作的浏览器，切换选择也不会改变其归属。
+  const [resizing, setResizing] = React.useState<ReadonlySet<string>>(new Set());
+  const resizePending = React.useRef(new Set<string>());
+  // Read only the drawable panel area when the fit action is explicitly invoked.
+  // 只在用户明确触发适配操作时读取面板可绘制区域。
+  const viewportPanel = React.useRef<HTMLDivElement>(null);
   const [showTextInput, setShowTextInput] = React.useState(false);
   const [showDownloads, setShowDownloads] = React.useState(false);
   const [showRuntime, setShowRuntime] = React.useState(false);
@@ -194,6 +201,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // ownsControl is true only while this UI retains the selected session's secret.
   // ownsControl 仅在本界面保有选定会话凭据时为真。
   const ownsControl = Boolean(lease && lease.session.sessionId === selectedSessionId);
+  // Only the browser with the pending write pauses its local interaction controls.
+  // 仅暂停正在调整尺寸的浏览器本地交互控件。
+  const resizingSelection = selectedSessionId !== null && resizing.has(selectedSessionId);
 
   // isCurrentOwner checks whether an asynchronous operation still belongs to this conversation.
   // isCurrentOwner 检查异步操作是否仍属于当前会话；返回当前归属是否一致。
@@ -388,7 +398,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     if (!selectedSessionId || !selectedPageId) {
       return;
     }
-    projectionSuspended.current = false;
+    projectionSuspended.current = resizePending.current.has(selectedSessionId);
     requiredFrame.current = null;
     const sessionId = selectedSessionId;
     const pageId = selectedPageId;
@@ -409,10 +419,11 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     async function refreshDom(): Promise<void> {
       try {
         const reply = await requestCoreBrowser<BrowserDomReply<BrowserDomUpdate>>(owner,
-          "browser.dom.snapshot", { sessionId, pageId, revision: frameRef.current ? revision : null });
+          "browser.dom.snapshot", { sessionId, pageId, revision: frameRef.current && !projectionSuspended.current ? revision : null });
         if (!live() || reply.pageId !== pageId || !reply.result) return;
         const required = requiredFrame.current;
-        if (projectionSuspended.current && (!required
+        const suspended = projectionSuspended.current;
+        if (suspended && (!required
           || BigInt(reply.pageGeneration) < BigInt(required.pageGeneration)
           || BigInt(reply.viewportGeneration) < BigInt(required.viewportGeneration))) return;
         if ("documentId" in reply.result) {
@@ -421,7 +432,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             ...update, html: markup.slice(0, update.patch.start) + update.patch.text + markup.slice(update.patch.end),
           };
           const html = await assets.render(owner, sessionId, pageId, next);
-          if (!live() || requiredFrame.current !== required) return;
+          if (!live() || requiredFrame.current !== required || projectionSuspended.current !== suspended) return;
           const viewport = { pageId, pageGeneration: reply.pageGeneration,
             viewportGeneration: reply.viewportGeneration, width: next.width, height: next.height };
           frameRef.current = viewport;
@@ -643,7 +654,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // navigate 仅在真实宿主确认后改变选定的 Core 页面。
   async function navigate(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (!lease || !selectedSessionId || !selectedPageId) {
+    if (!lease || !selectedSessionId || !selectedPageId || resizePending.current.has(selectedSessionId)) {
       return;
     }
     // destination must be validated before hiding the current frame; a bare domain gets HTTPS.
@@ -760,35 +771,60 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     }
   }
 
-  // resizeViewport changes the host content area before Core advances input generations.
-  // resizeViewport 在 Core 推进输入代次前调整宿主内容区域。
-  async function resizeViewport(value: string): Promise<void> {
-    if (!lease || !selectedSessionId) {
-      return;
-    }
-    const [widthText, heightText] = value.split("x");
+  // Resize the selected Core browser once and resume input with a confirmed viewport generation.
+  // 对选定 Core 浏览器调整一次尺寸，并在取得确认的视口代次后恢复输入。
+  async function resizeViewport({ width, height }: NonNullable<CoreBrowserSession["viewportSize"]>): Promise<void> {
+    const grant = leaseRef.current;
+    const sessionId = selectedSessionId;
+    if (!sessionId || grant?.session.sessionId !== sessionId || resizePending.current.has(sessionId)
+      || !isCurrentSession(sessionId) || projectionSuspended.current) return;
+    resizePending.current.add(sessionId);
+    setResizing(new Set(resizePending.current));
+    // Keep the previous DOM mounted until the matching snapshot arrives.
+    // 在匹配快照到达前保留现有 DOM。
+    let released: Promise<boolean> | undefined;
+    for (const key of heldKeys.current) released = queueInput("key", { type: "up", key });
+    heldKeys.current.clear();
+    const held = heldPointer.current;
+    if (held) released = queueInput("pointer", { type: "up", button: held.button, x: held.x, y: held.y });
+    heldPointer.current = null;
     projectionSuspended.current = true;
     requiredFrame.current = null;
-    frameRef.current = null;
-    setDom(null);
     try {
+      if (released) await released;
+      if (!isCurrentSession(sessionId)) return;
+      if (leaseRef.current?.leaseSecret !== grant.leaseSecret) {
+        projectionSuspended.current = false;
+        return;
+      }
       const updated = await requestCoreBrowser<CoreBrowserSession>(props.ownerSessionId, "browser.viewport.set", {
-        sessionId: selectedSessionId,
-        leaseSecret: lease.leaseSecret,
-        width: Number(widthText),
-        height: Number(heightText),
+        sessionId, leaseSecret: grant.leaseSecret, width, height,
       });
-      if (!isCurrentSession(selectedSessionId)) return;
+      if (!isCurrentSession(sessionId)) return;
       requiredFrame.current = { pageGeneration: updated.pageGeneration, viewportGeneration: updated.viewportGeneration };
       setSessions((current) => current.map((session) => session.sessionId === updated.sessionId ? updated : session));
-      await refreshSessions();
-      if (isCurrentSession(selectedSessionId)) setError(null);
+      setError(null);
+      void refreshSessions().catch(() => {});
     } catch (failure) {
-      if (isCurrentSession(selectedSessionId)) {
+      if (isCurrentSession(sessionId)) {
         projectionSuspended.current = false;
         setError(String(failure));
       }
+    } finally {
+      resizePending.current.delete(sessionId);
+      if (componentMounted.current) setResizing(new Set(resizePending.current));
     }
+  }
+
+  // Read the panel content dimensions in the accepted CSS-pixel range, or null when hidden.
+  // 读取有效 CSS 像素范围内的面板内容尺寸，隐藏时返回空值。
+  function readPanelSize(): CoreBrowserSession["viewportSize"] {
+    const panel = viewportPanel.current;
+    if (!panel || panel.clientWidth <= 0 || panel.clientHeight <= 0) return null;
+    return {
+      width: Math.min(panel.clientWidth, BROWSER_HOST_MAX_VIEWPORT_DIMENSION),
+      height: Math.min(panel.clientHeight, BROWSER_HOST_MAX_VIEWPORT_DIMENSION),
+    };
   }
 
   // closeSession closes the exact confirmed page or browser; no arguments, resolves after Core confirms.
@@ -880,15 +916,18 @@ export function BrowserArea(props: { ownerSessionId: string }) {
         {selectedSession ? <form onSubmit={(event) => void navigate(event)}>
             <input ref={addressRef} className="vk-browser-address" value={address}
               onChange={(event) => setAddress(event.target.value)} aria-label={t("browser.pageUrl")} />
-            <Button type="submit" size="icon-sm" variant="ghost" title={t("browser.go")} aria-label={t("browser.go")} disabled={!ownsControl || !selectedPage}><ArrowRight size={14} /></Button>
+            <Button type="submit" size="icon-sm" variant="ghost" title={t("browser.go")} aria-label={t("browser.go")} disabled={!ownsControl || !selectedPage || resizingSelection}><ArrowRight size={14} /></Button>
             <Button type="button" size="icon-sm" variant={ownsControl ? "secondary" : "ghost"}
               disabled={selectedSession.status !== "running" || selectedSession.leaseState === "blocked"}
               title={ownsControl ? t("browser.releaseControl") : selectedSession.leaseState === "free" ? t("browser.takeControl") : t("browser.takeOver")}
               onClick={() => void (ownsControl ? releaseControl() : acquireControl())}>
               {ownsControl ? <MousePointer2 size={14} /> : <Hand size={14} />}<span className="vk-sr-only">{ownsControl ? t("browser.releaseControl") : selectedSession.leaseState === "free" ? t("browser.takeControl") : t("browser.takeOver")}</span>
             </Button>
-            <Button type="button" size="icon-sm" variant="ghost" aria-label={t("browser.resizeViewport")} title={t("browser.resizeViewport")} aria-pressed={showViewport} onClick={() => setShowViewport((shown) => !shown)}><MonitorSmartphone size={14} /></Button>
           </form> : <span className="vk-browser-fill" />}
+        {selectedSession ? <BrowserViewportMenu key={`${props.ownerSessionId}:${selectedSession.sessionId}`}
+          size={dom && dom.pageId === selectedPageId ? { width: dom.width, height: dom.height } : selectedSession.viewportSize}
+          disabled={!ownsControl || selectedSession.status !== "running" || resizingSelection}
+          readPanelSize={readPanelSize} resize={size => void resizeViewport(size)} /> : null}
         <Button type="button" size="icon-xs" variant="ghost" aria-label={t("browser.refreshBrowserList")} title={t("browser.refreshBrowserList")} onClick={() => {
           // The shared observer reports errors only to the current owner/lifetime.
           // 共享观察者仅向当前归属与生命周期报告错误。
@@ -908,27 +947,12 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       </div>
       {selectedSession ? (
         <>
-          {showViewport ? <div className="vk-browser-size">
-            <span>{t("browser.pageSize")}</span>
-            <Select disabled={!ownsControl}
-              value={selectedSession.viewportSize ? `${selectedSession.viewportSize.width}x${selectedSession.viewportSize.height}` : "1280x800"}
-              onValueChange={(value) => void resizeViewport(value)}>
-              <SelectTrigger size="sm" aria-label={t("browser.browserViewport")}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1280x800">1280×800</SelectItem>
-                <SelectItem value="1024x768">1024×768</SelectItem>
-                <SelectItem value="390x844">390×844</SelectItem>
-              </SelectContent>
-            </Select>
-          </div> : null}
           {error ? <PageNotice tone="error">{error}</PageNotice> : null}
           {domError ? <PageNotice tone="error">{domError}</PageNotice> : null}
-          <div data-browser-viewport className="vk-browser-stage">
+          <div ref={viewportPanel} data-browser-viewport className="vk-browser-stage">
             {hasFrame && dom && selectedPage ? (
               <BrowserDomSurface key={`${selectedSessionId}:${dom.pageId}:${dom.documentId}`} snapshot={dom}
-                title={t("browser.liveCoreBrowserPage")} ownsControl={ownsControl}
+                title={t("browser.liveCoreBrowserPage")} ownsControl={ownsControl && !resizingSelection}
                 heldKeys={heldKeys} heldPointer={heldPointer} queueInput={queueInput} queuePointerMove={queuePointerMove} />
             ) : <span className="vk-browser-wait">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : t("browser.waitingForBrowserFrame")}</span>}
           </div>

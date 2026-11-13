@@ -27,6 +27,10 @@ pub const BROWSER_HOST_PROTOCOL_VERSION: u32 = 2;
 /// 单个控制帧接受的最大字节数。
 pub const BROWSER_HOST_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
+/// Maximum CSS-pixel width or height accepted by the Core browser viewport.
+/// Core 浏览器视口接受的最大 CSS 像素宽度或高度。
+pub(crate) const BROWSER_HOST_MAX_VIEWPORT_DIMENSION: u32 = 4096;
+
 /// Four-byte big-endian length prefix size.
 /// 4 字节大端长度前缀的字节数。
 pub const BROWSER_HOST_LENGTH_PREFIX_BYTES: usize = 4;
