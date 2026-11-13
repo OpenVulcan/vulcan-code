@@ -347,6 +347,12 @@ impl CloudMemoryRuntime {
 
     /// Executes a single frozen phase after filtering all business text locally.
     /// 在本机过滤全部业务文本后执行一个冻结阶段。
+    // Preserve the typed error returned through the host inference boundary.
+    // 保留经宿主推理边界返回的强类型错误。
+    #[expect(
+        clippy::result_large_err,
+        reason = "Host inference propagates HostAiError by value"
+    )]
     pub(super) async fn infer(
         &self,
         route: &ExecutionRouteSnapshot,

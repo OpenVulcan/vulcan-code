@@ -1315,6 +1315,12 @@ pub(super) fn load_project_options(root: &Path) -> Result<BTreeMap<String, Strin
 
 /// Judges one escalated call with the saved backend; `Ok(None)` when the judge is not enabled.
 /// 用已保存的后端判定一次升级调用；判定未启用时返回 `Ok(None)`。
+// Keep the judge callback's typed failure and trace intact.
+// 保留判定回调的强类型失败与追踪信息。
+#[expect(
+    clippy::result_large_err,
+    reason = "The judge callback returns JudgeFailure by value"
+)]
 pub(crate) async fn judge_call(
     state: &SharedServiceBridgeState,
     call: JudgeCall,

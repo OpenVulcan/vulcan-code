@@ -60,6 +60,12 @@ impl VectorRebuildProgress {
     /// 在 Effect 截止时间内等待已确认的限流拒绝。
     /// Returns true when the same batch can be retried, false for other failures, or a cancellation error.
     /// 同一批次可重试时返回 true，其他失败返回 false，取消时返回取消错误。
+    // Keep quota cancellation in the same typed error channel as vector rebuild.
+    // 让配额等待取消沿用向量重建的强类型错误通道。
+    #[expect(
+        clippy::result_large_err,
+        reason = "Vector rebuild propagates HostAiError by value"
+    )]
     pub(super) async fn wait_for_quota(
         &self,
         context: &HostAiCallContext,
