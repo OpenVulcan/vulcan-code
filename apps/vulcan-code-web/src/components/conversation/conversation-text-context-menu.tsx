@@ -10,6 +10,7 @@ import {
 } from "@/ui-kit/primitives/context-menu";
 import { useWorkspaceFileOpener, type WorkspaceFileLines } from "@/components/workspace/workspace-file-open-request";
 import { localFileActionsAvailable, readFileReference } from "@/components/workspace/workspace-file-actions";
+import { CONVERSATION_TURN_WINDOW_EXPAND_EVENT, type ConversationTurnWindowRequest } from "./conversation-turn-window";
 
 // ConversationTextContextMenuProps binds text actions to the visible transcript, not the whole page.
 // ConversationTextContextMenuProps 将文本操作限定在可见会话转录，而不是整个页面。
@@ -91,6 +92,12 @@ export function ConversationTextContextMenu(props: ConversationTextContextMenuPr
     const timeline = props.timelineRef.current;
     const selection = window.getSelection();
     if (!timeline || !selection) return;
+    // Materialize the loaded transcript before creating its DOM selection.
+    // 创建 DOM 选区前挂载全部已加载转录。
+    timeline.closest(".vk-transcript")?.dispatchEvent(new CustomEvent<ConversationTurnWindowRequest>(
+      CONVERSATION_TURN_WINDOW_EXPAND_EVENT,
+      { detail: { reason: "selection", active: true } },
+    ));
     const range = document.createRange();
     range.selectNodeContents(timeline);
     selection.removeAllRanges();

@@ -1,3 +1,5 @@
+import type { ConversationViewportAnchorSnapshot } from "./chat-area-scroll";
+
 // CONVERSATION_LAYOUT_WILL_CHANGE_EVENT is fired before shared shell geometry changes.
 // CONVERSATION_LAYOUT_WILL_CHANGE_EVENT 在共享外壳几何布局变化前触发。
 export const CONVERSATION_LAYOUT_WILL_CHANGE_EVENT = "vulcan:conversation-layout-will-change";
@@ -15,6 +17,33 @@ export const CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT = "vulcan:conversati
 // CONVERSATION_AUTOMATIC_FOLD_EVENT 标记转录自行发起的折叠（例如已完成工具收回折叠组），
 // 使锁底尾部保持原位，直到新内容填回空间。
 export const CONVERSATION_AUTOMATIC_FOLD_EVENT = "vulcan:conversation-automatic-fold";
+
+// A turn body swap can change estimated heights above the reader's viewport.
+// 回合正文切换可能改变阅读视口上方的估算高度。
+export const CONVERSATION_TURN_WINDOW_LAYOUT_EVENT = "vulcan:conversation-turn-window-layout";
+
+// The scrollbar sends its track position to the transcript scroll owner.
+// 滚动条将轨道位置传给转录滚动所有者。
+export const CONVERSATION_SCROLLBAR_POSITION_EVENT = "vulcan:conversation-scrollbar-position";
+
+// ConversationScrollbarPosition describes one pointer or keyboard scroll action.
+// ConversationScrollbarPosition 描述一次指针或键盘滚动操作。
+export interface ConversationScrollbarPosition {
+  // Progress along the thumb's usable track, clamped to [0, 1].
+  // 滑块在可用轨道上的进度，限制在 [0, 1]。
+  progress: number;
+  // Whether the pointer still owns the thumb.
+  // 指针是否仍控制滑块。
+  dragging: boolean;
+}
+
+// ConversationTurnWindowLayoutDetail carries the pre-swap anchor to the scroll owner.
+// ConversationTurnWindowLayoutDetail 将切换前的锚点传给滚动所有者。
+export interface ConversationTurnWindowLayoutDetail {
+  // The shell and offset observed immediately before the body swap.
+  // 正文切换前立即观察到的外壳及偏移。
+  anchor: ConversationViewportAnchorSnapshot | null;
+}
 
 // ConversationManualViewportInteractionDetail identifies the exact transcript owning a manual fold action.
 // ConversationManualViewportInteractionDetail 标识拥有手动折叠操作的精确转录界面。

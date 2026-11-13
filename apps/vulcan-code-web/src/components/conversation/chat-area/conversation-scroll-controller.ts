@@ -10,8 +10,12 @@ import {
   CONVERSATION_LAYOUT_SETTLED_EVENT,
   CONVERSATION_LAYOUT_WILL_CHANGE_EVENT,
   CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT,
+  CONVERSATION_SCROLLBAR_POSITION_EVENT,
+  CONVERSATION_TURN_WINDOW_LAYOUT_EVENT,
   type ConversationLayoutSettledDetail,
   type ConversationManualViewportInteractionDetail,
+  type ConversationScrollbarPosition,
+  type ConversationTurnWindowLayoutDetail,
 } from "@/components/conversation/conversation-layout-events";
 import { motionTokenMs } from "@/lib/motion-tokens";
 
@@ -244,6 +248,12 @@ export function useConversationScrollController(
   // programmaticTargetRef identifies movements initiated through the sole mutation path.
   // programmaticTargetRef 标识通过唯一修改路径发起的位移。
   const programmaticTargetRef = React.useRef<ProgrammaticScrollTarget | null>(null);
+  // An unloaded jump keeps its exact target until the observer materializes that turn.
+  // 跳向未挂载回合时，保留精确目标直至观察器挂载正文。
+  const pendingTurnRevealRef = React.useRef<{ shell: HTMLElement; revision: number } | null>(null);
+  // The pointer owns a normalized position while the scrollbar is being dragged.
+  // 拖动滚动条时，由指针控制归一化进度。
+  const scrollbarProgressRef = React.useRef<number | null>(null);
   // pendingFrameRef owns the sole cancellable animation frame for this scrollport.
   // pendingFrameRef 拥有当前滚动视口唯一可取消的动画帧。
   const pendingFrameRef = React.useRef<number | null>(null);
@@ -409,6 +419,13 @@ export function useConversationScrollController(
     return nextTop;
   }, []);
 
+  // Apply the held track position to the latest scrollable range.
+  // 将指针保持的轨道进度应用到最新滚动范围。
+  const applyScrollbarPosition = React.useCallback((element: HTMLElement, progress: number): void => {
+    const max = Math.max(0, element.scrollHeight - element.clientHeight);
+    writeScrollTop(element, progress * max);
+  }, [writeScrollTop]);
+
   // restoreSnapshot applies one semantic snapshot through the sole native mutation path.
   // restoreSnapshot 通过唯一原生修改路径应用一份语义快照。
   // Parameters: element is the current scrollport and snapshot is the saved state for its exact surface.
@@ -531,6 +548,12 @@ export function useConversationScrollController(
     // actualTop is the native observed position that decides ownership.
     // actualTop 是决定所有权的原生观察位置。
     const actualTop = element.scrollTop;
+    // While the pointer owns the track, scroll events only acknowledge the latest geometry.
+    // 指针控制轨道期间，滚动事件只确认最新几何位置。
+    if (scrollbarProgressRef.current !== null) {
+      observedScrollTopRef.current = actualTop;
+      return;
+    }
     // previousTop is the last ledger position used to infer motion toward or away from an owned target.
     // previousTop 是账本最后位置，用于推断位移是朝向还是背离已拥有目标。
     const previousTop = reconcileConversationNativeScrollClamp(
@@ -663,7 +686,11 @@ export function useConversationScrollController(
     cancelPendingFrame();
     publishFollowTail(false);
     const topGap = anchor instanceof Range ? element.clientHeight / 3 : CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX;
-    writeScrollTop(element, element.scrollTop + anchorOffset - topGap, behavior);
+    // Jump directly to an unloaded shell so intermediate turns do not mount during a long animation.
+    // 直接跳转到未挂载的外壳，避免长距离动画途中挂载中间回合。
+    const unloaded = anchor instanceof HTMLElement && anchor.hasAttribute("data-conversation-turn-placeholder");
+    pendingTurnRevealRef.current = unloaded ? { shell: anchor, revision: userRevisionRef.current } : null;
+    writeScrollTop(element, element.scrollTop + anchorOffset - topGap, unloaded ? "auto" : behavior);
     writeCurrentSnapshot(element, currentOptions.surfaceId);
   }, [cancelPendingFrame, publishFollowTail, writeCurrentSnapshot, writeScrollTop]);
 
@@ -704,6 +731,92 @@ export function useConversationScrollController(
     return true;
   }, [scheduleSnapshotRestore, writeCurrentSnapshot]);
 
+  React.useEffect(() => {
+    // Bind the listener to this owner so a child transcript cannot adjust the main transcript.
+    // 将监听器绑定到当前所有者，防止子转录调整主转录。
+    const element = options.scrollRef.current;
+    const surfaceId = options.surfaceId;
+    if (!options.active || !element || !surfaceId) return;
+
+    // Restore the pre-swap row offset through the existing ledger, including during history prepend.
+    // 通过现有账本恢复切换前的行偏移，包括历史前插期间。
+    const handleWindowLayout = (event: Event): void => {
+      if (element.dataset.conversationSurfaceId !== surfaceId) return;
+      const progress = scrollbarProgressRef.current;
+      if (progress !== null) {
+        applyScrollbarPosition(element, progress);
+        return;
+      }
+      if (programmaticTargetRef.current) return;
+      if (followTailRef.current) {
+        scheduleStoredRestore();
+        return;
+      }
+      // A returning reader's original offset becomes usable when the target turn gains its real height.
+      // 目标回合取得真实高度后，恢复会话时保存的原始行内偏移才能生效。
+      const surfaceRestore = surfaceRestoreRef.current;
+      if (surfaceRestore?.surfaceId === surfaceId && surfaceRestore.userRevision === userRevisionRef.current) {
+        restoreSnapshot(element, surfaceRestore.snapshot);
+        return;
+      }
+      // A surface or fold restore already has an authoritative anchor of its own.
+      // 界面恢复或折叠恢复已有自己的权威锚点。
+      if (pendingFrameRef.current !== null) return;
+      // A jump targets the requested shell even when the preceding row intersects its top margin.
+      // 即使上一回合与跳转顶部留白相交，仍以请求的外壳为跳转目标。
+      const reveal = pendingTurnRevealRef.current;
+      if (reveal?.revision === userRevisionRef.current && element.contains(reveal.shell)
+        && !reveal.shell.hasAttribute("data-conversation-turn-placeholder")) {
+        pendingTurnRevealRef.current = null;
+        writeScrollTop(element, element.scrollTop + reveal.shell.getBoundingClientRect().top
+          - element.getBoundingClientRect().top - CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX);
+        writeCurrentSnapshot(element, surfaceId);
+        return;
+      }
+      const { anchor } = (event as CustomEvent<ConversationTurnWindowLayoutDetail>).detail;
+      if (!anchor) return;
+      writeScrollTop(element, conversationScrollTopForSnapshot(element, {
+        anchorKey: anchor.rowKey,
+        anchorTop: anchor.offsetTop,
+        scrollTop: element.scrollTop,
+        followTail: false,
+      }));
+      writeCurrentSnapshot(element, surfaceId);
+    };
+    // Pointer movement takes ownership from reading restores until release.
+    // 指针移动接管阅读位置恢复，直至松手。
+    const handleScrollbarPosition = (event: Event): void => {
+      if (element.dataset.conversationSurfaceId !== surfaceId) return;
+      const { progress, dragging } = (event as CustomEvent<ConversationScrollbarPosition>).detail;
+      if (scrollbarProgressRef.current === null) {
+        userRevisionRef.current += 1;
+        layoutTransactionRef.current = null;
+        pendingTurnRevealRef.current = null;
+        foldLimitRef.current = null;
+        cancelPendingFrame();
+        publishFollowTail(false);
+      }
+      scrollbarProgressRef.current = dragging ? progress : null;
+      applyScrollbarPosition(element, progress);
+      if (!dragging) {
+        // Release any unused fold space before settling against the final scroll range.
+        // 先释放未用的折叠预留，再按最终滚动范围定位。
+        reconcileTailReserve(element);
+        applyScrollbarPosition(element, progress);
+        publishFollowTail(conversationViewportAllowsTailFollow(element));
+        writeCurrentSnapshot(element, surfaceId);
+      }
+    };
+    element.addEventListener(CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, handleWindowLayout);
+    element.addEventListener(CONVERSATION_SCROLLBAR_POSITION_EVENT, handleScrollbarPosition);
+    return () => {
+      scrollbarProgressRef.current = null;
+      element.removeEventListener(CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, handleWindowLayout);
+      element.removeEventListener(CONVERSATION_SCROLLBAR_POSITION_EVENT, handleScrollbarPosition);
+    };
+  }, [options.active, options.scrollRef, options.surfaceId, applyScrollbarPosition, cancelPendingFrame,
+    publishFollowTail, reconcileTailReserve, restoreSnapshot, scheduleStoredRestore, writeCurrentSnapshot, writeScrollTop]);
+
   React.useLayoutEffect(() => {
     // surfaceId is the exact active business identity after the latest React commit.
     // surfaceId 是最近 React 提交后的精确活动业务身份。
@@ -724,6 +837,7 @@ export function useConversationScrollController(
     cancelPendingFrame();
     layoutTransactionRef.current = null;
     renderedSurfaceIdRef.current = surfaceId;
+    pendingTurnRevealRef.current = null;
     // A newly rendered surface starts without the previous surface's tail reserve.
     // 新渲染的界面不继承上一界面的尾部预留。
     element.querySelector<HTMLElement>(".vk-transcript-tail")?.style.setProperty("height", "0px");
@@ -743,7 +857,9 @@ export function useConversationScrollController(
     surfaceRestoreRef.current = savedSnapshot.followTail
       ? null
       : { surfaceId, snapshot: savedSnapshot, userRevision: userRevisionRef.current };
-    writeCurrentSnapshot(element, surfaceId);
+    // Keep the original keyed snapshot until the restored position can be captured against mounted content.
+    // 在能按已挂载正文捕获恢复位置之前，保留原始带键快照。
+    if (savedSnapshot.followTail || !savedSnapshot.anchorKey) writeCurrentSnapshot(element, surfaceId);
   }, [
     cancelPendingFrame,
     options.active,
@@ -773,6 +889,13 @@ export function useConversationScrollController(
     // observer corrects only explicit tail ownership or one active manual layout transaction.
     // observer 仅校正显式尾部所有权或单个活动手动布局事务。
     const observer = new ResizeObserver(() => {
+      // During dragging the pointer stays authoritative even if streaming changes the total height.
+      // 拖动期间即使流式输出改变总高度，仍以指针位置为准。
+      const progress = scrollbarProgressRef.current;
+      if (progress !== null) {
+        applyScrollbarPosition(element, progress);
+        return;
+      }
       // The reserve absorbs shrinkage before any tail correction reads the new bottom.
       // 在任何尾部校正读取新底部之前，先由预留吸收收缩。
       reconcileTailReserve(element);
@@ -825,6 +948,7 @@ export function useConversationScrollController(
     options.active,
     options.scrollRef,
     options.surfaceId,
+    applyScrollbarPosition,
     publishFollowTail,
     reconcileTailReserve,
     scheduleSnapshotRestore,

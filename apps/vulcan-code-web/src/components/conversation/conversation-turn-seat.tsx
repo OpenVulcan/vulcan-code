@@ -1,6 +1,7 @@
 import React from "react";
 import type { ConversationTimelineItem } from "@/components/conversation/conversation-model";
 import { conversationTimelineItemKey } from "@/components/conversation/conversation-timeline";
+import { ESTIMATED_TURN_HEIGHT_PX, useConversationTurnWindow } from "./conversation-turn-window";
 import type {
   ConversationTimelineProjectionStore,
   ConversationTurnProjection,
@@ -27,8 +28,8 @@ export interface ConversationTurnSeatProps {
 // ConversationTurnSeat 让单个稳定 Turn 不受兄弟行渲染更新影响。
 // Parameters: props contains the exact Turn identity, row store, and stable renderer.
 // 参数：props 包含精确 Turn 身份、行仓库与稳定渲染器。
-// Returns: the unchanged conversation-turn-shell DOM boundary and its ordered timeline children.
-// 返回值：保持不变的 conversation-turn-shell DOM 边界及其有序时间线子项。
+// Returns: the ordered timeline children for the mounted turn body.
+// 返回值：已挂载回合正文的有序时间线子项。
 export const ConversationTurnSeat = React.memo(function ConversationTurnSeat(
   props: ConversationTurnSeatProps,
 ) {
@@ -49,17 +50,13 @@ export const ConversationTurnSeat = React.memo(function ConversationTurnSeat(
   const row = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   return (
-    <section
-      className="vk-turn"
-      data-conversation-row-key={props.rowKey}
-      data-conversation-turn-shell={props.rowKey}
-    >
+    <>
       {row.items.map((item) => (
         <React.Fragment key={conversationTimelineItemKey(item)}>
           {props.renderItem(item)}
         </React.Fragment>
       ))}
-    </section>
+    </>
   );
 }, conversationTurnSeatPropsEqual);
 
@@ -96,17 +93,23 @@ export interface ConversationTurnSeatListProps {
   // Shared presentation renderer whose identity changes only for presentation-wide inputs.
   // 仅在展示级输入变化时改变身份的共享展示渲染器。
   renderItem: (item: ConversationTimelineItem) => React.ReactNode;
+  // The exact scrollport enables body windowing on interactive surfaces.
+  // 精确滚动视口为交互界面启用正文视口渲染。
+  scrollRef?: React.RefObject<HTMLElement | null>;
 }
 
 // ConversationTurnSeatList prevents content-only row changes from reconciling every historical Seat.
 // ConversationTurnSeatList 防止纯行内容变化协调全部历史 Seat。
 // Parameters: props contains stable order, exact first-mount projections, Store, and shared renderer.
 // 参数：props 包含稳定顺序、精确首次挂载投影、Store 与共享渲染器。
-// Returns: a fragment of stable keyed Turn Seats without introducing a new DOM wrapper.
-// 返回值：不引入新 DOM 包装的稳定键控 Turn Seat 片段。
+// Returns: stable row shells with mounted bodies only where needed.
+// 返回值：稳定的回合外壳，正文仅按需挂载。
 export const ConversationTurnSeatList = React.memo(function ConversationTurnSeatList(
   props: ConversationTurnSeatListProps,
 ) {
+  // The window keeps shell geometry stable when a turn's body is evicted.
+  // 正文卸载时，视口窗口保留回合外壳的几何尺寸。
+  const { mounted, heights } = useConversationTurnWindow(props.scrollRef, props.rowKeys);
   return (
     <>
       {props.rowKeys.map((rowKey) => {
@@ -116,14 +119,25 @@ export const ConversationTurnSeatList = React.memo(function ConversationTurnSeat
         if (!row) {
           throw new Error(`Conversation timeline order has no projection: ${rowKey}`);
         }
+        // Mounted turns use natural height so streaming and folds still flow through the scroll owner.
+        // 已挂载回合使用自然高度，流式输出与折叠继续由滚动所有者处理。
+        const visible = mounted === null || mounted.has(rowKey);
         return (
-          <ConversationTurnSeat
-            initialRow={row}
+          <section
+            className="vk-turn"
+            data-conversation-row-key={rowKey}
+            data-conversation-turn-shell={rowKey}
+            data-conversation-turn-placeholder={visible ? undefined : ""}
             key={props.cacheScopeKey ? `${props.cacheScopeKey}:${rowKey}` : rowKey}
-            renderItem={props.renderItem}
-            rowKey={rowKey}
-            store={props.store}
-          />
+            style={visible ? undefined : { height: heights.get(rowKey) ?? ESTIMATED_TURN_HEIGHT_PX }}
+          >
+            {visible ? <ConversationTurnSeat
+              initialRow={row}
+              renderItem={props.renderItem}
+              rowKey={rowKey}
+              store={props.store}
+            /> : null}
+          </section>
         );
       })}
     </>
@@ -143,5 +157,6 @@ function conversationTurnSeatListPropsEqual(
   return previous.cacheScopeKey === next.cacheScopeKey
     && previous.rowKeys === next.rowKeys
     && previous.store === next.store
-    && previous.renderItem === next.renderItem;
+    && previous.renderItem === next.renderItem
+    && previous.scrollRef === next.scrollRef;
 }

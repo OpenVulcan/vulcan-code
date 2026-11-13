@@ -118,7 +118,11 @@ export function conversationScrollTopForSnapshot(
       // rowRect 与当前 scrollTop 共同得到该行稳定的内容空间位置。
       const rowRect = row.getBoundingClientRect();
       const rowContentTop = rowRect.top - viewportRect.top + element.scrollTop;
-      return clampConversationScrollTop(rowContentTop - snapshot.anchorTop, maxScrollTop);
+      // A provisional shell can be shorter than the saved in-row offset. Keep the target inside it
+      // so the viewport observer mounts the intended turn and can restore the original offset.
+      // 临时外壳可能短于保存的行内偏移。先把目标留在外壳内，让视口观察器挂载正确回合并恢复原偏移。
+      const anchorTop = Math.max(snapshot.anchorTop, -Math.max(0, rowRect.height - 1));
+      return clampConversationScrollTop(rowContentTop - anchorTop, maxScrollTop);
     }
   }
   return clampConversationScrollTop(snapshot.scrollTop, maxScrollTop);

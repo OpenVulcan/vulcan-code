@@ -14,6 +14,7 @@ import {
   findTextRanges,
   paintConversationFind,
 } from "./conversation-find";
+import { CONVERSATION_TURN_WINDOW_EXPAND_EVENT, type ConversationTurnWindowRequest } from "./conversation-turn-window";
 
 // CONVERSATION_FIND_DELAY_MS lets typing settle before searching, and coalesces transcript updates while a reply streams.
 // CONVERSATION_FIND_DELAY_MS 让输入稳定后再搜索，并在回答流式输出时合并转录更新。
@@ -93,6 +94,12 @@ export function ConversationFindBar(props: {
         returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         const selected = window.getSelection()?.toString().trim() ?? "";
         if (action === "find" && selected && !selected.includes("\n") && selected.length <= 200) setQuery(selected);
+        // Full transcript search uses DOM ranges, so materialize the loaded rows before the first query.
+        // 完整会话查找使用 DOM 范围，因此在首次查询前挂载全部已加载回合。
+        if (!scoped) port.dispatchEvent(new CustomEvent<ConversationTurnWindowRequest>(
+          CONVERSATION_TURN_WINDOW_EXPAND_EVENT,
+          { detail: { reason: "find", active: true } },
+        ));
         setOpen(true);
       }
       if (action === "gotoLine") setQuery(":");
@@ -191,6 +198,10 @@ export function ConversationFindBar(props: {
     setOpen(false);
     setResult({ ranges: [], current: -1 });
     revealedQuery.current = "";
+    if (!scoped) scrollRef.current?.dispatchEvent(new CustomEvent<ConversationTurnWindowRequest>(
+      CONVERSATION_TURN_WINDOW_EXPAND_EVENT,
+      { detail: { reason: "find", active: false } },
+    ));
     const target = returnFocus.current;
     returnFocus.current = null;
     if (target?.isConnected) target.focus();

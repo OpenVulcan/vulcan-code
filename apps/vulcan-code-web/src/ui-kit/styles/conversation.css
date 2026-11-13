@@ -89,6 +89,33 @@
 /* A subagent transcript embedded in the side panel scrolls in normal flow, with no composer floating over it. */
 .vk-subchat .vk-transcript { position: relative; inset: auto; flex: 1 1 auto; width: 100%; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 3) calc(var(--vk-u) * 18); scroll-padding-bottom: calc(var(--vk-u) * 18); }
 .vk-subchat .vk-transcript-inner { width: 100%; padding: 0 0 calc(var(--vk-u) * 18); transform: none; }
+/* Reserve the track beside the native scrollport so it stays available under the composer. */
+/* 将轨道保留在原生滚动视口旁，使输入区浮层下方仍能拖动。 */
+.vk-transcript-frame { position: absolute; inset: 0; --vk-transcript-scrollbar-width: calc(var(--vk-u) * 2.5); }
+.vk-subchat .vk-transcript-frame { position: relative; inset: auto; flex: 1 1 auto; min-height: 0; }
+.vk-transcript-frame > .vk-transcript {
+  position: absolute;
+  inset: 0 var(--vk-transcript-scrollbar-width) 0 0;
+  width: auto;
+  scrollbar-width: none;
+}
+.vk-transcript-scrollbar {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 6;
+  width: var(--vk-transcript-scrollbar-width);
+  touch-action: none;
+  user-select: none;
+}
+.vk-transcript-scrollbar:not([data-scrollable]) { visibility: hidden; }
+.vk-transcript-scrollbar-thumb {
+  box-sizing: border-box;
+  width: 100%;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--vk-line-strong) padding-box;
+}
+.vk-transcript-scrollbar:is(:hover, :focus-visible) .vk-transcript-scrollbar-thumb { background-color: var(--vk-ink-3); }
 @media (prefers-reduced-motion: reduce) { .vk-transcript-inner { transition: none; } }
 :root[data-vk-motion="reduce"] .vk-transcript-inner { transition: none; }
 

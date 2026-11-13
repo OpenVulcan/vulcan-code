@@ -55,6 +55,7 @@ import { ConversationSelectionQuote, quoteInComposer } from "@/components/conver
 import { ConversationTextContextMenu } from "@/components/conversation/conversation-text-context-menu";
 import { isElectronRuntime } from "@/host-shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
+import { ConversationTranscriptFrame } from "@/components/conversation/conversation-transcript-scrollbar";
 import { ConversationPromptNavigator } from "@/components/conversation/conversation-prompt-navigator";
 import { ConversationScrollTail } from "@/components/conversation/conversation-chrome";
 import {
@@ -279,9 +280,6 @@ export function ConversationWorkspace(props: {
     () => new Set<string>(JSON.parse(lockedTimelineActionSignature) as string[]),
     [lockedTimelineActionSignature],
   );
-  // timelineCacheScopeKey is the exact owning surface identity; null represents an unowned empty transcript.
-  // timelineCacheScopeKey 是精确所属界面身份；null 表示无所属者的空转录。
-  const timelineCacheScopeKey = surfaceRestoreId;
   const turnGroups = React.useMemo(
     () => groupConversationTimelineItems(visibleTimelineItems),
     [visibleTimelineItems],
@@ -290,7 +288,7 @@ export function ConversationWorkspace(props: {
   // timelineProjectionStore 是唯一精确行订阅所有者，仅在界面所有权变化时重建。
   const timelineProjectionStore = React.useMemo(
     () => new ConversationTimelineProjectionStore(),
-    [timelineCacheScopeKey],
+    [surfaceRestoreId],
   );
   // projectedTurnOrder is the freshly projected visual order before value stabilization.
   // projectedTurnOrder 是按值稳定前本次新投影的视觉顺序。
@@ -320,7 +318,7 @@ export function ConversationWorkspace(props: {
   // promptNavigatorEntries 列出全部已渲染用户提示词；未启用导航的界面跳过该投影。
   // promptNavigatorProjector reuses unchanged entries, so streaming one Turn keeps the entry array identity stable.
   // promptNavigatorProjector 复用未变化的条目，使单个 Turn 流式输出时条目数组身份保持稳定。
-  const promptNavigatorProjector = React.useMemo(createConversationPromptNavigatorProjector, [timelineCacheScopeKey]);
+  const promptNavigatorProjector = React.useMemo(createConversationPromptNavigatorProjector, [surfaceRestoreId]);
   const promptNavigatorEntries = React.useMemo(
     () => promptNavigatorEnabled ? promptNavigatorProjector(turnGroups) : [],
     [promptNavigatorEnabled, promptNavigatorProjector, turnGroups],
@@ -469,9 +467,6 @@ export function ConversationWorkspace(props: {
     ));
   }, [props.initialExpandedState, surfaceRestoreId]);
 
-  const handleConversationScroll = React.useCallback(() => {
-    props.onScrollStateChange();
-  }, [props.onScrollStateChange]);
   // handleLoadMoreHistory preserves the first visible position while older turns are prepended.
   // handleLoadMoreHistory 在前置更早轮次时保持当前可见位置。
   const handleLoadMoreHistory = React.useCallback(async () => {
@@ -617,11 +612,12 @@ export function ConversationWorkspace(props: {
         onMemoryChange={handleMeasuredCollapseMemoryChange}
       >
         <ConversationSelectionQuote timelineRef={timelineRef} scrollRef={props.scrollRef} onQuote={quoteInComposer} />
+        <ConversationTranscriptFrame scrollRef={props.scrollRef} label={props.conversation?.title || t("settings.misc.conversation")}>
         <ConversationTextContextMenu enabled={isElectronRuntime()} timelineRef={timelineRef} onCopyText={props.onCopyText} onQuoteText={quoteInComposer}>
         <section
           className="vk-transcript"
           data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
-          onScroll={handleConversationScroll}
+          onScroll={props.onScrollStateChange}
           ref={props.scrollRef}
         >
           <div className="vk-transcript-inner">
@@ -653,10 +649,12 @@ export function ConversationWorkspace(props: {
                 </div>
               ) : null}
               <ConversationTurnSeatList
-                cacheScopeKey={timelineCacheScopeKey}
+                key={surfaceRestoreId}
+                cacheScopeKey={surfaceRestoreId}
                 renderItem={renderTimelineItem}
                 rowKeys={turnOrder}
                 rows={turnGroupByKey}
+                scrollRef={props.scrollRef}
                 store={timelineProjectionStore}
               />
               {props.pendingPlanArtifact && !pendingPlanArtifactAlreadyVisible ? (
@@ -688,6 +686,7 @@ export function ConversationWorkspace(props: {
           ) : null}
         </section>
         </ConversationTextContextMenu>
+        </ConversationTranscriptFrame>
         {props.onRevealPromptAnchor && promptNavigatorEntries.length >= CONVERSATION_PROMPT_NAVIGATOR_MIN_ENTRIES ? (
           <ConversationPromptNavigator
             entries={promptNavigatorEntries}

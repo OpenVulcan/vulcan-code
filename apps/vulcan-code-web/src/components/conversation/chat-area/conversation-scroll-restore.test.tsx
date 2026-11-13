@@ -3,6 +3,12 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { ConversationScrollSnapshot } from "../chat-area-scroll";
+import {
+  CONVERSATION_SCROLLBAR_POSITION_EVENT,
+  CONVERSATION_TURN_WINDOW_LAYOUT_EVENT,
+  type ConversationScrollbarPosition,
+  type ConversationTurnWindowLayoutDetail,
+} from "../conversation-layout-events";
 import { useConversationScrollController } from "./conversation-scroll-controller";
 
 // Report composer geometry in a child layout effect, before the parent restores the selected surface.
@@ -13,6 +19,67 @@ function ComposerLayoutProbe({ onLayout }: { onLayout: () => void }) {
   React.useLayoutEffect(() => { onLayout(); });
   return null;
 }
+
+// Verify that a held scrollbar position wins over turn anchoring when the scroll range grows.
+// 验证滚动范围增大时，拖住的滚动条进度优先于回合锚点。
+it("keeps the held track position as turns resize and reaches the new bottom", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // Provide a mutable content height to model successive turn mounts.
+  // 提供可变内容高度以模拟回合陆续挂载。
+  let contentHeight = 3_000;
+  const onFollowTailChange = vi.fn();
+  // Mount the production controller with deterministic viewport geometry.
+  // 以确定的视口几何挂载生产控制器。
+  function Harness() {
+    // Share the scrollport between layout notifications and the scroll owner.
+    // 让布局通知与滚动所有者共用视口。
+    const scrollRef = React.useRef<HTMLDivElement>(null);
+    const controller = useConversationScrollController({
+      active: true, surfaceId: "drag", scrollRef, onFollowTailChange,
+      readSnapshot: () => null, writeSnapshot: () => {},
+    });
+    return <div data-conversation-surface-id="drag" onScroll={controller.handleScroll} ref={(element) => {
+      scrollRef.current = element;
+      if (element) Object.defineProperties(element, {
+        scrollHeight: { get: () => contentHeight },
+        clientHeight: { value: 500 },
+      });
+    }} />;
+  }
+  // Isolate the controller and dispatch the same messages as the scrollbar and turn window.
+  // 隔离控制器，并发送与滚动条和回合视口相同的消息。
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  document.body.append(host);
+  try {
+    await React.act(async () => root.render(<Harness />));
+    const scrollport = host.querySelector<HTMLElement>("[data-conversation-surface-id]")!;
+    // Send one normalized pointer position, including its ownership state.
+    // 发送一次归一化指针进度及其所有权状态。
+    const moveThumb = (progress: number, dragging: boolean) => scrollport.dispatchEvent(
+      new CustomEvent<ConversationScrollbarPosition>(CONVERSATION_SCROLLBAR_POSITION_EVENT, {
+        detail: { progress, dragging },
+      }),
+    );
+    await React.act(async () => { moveThumb(0.5, true); });
+    expect(scrollport.scrollTop).toBe(1_250);
+    contentHeight = 6_500;
+    scrollport.dispatchEvent(new CustomEvent<ConversationTurnWindowLayoutDetail>(
+      CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, { detail: { anchor: null } },
+    ));
+    expect(scrollport.scrollTop).toBe(3_000);
+    await React.act(async () => { moveThumb(1, true); });
+    expect(scrollport.scrollTop).toBe(6_000);
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
+    await React.act(async () => { moveThumb(1, false); });
+    expect(scrollport.scrollTop).toBe(6_000);
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(true);
+  } finally {
+    await React.act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  }
+});
 
 // Exercise the production scroll owner across a loading gap and a return to a previously read window.
 // 覆盖生产滚动所有者跨加载间隙后返回已阅读窗口的行为。
@@ -53,6 +120,75 @@ it("retains the reader position across loading and cached session remounts", asy
     await React.act(async () => root.render(<Harness id="a" ready />));
     expect(host.querySelector<HTMLElement>("[data-conversation-surface-id]")?.scrollTop).toBe(320);
     expect(saved.get("a")?.followTail).toBe(false);
+  } finally {
+    await React.act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Reproduce returning to the middle of a tall turn when the first render has only its estimated shell.
+// 复现返回长回合中段时，首帧仅包含该回合估算外壳的情况。
+it("restores a deep reading offset after its placeholder becomes a real turn", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The saved offset is deeper than the provisional height but fits the mounted body.
+  // 已保存的偏移超过占位高度，但位于真实正文内。
+  const anchorKey = "long-turn";
+  const turnTop = 960;
+  const placeholderHeight = 480;
+  const savedOffset = 3_000;
+  const bodyHeight = 4_000;
+  let saved: ConversationScrollSnapshot = {
+    anchorKey, anchorTop: -savedOffset, scrollTop: turnTop + savedOffset, followTail: false,
+  };
+  // Mount the production owner against deterministic scroll geometry.
+  // 以确定的滚动几何挂载生产滚动所有者。
+  function Harness() {
+    // scrollRef owns the browser scrollport while rowHeight models the body swap.
+    // scrollRef 持有浏览器滚动视口，rowHeight 模拟正文切换。
+    const scrollRef = React.useRef<HTMLDivElement | null>(null);
+    const controller = useConversationScrollController({
+      active: true, surfaceId: "reader", scrollRef,
+      onFollowTailChange: () => {},
+      readSnapshot: () => saved,
+      writeSnapshot: (_id, snapshot) => { saved = snapshot; },
+    });
+    return <div data-conversation-surface-id="reader" onScroll={controller.handleScroll} ref={(element) => {
+      scrollRef.current = element;
+      if (!element) return;
+      Object.defineProperties(element, { scrollHeight: { value: 8_000 }, clientHeight: { value: 600 } });
+      vi.spyOn(element, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 800, 600));
+      // The row rect changes with scrollTop just as it does in the browser.
+      // 回合矩形随 scrollTop 变化，与浏览器行为一致。
+      const row = element.querySelector<HTMLElement>("[data-conversation-row-key]")!;
+      vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => new DOMRect(
+        0, turnTop - element.scrollTop, 800,
+        row.hasAttribute("data-conversation-turn-placeholder") ? placeholderHeight : bodyHeight,
+      ));
+    }}><div className="vk-transcript-inner">
+      <section data-conversation-row-key={anchorKey} data-conversation-turn-placeholder="" />
+    </div></div>;
+  }
+  // Isolate the DOM and notify the controller exactly as the body-window hook does.
+  // 隔离 DOM，并以正文视口钩子相同的方式通知控制器。
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  document.body.append(host);
+  try {
+    await React.act(async () => root.render(<Harness />));
+    const scrollport = host.querySelector<HTMLElement>("[data-conversation-surface-id]")!;
+    const row = host.querySelector<HTMLElement>("[data-conversation-row-key]")!;
+    expect(scrollport.scrollTop).toBeGreaterThanOrEqual(turnTop);
+    expect(scrollport.scrollTop).toBeLessThan(turnTop + placeholderHeight);
+    expect(saved.anchorTop).toBe(-savedOffset);
+    const provisionalTop = row.getBoundingClientRect().top;
+    row.removeAttribute("data-conversation-turn-placeholder");
+    scrollport.dispatchEvent(new CustomEvent<ConversationTurnWindowLayoutDetail>(
+      CONVERSATION_TURN_WINDOW_LAYOUT_EVENT,
+      { detail: { anchor: { rowKey: anchorKey, offsetTop: provisionalTop } } },
+    ));
+    expect(scrollport.scrollTop).toBe(turnTop + savedOffset);
+    expect(saved.anchorTop).toBe(-savedOffset);
   } finally {
     await React.act(async () => root.unmount());
     host.remove();
