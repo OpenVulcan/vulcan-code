@@ -48,6 +48,7 @@ jobs:
           node scripts/install-locked-tools.mjs nextest
           echo "$PWD/target/ci-tools/bin" >> "$GITHUB_PATH"
           node scripts/install-locked-tools.mjs bundled
+          node scripts/install-locked-tools.mjs judge-runtime
           if [ "$RUNNER_OS" = Windows ]; then make_entry='pwsh ./make.ps1'; else make_entry='sh ./make.sh'; fi
           $make_entry deps lua
           node scripts/managed-node.mjs output
