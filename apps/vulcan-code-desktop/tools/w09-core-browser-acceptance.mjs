@@ -4,11 +4,13 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { cp, link, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { chromium } from 'playwright-core';
 
 // repository identifies the authoritative package root relative to this fixture.
 // repository 根据本夹具位置标识权威发行根。
@@ -37,16 +39,14 @@ await Promise.all([
   mkdir(path.join(layoutRoot, 'desktop'), { recursive: true }),
 ]);
 await cp(path.join(repository, 'apps/vulcan-code-desktop/dist'), path.join(layoutRoot, 'compiled'), { recursive: true });
-await mkdir(path.join(layoutRoot, 'compiled/node_modules'), { recursive: true });
 await Promise.all([
   link(path.join(repository, 'target/debug/vulcan-code-service.exe'), path.join(layoutRoot, 'bin/vulcan-code-service.exe')),
   symlink(path.join(assetRoot, 'desktop/runtime'), path.join(layoutRoot, 'desktop/runtime'), 'junction'),
   symlink(path.join(assetRoot, 'browser/chromium'), path.join(layoutRoot, 'browser/chromium'), 'junction'),
   symlink(path.join(assetRoot, 'webui'), path.join(layoutRoot, 'webui'), 'junction'),
-  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules/playwright-core')),
-    path.join(layoutRoot, 'compiled/node_modules/playwright-core'), 'junction'),
-  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules/ws')),
-    path.join(layoutRoot, 'compiled/node_modules/ws'), 'junction'),
+  symlink(path.join(assetRoot, 'dependencies'), path.join(layoutRoot, 'dependencies'), 'junction'),
+  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules')),
+    path.join(layoutRoot, 'compiled/node_modules'), 'junction'),
 ]);
 // runtimeLayout records a debug host entry rather than reusing a stale release host path.
 // runtimeLayout 记录 debug 宿主入口，不复用陈旧的 release 宿主路径。
@@ -60,6 +60,12 @@ const diagnostics = [];
 // Every browser RPC is scoped to this exact VulcanCode conversation owner.
 // 每个浏览器 RPC 都限定在这个精确的 VulcanCode 会话所有者内。
 const ownerSessionId = 'conversation-w09';
+// A real bundled font verifies that Chromium and the WebUI use the same bytes.
+// 使用真实随包字体验证 Chromium 与 WebUI 使用相同字节。
+const fontAssets = path.join(assetRoot, 'webui/assets');
+const fixtureFontName = (await readdir(fontAssets)).find(name => /^KaTeX_Main-Regular-.*\.woff2$/.test(name));
+assert.ok(fixtureFontName);
+const fixtureFont = await readFile(path.join(fontAssets, fixtureFontName));
 // clicks counts DOM-dispatched clicks received by the fixture server.
 // clicks 统计夹具服务器收到的页面 DOM 点击。
 let clicks = 0;
@@ -81,6 +87,53 @@ let dialogClicks = 0;
 // fixture serves a deterministic local page and records actual page click callbacks.
 // fixture 提供确定性的本地页面并记录真实页面点击回调。
 const fixture = createServer((request, response) => {
+  if (request.url === '/projection.svg') {
+    response.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'no-store' });
+    response.end('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="blue"/></svg>');
+    return;
+  }
+  if (request.url === '/projection.css') {
+    response.writeHead(200, { 'content-type': 'text/css' });
+    response.end('@import "/projection-nested.css"; #projected { width:40px; height:40px; }');
+    return;
+  }
+  if (request.url === '/projection.woff2') {
+    response.writeHead(200, { 'content-type': 'font/woff2' }).end(fixtureFont);
+    return;
+  }
+  if (request.url === '/projection-nested.css') {
+    response.writeHead(200, { 'content-type': 'text/css' });
+    response.end('@font-face { font-family: ProjectionFont; src:url("/projection.woff2"); } #projected { background-image:url("/projection.svg"); font-family:ProjectionFont; color:rgb(13,42,96); }');
+    return;
+  }
+  if (request.url === '/projection') {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(`<!doctype html><link rel="stylesheet" href="/projection.css">
+      <input id="edit" style="position:fixed;left:0;top:0;width:200px;height:60px">
+      <div id="projected" style="position:fixed;left:100px;top:130px;touch-action:none">Drag</div><img id="projected-image" src="/projection.svg">
+      <img id="projected-blob">
+      <a id="popup" style="position:fixed;left:250px;top:0;width:180px;height:60px" target="_blank" rel="noopener" href="/popup">Open popup</a>
+      <script>
+        document.querySelector('#edit').addEventListener('input', e => document.body.dataset.edited = e.target.value);
+        document.querySelector('#projected-blob').src = URL.createObjectURL(new Blob(
+          ['<svg xmlns="http://www.w3.org/2000/svg" width="31" height="31"><circle cx="15" cy="15" r="14"/></svg>'],
+          { type: 'image/svg+xml' }
+        ));
+        let dragging = false;
+        const item = document.querySelector('#projected');
+        item.addEventListener('pointerdown', () => dragging = true);
+        document.addEventListener('pointermove', event => {
+          if (dragging && event.buttons === 1) item.style.transform = 'rotate(15deg)';
+        });
+        document.addEventListener('pointerup', () => dragging = false);
+      </script>`);
+    return;
+  }
+  if (request.url === '/popup') {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end('<title>Projection popup</title><main>Popup reached</main>');
+    return;
+  }
   if (request.url === '/clicked' && request.method === 'POST') {
     clicks += 1;
     response.writeHead(204).end();
@@ -158,6 +211,157 @@ async function until(observe, timeout = 60_000) {
   }
 }
 
+// Mount the real BrowserArea in two regular Chromium clients over the authenticated Core transport.
+// 通过已鉴权的 Core 传输，在两个普通 Chromium 客户端中挂载实际 BrowserArea。
+async function verifyDomViewers(discovery, sessionId) {
+  const webRoot = path.join(repository, 'apps/vulcan-code-web');
+  const webRequire = createRequire(path.join(webRoot, 'package.json'));
+  const { createServer: createVite } = await import(pathToFileURL(webRequire.resolve('vite')).href);
+  const viewerPath = '/projection-acceptance.html';
+  const moduleId = 'virtual:projection-acceptance';
+  const vite = await createVite({
+    root: webRoot,
+    server: { host: '127.0.0.1', strictPort: false, hmr: false },
+    cacheDir: path.join(layoutRoot, 'vite-cache'),
+    plugins: [{
+      name: 'projection-acceptance',
+      resolveId: id => id === moduleId ? '\0' + moduleId : null,
+      load: id => id === '\0' + moduleId ? `
+        import React from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { I18nProvider } from '/src/i18n.tsx';
+        import { BrowserArea } from '/src/components/features/browser/browser-area.tsx';
+        createRoot(document.getElementById('mount')).render(React.createElement(
+          I18nProvider, { initialLocale: 'en-US' }, React.createElement(
+            BrowserArea, { ownerSessionId: ${JSON.stringify(ownerSessionId)} }
+          )));
+      ` : null,
+      configureServer(server) {
+        server.middlewares.use(async (request, response, next) => {
+          // A loopback forwarding endpoint presents a same-origin Core connection to the test clients.
+          // 本地回环转发端点为测试客户端提供同源的 Core 连接。
+          const route = request.url?.split('?')[0];
+          if (route === '/health' || route === '/rpc') {
+            try {
+              const chunks = [];
+              if (route === '/rpc') for await (const chunk of request) chunks.push(chunk);
+              const core = await fetch(`${discovery.baseUrl}${route}`, {
+                method: request.method,
+                headers: { 'content-type': 'application/json',
+                  'x-vulcan-service-token': request.headers['x-vulcan-service-token'] ?? '' },
+                body: route === '/rpc' ? Buffer.concat(chunks) : undefined,
+                signal: AbortSignal.timeout(5_000),
+              });
+              const body = await core.json();
+              if (route === '/health') body.baseUrl = `http://${request.headers.host}`;
+              response.writeHead(core.status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+              response.end(JSON.stringify(body));
+            } catch (error) { next(error); }
+            return;
+          }
+          if (request.url?.split('?')[0] !== viewerPath) return next();
+          const html = await server.transformIndexHtml(viewerPath, `<!doctype html>
+            <html><head>
+            <style>body { margin: 0 } #mount { display:flex; height: 100vh; }</style>
+            </head><body><div id="mount"></div><script type="module" src="/@id/${moduleId}"></script></body></html>`);
+          response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html);
+        });
+      },
+    }],
+  });
+  const browser = await chromium.launch({ executablePath: path.join(assetRoot, runtimeLayout.chromiumExecutable),
+    channel: 'chromium', headless: true });
+  try {
+    await vite.listen(18_723);
+    const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
+    const url = new URL(viewerPath, origin);
+    url.searchParams.set('service', origin);
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    context.setDefaultTimeout(5_000);
+    let originRequests = 0;
+    await context.route(`${pageUrl}**`, route => { originRequests++; return route.abort(); });
+    const clients = [];
+    for (let index = 0; index < 2; index++) {
+      const client = await context.newPage();
+      const errors = [];
+      client.on('pageerror', error => errors.push(error.message));
+      client.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+      await client.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 25_000 });
+      const browserTab = client.locator(`[data-browser-session-id="${sessionId}"]`);
+      await browserTab.waitFor({ state: 'attached', timeout: 25_000 }).catch(async error => {
+        throw new Error(`Browser DOM acceptance viewer did not connect: ${JSON.stringify({
+          errors, text: await client.locator('body').innerText(),
+        })}`, { cause: error });
+      });
+      if (await browserTab.getAttribute('aria-selected') !== 'true' && await browserTab.isVisible()) {
+        await browserTab.click({ timeout: 5_000 });
+      }
+      clients.push(client);
+    }
+    const [controller, observer] = clients;
+    await controller.bringToFront();
+    const frame = client => client.frameLocator('.vk-browser-dom-surface iframe');
+    for (const client of clients) {
+      const image = frame(client).locator('#projected-image');
+      await image.waitFor({ state: 'attached', timeout: 25_000 });
+      await until(async () => {
+        assert.equal(await image.evaluate(element => element.naturalWidth), 40);
+        assert.match(await image.getAttribute('src'), /^blob:/);
+        assert.equal(await frame(client).locator('#projected-blob').evaluate(element => element.naturalWidth), 31);
+        const appearance = await frame(client).locator('#projected').evaluate(async element => ({
+          color: element.ownerDocument.defaultView.getComputedStyle(element).color,
+          fonts: (await element.ownerDocument.fonts.load('16px ProjectionFont')).length,
+        }));
+        assert.deepEqual(appearance, { color: 'rgb(13, 42, 96)', fonts: 1 });
+        return true;
+      }, 15_000);
+    }
+    assert.equal(originRequests, 0, 'The WebUI must consume assets without requesting the source origin.');
+    console.log('DOM viewers loaded the same image, imported style, and font without source requests.');
+    await controller.getByRole('button', { name: 'Take control' }).click({ timeout: 5_000 });
+    await controller.getByRole('button', { name: 'Release control' }).waitFor({ timeout: 5_000 });
+    await frame(controller).locator('#edit').click({ timeout: 5_000 });
+    const cdp = await context.newCDPSession(controller);
+    await cdp.send('Input.imeSetComposition', { text: '输入', selectionStart: 2, selectionEnd: 2 });
+    await cdp.send('Input.insertText', { text: '输入法 vulcancode' });
+    await cdp.detach();
+    await until(async () => {
+      assert.equal(await frame(observer).locator('#edit').getAttribute('value'), '输入法 vulcancode');
+      return true;
+    }, 10_000);
+    console.log('A committed IME edit reached the source and the second DOM viewer.');
+    const box = await frame(controller).locator('#projected').boundingBox({ timeout: 5_000 });
+    assert.ok(box);
+    await controller.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await controller.mouse.down();
+    await controller.mouse.move(box.x + box.width + 20, box.y + box.height / 2);
+    try {
+      for (const [index, client] of clients.entries()) await until(async () => {
+        const style = await frame(client).locator('#projected').getAttribute('style', { timeout: 1_000 });
+        assert.match(style, /rotate\(15deg\)/, `DOM viewer ${index} did not render the source drag while held: ${style}`);
+        return true;
+      }, 10_000);
+      console.log('The controller and observer both rendered source rotation before pointer release.');
+    } finally {
+      await controller.mouse.up();
+    }
+    // Explicitly refocus the controller before activating the link in another browser tab.
+    // 在另一个浏览器标签页激活链接前，先显式聚焦控制端。
+    await controller.bringToFront();
+    await frame(controller).locator('#popup').click({ timeout: 5_000 });
+    for (const client of clients) {
+      await frame(client).getByText('Popup reached').waitFor({ timeout: 15_000 });
+    }
+    await controller.getByRole('button', { name: 'Release control' }).click({ timeout: 5_000 });
+    await controller.getByRole('button', { name: 'Take control' }).waitFor({ timeout: 5_000 });
+    console.log('Both DOM viewers followed the new Playwright tab.');
+  } finally {
+    await browser.close().catch(() => {});
+    vite.httpServer?.closeAllConnections();
+    await vite.close();
+  }
+}
+
 try {
   // discovery binds every request to the isolated service's published identity.
   // discovery 将所有请求绑定到隔离服务公布的身份。
@@ -194,6 +398,81 @@ try {
   // page identifies the exact page observed and driven below.
   // page 标识下方观察和驱动的精确页面。
   const page = pages[0];
+  // Verify the production DOM RPC and capture resources before running the legacy stream checks.
+  // 先验证正式 DOM RPC 与资源捕获，再运行旧画面流检查。
+  await rpc('browser.session.navigate', {
+    sessionId: session.sessionId, pageId: page.pageId, leaseSecret: lease.leaseSecret,
+    url: new URL('/projection', pageUrl).href,
+  });
+  const projectionParams = { sessionId: session.sessionId, pageId: page.pageId };
+  let projected;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    projected = await rpc('browser.dom.snapshot', projectionParams);
+    if (projected.result?.assets?.length === 5) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(projected.result?.assets?.length, 5);
+  assert.doesNotMatch(projected.result.html, /<script|href="https?:|src="https?:/);
+  const unchanged = await rpc('browser.dom.snapshot', { ...projectionParams, revision: projected.result.revision });
+  assert.deepEqual(unchanged.result, { revision: projected.result.revision });
+  const assets = [];
+  for (const assetId of projected.result.assets) {
+    const { result } = await rpc('browser.dom.asset', { ...projectionParams, assetId, offset: 0 });
+    assets.push({ ...result, text: Buffer.from(result.dataBase64, 'base64').toString('utf8') });
+  }
+  assert.equal(assets.filter(asset => asset.mimeType === 'text/css').length, 2);
+  assert.ok(assets.some(asset => asset.mimeType === 'image/svg+xml' && asset.text.includes('fill="blue"')));
+  assert.ok(assets.some(asset => asset.mimeType === 'font/woff2'
+    && Buffer.from(asset.dataBase64, 'base64').equals(fixtureFont)));
+  assert.deepEqual(assets.filter(asset => asset.mimeType === 'text/css').map(asset => asset.dependencies.length).sort(), [1, 2]);
+  let projectionSequence = 0;
+  // The DOM controller sends exact generations and replays text against the focused projected node.
+  // DOM 控制器发送确切代次，并针对已聚焦的投影节点回放文字。
+  async function projectionInput(kind, payload) {
+    const reply = await rpc('browser.input.dispatch', {
+      ...projectionParams, leaseSecret: lease.leaseSecret,
+      pageGeneration: projected.pageGeneration, viewportGeneration: projected.viewportGeneration,
+      sequence: String(++projectionSequence), kind, payload,
+    });
+    assert.equal(reply.outcome, 'applied', JSON.stringify(reply));
+  }
+  await projectionInput('pointer', { type: 'down', x: 30, y: 20, button: 'left' });
+  await projectionInput('pointer', { type: 'up', x: 30, y: 20, button: 'left' });
+  projected = await rpc('browser.dom.snapshot', projectionParams);
+  assert.ok(projected.result.focused);
+  await projectionInput('textEdit', {
+    id: projected.result.focused, documentId: projected.result.documentId,
+    before: '', start: 0, end: 0, text: '输入法 vulcancode',
+  });
+  projected = await rpc('browser.dom.snapshot', projectionParams);
+  assert.match(projected.result.html, /data-edited="输入法 vulcancode"/);
+  await projectionInput('pointer', { type: 'down', x: 280, y: 20, button: 'left' });
+  await projectionInput('pointer', { type: 'up', x: 280, y: 20, button: 'left' });
+  let popup;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const currentPages = await rpc('browser.pages.list', { sessionId: session.sessionId });
+    popup = currentPages.find(candidate => candidate.url === new URL('/popup', pageUrl).href);
+    if (popup) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.ok(popup, 'Playwright should register a popup even when it has no opener.');
+  const popupProjection = await rpc('browser.dom.snapshot', { ...projectionParams, pageId: popup.pageId });
+  assert.match(popupProjection.result.html, /Popup reached/);
+  await rpc('browser.page.close', { ...projectionParams, pageId: popup.pageId, leaseSecret: lease.leaseSecret });
+  await rpc('browser.session.navigate', {
+    ...projectionParams, leaseSecret: lease.leaseSecret, url: new URL('/projection', pageUrl).href,
+  });
+  // Acquire a fresh sender sequence before exercising the independent legacy stream.
+  // 在独立验证旧画面流之前获取新的发送序列。
+  await rpc('browser.lease.release', { sessionId: session.sessionId, leaseSecret: lease.leaseSecret });
+  await verifyDomViewers(discovery, session.sessionId);
+  // Retire the popup created by the WebUI before running the remaining independent cases.
+  // 运行其余独立用例之前关闭 WebUI 创建的弹窗。
+  Object.assign(lease, await rpc('browser.lease.acquire', { sessionId: session.sessionId, holder: 'w09-acceptance' }));
+  const viewerPopup = (await rpc('browser.pages.list', { sessionId: session.sessionId }))
+    .find(candidate => candidate.url === new URL('/popup', pageUrl).href);
+  assert.ok(viewerPopup);
+  await rpc('browser.page.close', { ...projectionParams, pageId: viewerPopup.pageId, leaseSecret: lease.leaseSecret });
   await rpc('browser.session.navigate', {
     sessionId: session.sessionId, pageId: page.pageId, leaseSecret: lease.leaseSecret, url: pageUrl,
   });
@@ -661,8 +940,8 @@ try {
     else { service.once('exit', resolve); setTimeout(resolve, 5_000); }
   });
   for (const relative of [
-    'desktop/runtime', 'browser/chromium', 'webui',
-    'compiled/node_modules/playwright-core', 'compiled/node_modules/ws',
+    'desktop/runtime', 'browser/chromium', 'webui', 'dependencies',
+    'compiled/node_modules',
   ]) await unlink(path.join(layoutRoot, relative));
   await rm(layoutRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });

@@ -246,16 +246,14 @@ await mkdir(path.join(layoutRoot, 'bin'), { recursive: true });
 await mkdir(path.join(layoutRoot, 'browser'), { recursive: true });
 await mkdir(path.join(layoutRoot, 'desktop'), { recursive: true });
 await cp(path.join(repository, 'apps/vulcan-code-desktop/dist'), path.join(layoutRoot, 'compiled'), { recursive: true });
-await mkdir(path.join(layoutRoot, 'compiled/node_modules'), { recursive: true });
 await Promise.all([
   link(selectedServiceExecutable, path.join(layoutRoot, 'bin/vulcan-code-service.exe')),
   symlink(path.join(assetRoot, 'desktop/runtime'), path.join(layoutRoot, 'desktop/runtime'), 'junction'),
   symlink(path.join(assetRoot, 'browser/chromium'), path.join(layoutRoot, 'browser/chromium'), 'junction'),
   symlink(path.join(assetRoot, 'webui'), path.join(layoutRoot, 'webui'), 'junction'),
-  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules/playwright-core')),
-    path.join(layoutRoot, 'compiled/node_modules/playwright-core'), 'junction'),
-  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules/ws')),
-    path.join(layoutRoot, 'compiled/node_modules/ws'), 'junction'),
+  symlink(path.join(assetRoot, 'dependencies'), path.join(layoutRoot, 'dependencies'), 'junction'),
+  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules')),
+    path.join(layoutRoot, 'compiled/node_modules'), 'junction'),
 ]);
 // runtimeLayout binds the fresh host to the same explicit Electron, Chromium, and WebUI assets.
 // runtimeLayout 将新宿主绑定到同一组明确的 Electron、Chromium 和 WebUI 资源。
@@ -1298,15 +1296,10 @@ try {
     throw error;
   }
   await go.click();
-  // projection is the Core frame rendered by the WebUI, not a local BrowserView.
-  // projection 是 WebUI 渲染的 Core 帧，而非本地 BrowserView。
-  const projection = browserPanel.getByRole('img', { name: /Core 浏览器实时页面|Live Core browser page/ });
-  await projection.locator('img').waitFor({ timeout: 20_000 });
-  await until(async () => {
-    const src = await projection.locator('img').getAttribute('src');
-    assert.ok(src?.startsWith('blob:'), 'The WebUI must render a binary Core frame.');
-    return true;
-  }, 20_000);
+  // The sandboxed frame contains the exact Core fixture's projected button.
+  // 沙箱框架包含确切 Core 夹具投影出的按钮。
+  const projection = browserPanel.locator('.vk-browser-dom-surface iframe');
+  await projection.contentFrame().getByRole('button', { name: 'UI click fixture' }).waitFor({ timeout: 20_000 });
   // browserBinding resolves the exact Core session and page currently owned by this persisted conversation.
   // browserBinding 解析当前持久会话实际拥有的精确 Core 会话与页面。
   const browserBinding = await until(async () => {
@@ -1718,8 +1711,7 @@ try {
     assert.equal(await webTab.getAttribute('aria-selected'), 'false');
     assert.equal(await webPage.getByRole('button', { name: /内置浏览器|Local Browser/ }).count(), 0);
     await webTab.click();
-    await webPanel.getByRole('img', { name: /Core 浏览器实时页面|Live Core browser page/ })
-      .locator('img').waitFor({ timeout: 25_000 });
+    await webPanel.locator('.vk-browser-dom-surface iframe').waitFor({ timeout: 25_000 });
     // A second Core browser must appear in both clients while their selected tabs stay independent.
     // 第二个 Core 浏览器须同时出现在两个客户端，且各自选中的标签保持独立。
     // desktopFirstTab identifies the original Core browser in the GUI observer.
@@ -2137,7 +2129,7 @@ try {
         await panel.waitFor({ timeout: 25_000 });
         await panel.locator(`[data-browser-session-id="${aiBrowser.sessionId}"]`).click();
         try {
-          await panel.getByRole('img', { name: /Core 浏览器实时页面|Live Core browser page/ })
+          await panel.locator('.vk-browser-dom-surface iframe')
             .waitFor({ timeout: 25_000 });
         } catch (error) {
           // projection and pages reveal whether the Core host or this observer lost the frame.
@@ -2858,8 +2850,8 @@ try {
     else { service.once('exit', resolve); setTimeout(resolve, 5_000); }
   });
   for (const relative of [
-    'desktop/runtime', 'browser/chromium', 'webui',
-    'compiled/node_modules/playwright-core', 'compiled/node_modules/ws',
+    'desktop/runtime', 'browser/chromium', 'webui', 'dependencies',
+    'compiled/node_modules',
   ]) await unlink(path.join(layoutRoot, relative));
   await rm(layoutRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });

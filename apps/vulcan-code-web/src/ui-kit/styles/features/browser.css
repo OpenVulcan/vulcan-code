@@ -11,10 +11,8 @@
 .vk-browser-size > input { width: 4.5rem; height: 1.75rem; padding: 0 var(--vk-u); border: var(--vk-bw) solid var(--vk-line); background: var(--vk-panel); color: var(--vk-ink); font-variant-numeric: tabular-nums; text-align: center; }
 .vk-browser-stage { position: relative; display: flex; flex: 1 1 0; align-items: center; justify-content: center; width: 100%; min-width: 0; min-height: 0; overflow: hidden; border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-sunken); }
 .vk-browser-stage > .vk-page-empty { border: 0; }
-.vk-browser-projection { position: relative; width: 100%; height: 100%; outline: none; cursor: default; }
-.vk-browser-projection[data-control] { cursor: crosshair; touch-action: none; }
-.vk-browser-projection:focus-visible { box-shadow: inset 0 0 0 var(--vk-focus-w) var(--vk-signal); }
-.vk-browser-frame { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.vk-browser-dom-surface { position: absolute; inset: 0; overflow: hidden; }
+.vk-browser-dom-surface > iframe { position: absolute; top: 50%; left: 50%; border: 0; background: white; }
 .vk-browser-wait { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 .vk-browser-status { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); height: 1.5rem; color: var(--vk-ink-3); font-size: var(--vk-fs-2xs); }
 .vk-browser-status > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -10,6 +10,7 @@ import process from 'node:process';
 import { createRequire } from 'node:module';
 import type net from 'node:net';
 import { chromium, type BrowserContext, type CDPSession, type Dialog, type FileChooser, type Page } from 'playwright-core';
+import { applyDomTextEdit, DomProjection } from './dom-projection.js';
 import { PlaywrightProxy } from './playwright-proxy.js';
 import { monitorHostCrash } from './crash-report.js';
 import { observePageTitle } from './page-title.js';
@@ -211,6 +212,10 @@ class ChromiumHost {
 
   /** Constructs a host from exact Core-selected runtime inputs. */
   /** 使用 Core 精确选定的运行时输入构造宿主。 */
+  // The projection listens on the same persistent context as automation and user input.
+  // DOM 投影监听自动化与用户输入共用的持久浏览器上下文。
+  private domProjection: DomProjection | null = null;
+
   constructor(private readonly options: Options) {}
 
   /** Writes one framed control value to the authenticated Core socket. */
@@ -478,6 +483,12 @@ class ChromiumHost {
     const page = this.page(targetId);
     if (!page || typeof targetId !== 'string') return this.answer(request, 'Unknown page target.', 'unknown_target');
     const kind = request.params.kind;
+    if (kind === 'textEdit') {
+      if (this.dialogs.has(targetId) || !await applyDomTextEdit(page, request.params)) {
+        return this.answer(request, 'The projected editable field has changed.', 'stale_dom_edit');
+      }
+      return this.answer(request, { applied: true, kind });
+    }
     if (kind === 'key' && typeof request.params.key === 'string'
         && (request.params.type === 'down' || request.params.type === 'up')) {
       const key = request.params.key;
@@ -725,6 +736,23 @@ class ChromiumHost {
           }
           return this.answer(request, { width, height, pageCount: this.pages.size });
         }
+        case 'page.dom.snapshot':
+        case 'page.dom.asset': {
+          const targetId = request.params.targetId;
+          const page = this.page(targetId);
+          const projection = this.domProjection;
+          if (typeof targetId !== 'string' || !page || !projection) {
+            return this.answer(request, 'Unknown page target.', 'unknown_target');
+          }
+          const epoch = this.navigationEpochs.get(targetId);
+          const result = request.operation === 'page.dom.asset'
+            ? projection.asset(page, request.params.assetId, request.params.offset)
+            : this.dialogs.has(targetId) ? null : await projection.snapshot(page, request.params.revision);
+          if (epoch !== this.navigationEpochs.get(targetId)) {
+            return this.answer(request, 'Page navigated during DOM projection.', 'stale_generation');
+          }
+          return this.answer(request, { targetId, result });
+        }
         case 'page.capture': {
           const targetId = request.params.targetId;
           const page = this.page(targetId);
@@ -857,6 +885,7 @@ class ChromiumHost {
         channel: 'chromium', headless: true, acceptDownloads: true,
         viewport: this.viewport,
       });
+      this.domProjection = new DomProjection(this.context);
       // Chromium permits a trusted CDP client to navigate directly to file: URLs. Intercept every
       // routable local-file request before a page can read Core-machine files.
       // Chromium 允许受信 CDP 客户端直接导航 file:；在页面读取 Core 本机文件前拦截全部可路由文件请求。

@@ -4,19 +4,17 @@ import { PageEmptyState, PageNotice } from "@/components/page";
 
 import { Button } from "@/ui-kit/primitives/button";
 import { CoreBrowserRuntimeControls } from "./core-browser-runtime-controls";
-import { BrowserFrameImage, BrowserFrameRateCounter, createBrowserFrameSource } from "./browser-frame-surface";
-import { maintainCoreBrowserStream } from "@/service/browser-stream-reconnect";
+import { BrowserDomAssets, type BrowserDomReply, type BrowserDomRevision, type BrowserDomUpdate, type BrowserDomViewport } from "./browser-dom-assets";
+import { BrowserDomSurface } from "./browser-dom-surface";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/ui-kit/primitives/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { formatMessage, useI18n } from "@/i18n";
 import {
   requestCoreBrowser,
   fetchCoreBrowserDownload,
-  openCoreBrowserStream,
   type CoreBrowserDownload,
   type CoreBrowserDialog,
   type CoreBrowserFileChooser,
-  type CoreBrowserFrame,
   type CoreBrowserLease,
   type CoreBrowserPage,
   type CoreBrowserSession,
@@ -116,13 +114,16 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // textInput is committed user text sent to the browser page, including IME text.
   // textInput 是发送到浏览器页面的用户已提交文本，包括输入法文本。
   const [textInput, setTextInput] = React.useState("");
-  // frameSource updates picture consumers without rerendering browser controls per frame.
-  // frameSource 更新画面消费者，不使浏览器控件随每一帧重绘。
-  const [frameSource] = React.useState(createBrowserFrameSource);
-  const [hasFrame, setHasFrame] = React.useState(false);
+  // The rendered revision and its geometry jointly identify the visible page.
+  // 已渲染修订及其视口尺寸共同标识当前可见页面。
+  const [dom, setDom] = React.useState<(BrowserDomRevision & BrowserDomViewport) | null>(null);
+  const hasFrame = dom !== null && dom.pageId === selectedPageId;
   // streamStatus names the current observation connection state.
   // streamStatus 命名当前观察连接状态。
   const [streamStatus, setStreamStatus] = React.useState("disconnected");
+  // Projection errors are cleared by the next successful read independently of input errors.
+  // 投影错误由下一次成功读取独立清除，不影响输入错误。
+  const [domError, setDomError] = React.useState<string | null>(null);
   // error keeps a refused or uncertain operation visible to the user.
   // error 让被拒绝或结果未知的操作保持对用户可见。
   const [error, setError] = React.useState<string | null>(null);
@@ -137,9 +138,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // leaseRef lets unmount cleanup release the exact grant without persisting it.
   // leaseRef 允许卸载清理释放精确授权，而不将其持久化。
   const leaseRef = React.useRef<CoreBrowserLease | null>(null);
-  // frameRef gives pointer handlers the newest measured image geometry.
-  // frameRef 为指针处理器提供最新测量的图像尺寸。
-  const frameRef = React.useRef<CoreBrowserFrame | null>(null);
+  // frameRef gives the input queue the exact generations of the visible DOM viewport.
+  // frameRef 为输入队列提供可见 DOM 视口的确切代次。
+  const frameRef = React.useRef<BrowserDomViewport | null>(null);
   // requiredFrame blocks input after a page or viewport mutation until a frame from its new generation arrives.
   // requiredFrame 在页面或视口变化后阻止输入，直至新代次画面到达。
   const requiredFrame = React.useRef<{ pageGeneration: string; viewportGeneration: string } | null>(null);
@@ -158,9 +159,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // addressRef prevents background page refresh from replacing text during editing.
   // addressRef 防止后台页面刷新覆盖正在编辑的地址。
   const addressRef = React.useRef<HTMLInputElement | null>(null);
-  // projectionRef binds a non-passive wheel listener to the exact visible Core frame.
-  // projectionRef 将非被动滚轮监听器绑定到当前可见的 Core 画面。
-  const projectionRef = React.useRef<HTMLDivElement | null>(null);
+  // Metadata observers use the latest page switch so held input is released before following.
+  // 元数据观察器使用最新的页面切换回调，保证跟随前释放已按下的输入。
+  const selectPageRef = React.useRef<(page: CoreBrowserPage) => void>(null);
   // selectedSessionRef rejects responses belonging to a browser that is no longer selected.
   // selectedSessionRef 拒绝已不再选中的浏览器所产生的迟到响应。
   const selectedSessionRef = React.useRef(selectedSessionId);
@@ -277,9 +278,8 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   React.useLayoutEffect(() => {
     // A page switch must hide the previous frame before its old stream cleanup runs.
     // 页面切换时须在旧流清理运行前隐藏上一页画面。
-    frameSource.clear();
     frameRef.current = null;
-    setHasFrame(false);
+    setDom(null);
   }, [props.ownerSessionId, selectedSessionId, selectedPageId]);
 
   React.useEffect(() => {
@@ -332,6 +332,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   React.useEffect(() => {
     if (!selectedSessionId) return;
     let cancelled = false;
+    // Compare consecutive registries so initial hydration and manual selection do not steal focus.
+    // 比较相邻的注册表，避免初次加载和手动选择被自动跟随打断。
+    let knownPages: Set<string> | null = null;
     const live = () => !cancelled && ownerSessionRef.current === props.ownerSessionId
       && selectedSessionRef.current === selectedSessionId;
     const observer = <T,>(source: BrowserPollSource, apply: (value: T[]) => void) => ({
@@ -347,6 +350,16 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     const stops = [
       observeCoreBrowserPages(props.ownerSessionId, selectedSessionId, observer("pages", (next: CoreBrowserPage[]) => {
         setPages(next);
+        // Core assigns monotonically increasing page-N IDs even after a host restart.
+        // Core 分配单调递增的 page-N 标识，即使宿主重启也是如此。
+        const added = knownPages ? next.filter(page => !knownPages?.has(page.pageId)) : [];
+        knownPages = new Set(next.map(page => page.pageId));
+        const newest = added.reduce<CoreBrowserPage | null>((latest, page) =>
+          !latest || Number(page.pageId.slice(5)) > Number(latest.pageId.slice(5)) ? page : latest, null);
+        if (newest && selectPageRef.current) {
+          selectPageRef.current(newest);
+          return;
+        }
         setSelectedPageId(current => {
           const remembered = viewedPages.current.get(selectedSessionId);
           if (current && next.some(page => page.pageId === current)) return current;
@@ -377,57 +390,71 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     }
     projectionSuspended.current = false;
     requiredFrame.current = null;
-    // cancelled prevents a late ticket response from reopening an abandoned page stream.
-    // cancelled 防止迟到的凭据应答重新打开已放弃的页面流。
-    let cancelled = false;
-    const stopStream = maintainCoreBrowserStream(
-      callbacks => openCoreBrowserStream(props.ownerSessionId, selectedSessionId, selectedPageId, callbacks),
-      {
-          onFrame: (nextFrame) => {
-            if (cancelled || ownerSessionRef.current !== props.ownerSessionId
-              || selectedSessionRef.current !== selectedSessionId
-              || selectedPageRef.current !== selectedPageId || nextFrame.pageId !== selectedPageId) {
-              return;
-            }
-            if (projectionSuspended.current) {
-              const required = requiredFrame.current;
-              if (!required || BigInt(nextFrame.pageGeneration) < BigInt(required.pageGeneration)
-                || BigInt(nextFrame.viewportGeneration) < BigInt(required.viewportGeneration)) return;
-              projectionSuspended.current = false;
-              requiredFrame.current = null;
-            }
-            // Only the first accepted frame changes the surrounding control state.
-            // 仅第一帧有效画面改变外围控件状态。
-            const firstFrame = frameRef.current === null;
-            frameSource.publish(nextFrame);
-            frameRef.current = nextFrame;
-            if (firstFrame) setHasFrame(true);
-          },
-          onState: (status) => {
-            if (cancelled || ownerSessionRef.current !== props.ownerSessionId
-              || selectedSessionRef.current !== selectedSessionId
-              || selectedPageRef.current !== selectedPageId) {
-              return;
-            }
-            setStreamStatus(status);
-          },
-          onError: (message) => {
-            if (!cancelled && ownerSessionRef.current === props.ownerSessionId
-              && selectedSessionRef.current === selectedSessionId
-              && selectedPageRef.current === selectedPageId) {
-              setError(message);
-            }
-          },
-      },
-    );
+    const sessionId = selectedSessionId;
+    const pageId = selectedPageId;
+    const owner = props.ownerSessionId;
+    const assets = new BrowserDomAssets();
+    let timer: ReturnType<typeof setTimeout>;
+    let active = true;
+    let revision: string | null = null;
+    let markup = "";
+    let delay = 120;
+    const live = () => active && ownerSessionRef.current === owner
+      && selectedSessionRef.current === sessionId && selectedPageRef.current === pageId;
+    setStreamStatus("connecting");
+    setDomError(null);
+
+    // Keep one read in flight and use a conditional revision for quiet pages.
+    // 保持至多一项在途读取，并对静止页面使用条件修订号。
+    async function refreshDom(): Promise<void> {
+      try {
+        const reply = await requestCoreBrowser<BrowserDomReply<BrowserDomUpdate>>(owner,
+          "browser.dom.snapshot", { sessionId, pageId, revision: frameRef.current ? revision : null });
+        if (!live() || reply.pageId !== pageId || !reply.result) return;
+        const required = requiredFrame.current;
+        if (projectionSuspended.current && (!required
+          || BigInt(reply.pageGeneration) < BigInt(required.pageGeneration)
+          || BigInt(reply.viewportGeneration) < BigInt(required.viewportGeneration))) return;
+        if ("documentId" in reply.result) {
+          const update = reply.result;
+          const next = "html" in update ? update : {
+            ...update, html: markup.slice(0, update.patch.start) + update.patch.text + markup.slice(update.patch.end),
+          };
+          const html = await assets.render(owner, sessionId, pageId, next);
+          if (!live() || requiredFrame.current !== required) return;
+          const viewport = { pageId, pageGeneration: reply.pageGeneration,
+            viewportGeneration: reply.viewportGeneration, width: next.width, height: next.height };
+          frameRef.current = viewport;
+          revision = next.revision;
+          markup = next.html;
+          projectionSuspended.current = false;
+          requiredFrame.current = null;
+          setDom({ ...next, ...viewport, html });
+        } else if (frameRef.current && !projectionSuspended.current) {
+          frameRef.current = { ...frameRef.current, pageGeneration: reply.pageGeneration, viewportGeneration: reply.viewportGeneration };
+        }
+        delay = 120;
+        setStreamStatus("connected");
+        setDomError(null);
+      } catch (failure) {
+        if (live()) {
+          setStreamStatus("connecting");
+          delay = Math.min(delay * 2, 1500);
+          if (delay >= 1500) setDomError(String(failure));
+        }
+      } finally {
+        if (live()) timer = setTimeout(() => void refreshDom(), delay);
+      }
+    }
+    void refreshDom();
     return () => {
-      cancelled = true;
-      stopStream();
-      frameSource.clear();
+      active = false;
+      clearTimeout(timer);
+      assets.close();
       frameRef.current = null;
-      setHasFrame(false);
+      setDom(null);
     };
-  }, [props.ownerSessionId, selectedPageId, selectedSessionId, frameSource]);
+  }, [props.ownerSessionId, selectedPageId, selectedSessionId]);
 
   React.useEffect(() => {
     if (!lease || lease.session.ownerSessionId !== props.ownerSessionId) {
@@ -528,14 +555,16 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // selectPage finishes held key and pointer input on the previous page before observing another page tab.
   // selectPage 在观察另一页面页签前，先在上一页面完成已按下的按键与指针输入。
   function selectPage(page: CoreBrowserPage): void {
-    if (page.pageId === selectedPageId) return;
+    if (page.pageId === selectedPageRef.current) return;
     for (const key of heldKeys.current) queueInput("key", { type: "up", key });
     heldKeys.current.clear();
     const held = heldPointer.current;
     if (held) queueInput("pointer", { type: "up", button: held.button, x: held.x, y: held.y });
     heldPointer.current = null;
+    selectedPageRef.current = page.pageId;
     setSelectedPageId(page.pageId);
   }
+  selectPageRef.current = selectPage;
 
   // acquireControl takes a free lease or explicitly takes over another holder.
   // acquireControl 获取空闲租约，或明确接管另一持有者。
@@ -598,8 +627,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
 
   // inputQueue serializes pointer, key, wheel and text input behind the current control grant.
   // inputQueue 在当前控制授权下串行化指针、按键、滚轮与文字输入。
-  const { queueInput, pointerCoordinates, pressPointer, movePointer, releasePointer } = useBrowserInputQueue({
-    ownsControl,
+  const { queueInput, queuePointerMove } = useBrowserInputQueue({
     leaseRef,
     frameRef,
     projectionSuspended,
@@ -607,30 +635,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     selectedSessionRef,
     selectedPageRef,
     pendingPointerMove,
-    heldPointer,
     setError,
     setLease,
   });
-
-  React.useLayoutEffect(() => {
-    // React's delegated wheel listener is passive in Chromium; bind this page input non-passively.
-    // Chromium 中 React 委托的滚轮监听器为被动模式；此页面输入须以非被动方式绑定。
-    const element = projectionRef.current;
-    if (!element || !ownsControl) return;
-    // handleWheel prevents workbench scrolling before Core receives page-relative wheel coordinates.
-    // handleWheel 在 Core 接收页面相对坐标前阻止工作台滚动。
-    const handleWheel = (event: WheelEvent) => {
-      const coordinates = pointerCoordinates({ currentTarget: element, clientX: event.clientX, clientY: event.clientY });
-      if (!coordinates) return;
-      event.preventDefault();
-      // factor converts DOM line/page wheel units to the host's CSS-pixel input contract.
-      // factor 将 DOM 行/页滚轮单位换算为宿主输入协议使用的 CSS 像素。
-      const factor = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? frameRef.current?.height ?? 800 : 1;
-      queueInput("wheel", { ...coordinates, deltaX: event.deltaX * factor, deltaY: event.deltaY * factor });
-    };
-    element.addEventListener("wheel", handleWheel, { passive: false });
-    return () => element.removeEventListener("wheel", handleWheel);
-  }, [props.ownerSessionId, selectedSessionId, selectedPageId, ownsControl, hasFrame]);
 
   // navigate changes only the selected Core page after a real host confirmation.
   // navigate 仅在真实宿主确认后改变选定的 Core 页面。
@@ -657,13 +664,12 @@ export function BrowserArea(props: { ownerSessionId: string }) {
         url: destination,
       });
       if (!isCurrentPage(selectedSessionId, selectedPageId)) return;
-      // Keep the old image until Core confirms the navigation; only then wait for its new generation.
-      // Core 确认导航前保留旧画面；确认后才等待新代次，失败时不会闪成空白。
+      // Keep the current projection until Core confirms the navigation and supplies a new generation.
+      // 保留当前投影，直到 Core 确认导航并提供新代次。
       projectionSuspended.current = true;
       requiredFrame.current = { pageGeneration: updated.pageGeneration, viewportGeneration: updated.viewportGeneration };
       frameRef.current = null;
-      setHasFrame(false);
-      frameSource.clear();
+      setDom(null);
       setSessions((current) => current.map((session) => session.sessionId === updated.sessionId ? updated : session));
       await refreshPages(selectedSessionId);
       if (!isCurrentPage(selectedSessionId, selectedPageId)) return;
@@ -764,8 +770,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     projectionSuspended.current = true;
     requiredFrame.current = null;
     frameRef.current = null;
-    setHasFrame(false);
-    frameSource.clear();
+    setDom(null);
     try {
       const updated = await requestCoreBrowser<CoreBrowserSession>(props.ownerSessionId, "browser.viewport.set", {
         sessionId: selectedSessionId,
@@ -919,34 +924,12 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             </Select>
           </div> : null}
           {error ? <PageNotice tone="error">{error}</PageNotice> : null}
+          {domError ? <PageNotice tone="error">{domError}</PageNotice> : null}
           <div data-browser-viewport className="vk-browser-stage">
-            {hasFrame && selectedPage ? (
-              <div ref={projectionRef} className="vk-browser-projection" data-control={ownsControl ? "" : undefined}
-                role="img" aria-label={t("browser.liveCoreBrowserPage")} tabIndex={ownsControl ? 0 : -1}
-                onPointerDown={pressPointer}
-                onPointerMove={movePointer}
-                onPointerUp={releasePointer}
-                onPointerCancel={releasePointer}
-                onLostPointerCapture={releasePointer}
-                onContextMenu={(event) => { if (ownsControl) event.preventDefault(); }}
-                onKeyDown={(event) => {
-                  if (!ownsControl || event.repeat) return;
-                  event.preventDefault();
-                  heldKeys.current.add(event.key);
-                  queueInput("key", { type: "down", key: event.key });
-                }}
-                onKeyUp={(event) => {
-                  if (!ownsControl) return;
-                  event.preventDefault();
-                  heldKeys.current.delete(event.key);
-                  queueInput("key", { type: "up", key: event.key });
-                }}
-                onBlur={() => {
-                  for (const key of heldKeys.current) queueInput("key", { type: "up", key });
-                  heldKeys.current.clear();
-                }}>
-                <BrowserFrameImage source={frameSource} />
-              </div>
+            {hasFrame && dom && selectedPage ? (
+              <BrowserDomSurface key={`${selectedSessionId}:${dom.pageId}:${dom.documentId}`} snapshot={dom}
+                title={t("browser.liveCoreBrowserPage")} ownsControl={ownsControl}
+                heldKeys={heldKeys} heldPointer={heldPointer} queueInput={queueInput} queuePointerMove={queuePointerMove} />
             ) : <span className="vk-browser-wait">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : t("browser.waitingForBrowserFrame")}</span>}
           </div>
           <BrowserPagePrompts
@@ -961,7 +944,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           />
           <div className="vk-browser-status">
             <span>{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : streamStatus === "connected" ? (ownsControl ? t("browser.manualControl") : t("browser.liveView")) : t("browser.connectingView")}</span>
-            <BrowserFrameRateCounter source={frameSource} owner={props.ownerSessionId} browser={selectedSessionId} page={selectedPageId} title={t("browser.receivedFramesOverThe")} />
             <Button type="button" size="icon-xs" variant="ghost" title={t("browser.sendTextWithIme")} aria-label={t("browser.textInput")} aria-pressed={showTextInput} onClick={() => setShowTextInput((shown) => !shown)}><Keyboard size={13} /></Button>
             <Button type="button" size="icon-xs" variant="ghost" title={formatMessage(t("browser.downloads"), { length: downloads.length })} aria-label={t("browser.downloadList")} aria-pressed={showDownloads} onClick={() => setShowDownloads((shown) => !shown)}><Download size={13} />{downloads.length ? <span className="vk-browser-count">{downloads.length}</span> : null}</Button>
           </div>

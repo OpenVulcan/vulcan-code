@@ -24,16 +24,14 @@ await mkdir(path.join(layoutRoot, 'bin'), { recursive: true });
 await mkdir(path.join(layoutRoot, 'browser'), { recursive: true });
 await mkdir(path.join(layoutRoot, 'desktop'), { recursive: true });
 await cp(path.join(repository, 'apps/vulcan-code-desktop/dist'), path.join(layoutRoot, 'compiled'), { recursive: true });
-await mkdir(path.join(layoutRoot, 'compiled/node_modules'), { recursive: true });
 await Promise.all([
   link(path.join(repository, 'target/debug/vulcan-code-service.exe'), path.join(layoutRoot, 'bin/vulcan-code-service.exe')),
   symlink(path.join(packagedRoot, 'desktop/runtime'), path.join(layoutRoot, 'desktop/runtime'), 'junction'),
   symlink(path.join(packagedRoot, 'browser/chromium'), path.join(layoutRoot, 'browser/chromium'), 'junction'),
   symlink(path.join(packagedRoot, 'webui'), path.join(layoutRoot, 'webui'), 'junction'),
-  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules/playwright-core')),
-    path.join(layoutRoot, 'compiled/node_modules/playwright-core'), 'junction'),
-  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules/ws')),
-    path.join(layoutRoot, 'compiled/node_modules/ws'), 'junction'),
+  symlink(path.join(packagedRoot, 'dependencies'), path.join(layoutRoot, 'dependencies'), 'junction'),
+  symlink(await realpath(path.join(repository, 'apps/vulcan-code-desktop/node_modules')),
+    path.join(layoutRoot, 'compiled/node_modules'), 'junction'),
 ]);
 // layout preserves the packaged runtime contract while replacing only the host entry with current dist.
 // layout 保留打包运行时契约，只将宿主入口替换为当前 dist。
@@ -257,8 +255,8 @@ try {
   // Remove explicit directory links first so recursive deletion never visits shared runtime trees.
   // 先移除明确创建的目录链接，使递归删除绝不会遍历共享运行时目录树。
   for (const relative of [
-    'desktop/runtime', 'browser/chromium', 'webui',
-    'compiled/node_modules/playwright-core', 'compiled/node_modules/ws',
+    'desktop/runtime', 'browser/chromium', 'webui', 'dependencies',
+    'compiled/node_modules',
   ]) {
     await unlink(path.join(layoutRoot, relative));
   }

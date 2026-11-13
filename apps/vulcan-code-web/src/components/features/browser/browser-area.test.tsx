@@ -8,13 +8,11 @@ import {
   listCoreBrowserFileChoosers,
   listCoreBrowserPages,
   listCoreBrowserSessions,
-  openCoreBrowserStream,
   requestCoreBrowser,
   type CoreBrowserDownload,
   type CoreBrowserLease,
   type CoreBrowserPage,
   type CoreBrowserSession,
-  type CoreBrowserStreamCallbacks,
 } from "@/service/core-browser-service";
 import { BrowserArea, coreBrowserAddress } from "./browser-area";
 
@@ -32,7 +30,6 @@ vi.mock("@/service/core-browser-service", () => ({
   listCoreBrowserFileChoosers: vi.fn(),
   listCoreBrowserSessions: vi.fn(),
   fetchCoreBrowserDownload: vi.fn(),
-  openCoreBrowserStream: vi.fn(),
 }));
 
 // host contains the mounted browser panel for this isolated projection test.
@@ -51,7 +48,13 @@ beforeEach(() => {
   vi.mocked(listCoreBrowserDialogs).mockResolvedValue([]);
   vi.mocked(listCoreBrowserFileChoosers).mockResolvedValue([]);
   vi.mocked(listCoreBrowserDownloads).mockResolvedValue([]);
-  vi.mocked(openCoreBrowserStream).mockResolvedValue(() => {});
+  vi.mocked(requestCoreBrowser).mockResolvedValue(undefined);
+  vi.stubGlobal("ResizeObserver", class {
+    // The browser's real layout is covered by Chromium acceptance.
+    // 浏览器真实布局由 Chromium 验收覆盖。
+    observe() {}
+    disconnect() {}
+  });
 });
 
 afterEach(async () => {
@@ -111,17 +114,13 @@ it("hides singleton layers and keeps the displayed page title, address and viewp
   const viewport = host.querySelector('[data-browser-viewport]');
   const address = host.querySelector<HTMLInputElement>('[aria-label="Page URL"]')!;
   const form = address.closest('form');
-  const oldStream = vi.mocked(openCoreBrowserStream).mock.calls.at(-1)![3];
   await act(async () => host.querySelector<HTMLButtonElement>('[data-browser-page-id="page-b"]')!.click());
   expect(host.querySelector('[data-browser-viewport]')).toBe(viewport);
   expect(address.closest('form')).toBe(form);
   expect(address.value).toBe("https://b.example/");
   expect(browserTabs()[0].title).toBe("Second page");
   expect(host.textContent).not.toContain("stale.example");
-  expect(vi.mocked(openCoreBrowserStream).mock.calls.at(-1)![2]).toBe("page-b");
-  await act(async () => oldStream.onError("late old page failure"));
-  expect(host.textContent).not.toContain("late old page failure");
-  expect(host.textContent).toContain("0.0 FPS");
+  expect(requestCoreBrowser).toHaveBeenCalledWith("conversation-a", "browser.dom.snapshot", expect.objectContaining({ pageId: "page-b" }));
   vi.mocked(listCoreBrowserPages).mockResolvedValue([pages[1]]);
   // Remount an isolated owner to verify the single-page layer with a fresh authoritative list.
   // 使用新归属重新挂载，验证最新权威列表下的单页面层隐藏。
@@ -163,9 +162,9 @@ it.each(["page", "browser", "refused-page"])("confirms %s closure and preserves 
   const trigger = host.querySelector<HTMLButtonElement>(`[aria-label="Close ${kind === "browser" ? "browser" : "page"}: First page"]`)!;
   await act(async () => trigger.click());
   expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("First page");
-  expect(vi.mocked(requestCoreBrowser)).not.toHaveBeenCalled();
+  expect(vi.mocked(requestCoreBrowser).mock.calls.filter(([, method]) => method !== "browser.dom.snapshot")).toHaveLength(0);
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Cancel")!.click());
-  expect(vi.mocked(requestCoreBrowser)).not.toHaveBeenCalled();
+  expect(vi.mocked(requestCoreBrowser).mock.calls.filter(([, method]) => method !== "browser.dom.snapshot")).toHaveLength(0);
   await act(async () => trigger.click());
   const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Confirm close")!;
   await act(async () => { confirm.click(); confirm.click(); });
@@ -658,23 +657,17 @@ it("sends a held key's release to the previous page when the user changes page t
     { pageId: "page-a", targetId: "target-a", url: "https://a.example/", openerPageId: null, hostGeneration: 1 },
     { pageId: "page-b", targetId: "target-b", url: "https://b.example/", openerPageId: null, hostGeneration: 1 },
   ];
-  // callbacks let the test publish one real-shaped Core frame for page A.
-  // callbacks 使测试可以为页面 A 发布一帧符合真实结构的 Core 画面。
-  let callbacks!: CoreBrowserStreamCallbacks;
   // held selects the projection returned by subsequent Core list polls.
   // held 决定后续 Core 列表轮询返回哪种投影。
   let held = false;
   vi.mocked(listCoreBrowserSessions).mockImplementation(() => Promise.resolve([held ? heldSession : freeSession]));
   vi.mocked(listCoreBrowserPages).mockResolvedValue(pages);
-  vi.mocked(openCoreBrowserStream).mockImplementation(async (_owner, _session, pageId, nextCallbacks) => {
-    if (pageId === "page-a") callbacks = nextCallbacks;
-    return () => {};
-  });
-  vi.mocked(requestCoreBrowser).mockImplementation((_owner, method) => {
+  vi.mocked(requestCoreBrowser).mockImplementation((_owner, method, params) => {
     if (method === "browser.lease.acquire") {
       held = true;
       return Promise.resolve({ session: heldSession, leaseSecret: "page-switch-secret", heartbeatIntervalMs: 5000 } as never);
     }
+    if (method === "browser.dom.snapshot") return Promise.resolve(domReply(String(params?.pageId)) as never);
     return Promise.resolve({ outcome: "applied" } as never);
   });
   // previousCreate and previousRevoke restore jsdom's URL implementation after frame rendering.
@@ -690,13 +683,9 @@ it("sends a held key's release to the previous page when the user changes page t
     const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
     await act(async () => acquire.click());
     await vi.waitFor(() => expect(host.textContent).toContain("Release control"));
-    await act(async () => callbacks.onFrame({
-      sequence: "1", pageId: "page-a", pageGeneration: "1", viewportGeneration: "1",
-      width: 1280, height: 800, capturedAt: "2026-09-19T00:00:00Z", mimeType: "image/png",
-      image: new Uint8Array([1, 2, 3]),
-    }));
-    const image = host.querySelector('[role="img"][aria-label="Live Core browser page"]') as HTMLDivElement;
-    await act(async () => image.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true })));
+    const frame = host.querySelector<HTMLIFrameElement>('iframe[title="Live Core browser page"]')!;
+    await act(async () => frame.dispatchEvent(new Event("load")));
+    await act(async () => frame.contentDocument!.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true })));
     const pageB = [...host.querySelectorAll('[role="tablist"][aria-label="Browser pages"] [role="tab"]')]
       .find((tab) => tab.textContent?.includes("b.example")) as HTMLButtonElement;
     await act(async () => pageB.click());
@@ -734,13 +723,18 @@ it("shares session discovery with a shell observer without sharing different own
   }
 });
 
-it("updates accepted pictures without rerendering controls and releases every owned URL", async () => {
-  const controls = await import("./core-browser-runtime-controls");
-  const chrome = vi.spyOn(controls, "CoreBrowserRuntimeControls").mockImplementation(() => <div data-test-browser-chrome />);
-  const previousCreate = URL.createObjectURL, previousRevoke = URL.revokeObjectURL;
-  let sequence = 0;
-  URL.createObjectURL = vi.fn(() => `blob:accepted-${++sequence}`);
-  URL.revokeObjectURL = vi.fn();
+// Construct the conditional reply shape from the authenticated DOM RPC.
+// 按已鉴权 DOM RPC 的结构构造条件读取应答。
+function domReply(pageId: string) {
+  return { pageId, pageGeneration: "1", viewportGeneration: "1", result: {
+    revision: pageId, documentId: pageId, width: 1280, height: 800,
+    html: "<html><head></head><body><main data-vulcan-node='1'>Projected page</main></body></html>",
+    assets: [], scroll: [], windowScroll: [0, 0], focused: null,
+  } };
+}
+
+it("follows a new tab with no opener, including its initial about:blank", async () => {
+  const { refreshCoreBrowserPages } = await import("@/service/core-browser-metadata");
   const session: CoreBrowserSession = {
     sessionId: "browser-a", ownerSessionId: "conversation-a", status: "running",
     profileMode: "ephemeral", currentUrl: "https://a.example/", leaseState: "free", blockedReason: null,
@@ -748,31 +742,17 @@ it("updates accepted pictures without rerendering controls and releases every ow
     viewportSize: { width: 1280, height: 800 }, pageCount: 1, requiresExplicitReopen: false,
   };
   vi.mocked(listCoreBrowserSessions).mockResolvedValue([session]);
-  vi.mocked(listCoreBrowserPages).mockResolvedValue([
-    { pageId: "page-a", targetId: "target-a", url: "https://a.example/", title: "Current page", openerPageId: null, hostGeneration: 1 },
-  ]);
-  try {
-    await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
-    const callbacks = vi.mocked(openCoreBrowserStream).mock.calls.at(-1)![3];
-    const frame = {
-      sequence: "1", pageId: "page-a", pageGeneration: "1", viewportGeneration: "1",
-      width: 1280, height: 800, capturedAt: "2026-09-19T00:00:00Z", mimeType: "image/png",
-      image: new Uint8Array([1, 2, 3]),
-    };
-    await act(async () => callbacks.onFrame(frame));
-    chrome.mockClear();
-    for (let index = 0; index < 50; index++) {
-      await act(async () => callbacks.onFrame({ ...frame, sequence: String(index + 2) }));
-    }
-    expect(chrome).not.toHaveBeenCalled();
-    expect(host.querySelector('[data-browser-viewport] img')?.getAttribute("src")).toBe("blob:accepted-51");
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(50);
-    await act(async () => root.render(null));
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(51);
-    expect(new Set(vi.mocked(URL.revokeObjectURL).mock.calls.map(([url]) => url)).size).toBe(51);
-  } finally {
-    await act(async () => root.render(null));
-    chrome.mockRestore();
-    URL.createObjectURL = previousCreate; URL.revokeObjectURL = previousRevoke;
-  }
+  const first = { pageId: "page-9", targetId: "target-a", url: "https://a.example/", title: "Current page", openerPageId: null, hostGeneration: 1 };
+  const second = { ...first, pageId: "page-10", targetId: "target-b", url: "about:blank", title: "New page" };
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([first]);
+  vi.mocked(requestCoreBrowser).mockImplementation(async (_owner, method, params) =>
+    method === "browser.dom.snapshot" ? domReply(String(params?.pageId)) as never : undefined as never);
+  await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([second, first]);
+  await act(async () => { await refreshCoreBrowserPages("conversation-a", "browser-a"); });
+  expect(host.querySelector('[data-browser-page-id="page-10"]')?.getAttribute("aria-selected")).toBe("true");
+  expect(requestCoreBrowser).toHaveBeenCalledWith("conversation-a", "browser.dom.snapshot", expect.objectContaining({ pageId: "page-10" }));
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-browser-page-id="page-9"]')!.click());
+  await act(async () => { await refreshCoreBrowserPages("conversation-a", "browser-a"); });
+  expect(host.querySelector('[data-browser-page-id="page-9"]')?.getAttribute("aria-selected")).toBe("true");
 });

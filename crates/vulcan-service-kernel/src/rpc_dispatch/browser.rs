@@ -29,6 +29,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "browser.page.create",
     "browser.page.close",
     "browser.page.capture",
+    "browser.dom.snapshot",
+    "browser.dom.asset",
     "browser.upload.stage",
     "browser.upload.attach",
     "browser.upload.list",
@@ -206,6 +208,12 @@ pub(super) async fn dispatch(
         ),
         "browser.page.create" => rpc_json_result(
             crate::browser::service_browser_page_create(state, parse_param(params, method)?).await,
+        ),
+        "browser.dom.snapshot" => rpc_json_result(
+            crate::browser::service_browser_dom_snapshot(state, parse_param(params, method)?).await,
+        ),
+        "browser.dom.asset" => rpc_json_result(
+            crate::browser::service_browser_dom_asset(state, parse_param(params, method)?).await,
         ),
         "browser.page.capture" => rpc_json_result(
             crate::browser::service_browser_page_capture(state, parse_param(params, method)?).await,

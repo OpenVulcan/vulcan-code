@@ -7,6 +7,8 @@ mod ai_tools;
 #[cfg(all(test, target_os = "windows"))]
 mod ai_tools_acceptance;
 mod automation_grant;
+mod dom;
+pub(crate) use dom::{service_browser_dom_asset, service_browser_dom_snapshot};
 pub mod host;
 mod runtime_install;
 pub use runtime_install::{

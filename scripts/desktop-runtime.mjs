@@ -601,6 +601,34 @@ async function main() {
   });
   await cp(path.join(repository, 'plugins/vulcan-browser/node/node_modules/playwright-core'), path.join(browserRoot, 'node_modules/playwright-core'), { recursive: true, dereference: true });
   await cp(path.join(desktop, 'node_modules/ws'), path.join(browserRoot, 'node_modules/ws'), { recursive: true, dereference: true });
+  // Copy the projection parsers and their pinned production dependency trees.
+  // 复制投影解析器及其锁定版本的生产依赖树。
+  const copiedParsers = new Set();
+  async function copyProjectionPackage(name, resolveFrom) {
+    if (copiedParsers.has(name)) return;
+    let directory = path.dirname(resolveFrom.resolve(name));
+    for (;;) {
+      const manifestPath = path.join(directory, 'package.json');
+      const manifest = await readFile(manifestPath, 'utf8').then(JSON.parse).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return null;
+      });
+      if (manifest?.name === name) {
+        copiedParsers.add(name);
+        await cp(directory, path.join(browserRoot, 'node_modules', name), { recursive: true, dereference: true });
+        const resolveDependency = createRequire(manifestPath);
+        for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+          await copyProjectionPackage(dependency, resolveDependency);
+        }
+        return;
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) throw new Error(`Projection runtime package not found: ${name}`);
+      directory = parent;
+    }
+  }
+  const resolveProjection = createRequire(path.join(desktop, 'package.json'));
+  for (const name of ['parse5', 'css-tree']) await copyProjectionPackage(name, resolveProjection);
   await writeFile(path.join(browserRoot, 'package.json'), JSON.stringify({ private: true, type: 'module', browserVersions }));
   // The authenticated automation gateway uses the pinned WebSocket implementation at runtime.
   // 经鉴权的自动化网关在运行时使用锁定版本的 WebSocket 实现。
