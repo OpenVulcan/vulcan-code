@@ -34,7 +34,7 @@ struct MetadataHeader {
 /// 为已有会话目录取得永久元数据发布锁。
 /// `path` is the exact metadata path; dropping the returned handle releases the OS lock.
 /// `path` 是精确元数据路径；释放返回的句柄即释放操作系统锁。
-pub(super) fn publication_lock(path: &Path) -> Result<File, SessionV1Error> {
+pub(crate) fn publication_lock(path: &Path) -> Result<File, SessionV1Error> {
     // A separate stable inode survives atomic replacement of metadata and process crashes.
     // 独立稳定文件节点不受元数据原子替换和进程崩溃影响。
     let lock_path = path.with_extension("write.lock");

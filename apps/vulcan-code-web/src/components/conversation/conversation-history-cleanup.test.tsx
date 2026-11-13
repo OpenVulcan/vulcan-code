@@ -23,6 +23,9 @@ it("previews the whole eligible prefix and submits only the chosen cutoff after 
   // Return one stable preview to all calls in this interaction.
   // 为这次交互中的所有请求返回同一份预览。
   const request = vi.mocked(serviceClient.request);
+  // The cleanup modal forwards only the committed result to the transcript.
+  // 清理弹窗只向时间线转发已经提交的结果。
+  const onCleaned = vi.fn();
   request.mockResolvedValue({
     enabled: true, eligible, cleaned_ranges: [], history: { turns: [], resources: [] }, generation: 3, revision: 18,
   });
@@ -34,7 +37,7 @@ it("previews the whole eligible prefix and submits only the chosen cutoff after 
   try {
     await React.act(async () => root.render(<I18nProvider initialLocale="en-US">
       <ConversationHistoryDialogContext.Provider value={{ sessionId: "sample", open: true, setOpen: vi.fn() }}>
-        <ConversationHistoryCleanup sessionId="sample" running={false} compactionRevision={null} onCoverage={vi.fn()} />
+        <ConversationHistoryCleanup sessionId="sample" running={false} onCleaned={onCleaned} />
       </ConversationHistoryDialogContext.Provider>
     </I18nProvider>));
     // The modal exposes only one selectable boundary and starts at the full range.
@@ -45,6 +48,8 @@ it("previews the whole eligible prefix and submits only the chosen cutoff after 
     expect(dialog.textContent).toContain(eligible[0].prompt_preview);
     expect(picker.textContent).toContain(eligible[2].prompt_preview);
     expect(picker.querySelector("time")?.textContent).toBeTruthy();
+    expect(dialog.querySelector('[role="checkbox"]')).toBeNull();
+    expect(onCleaned).not.toHaveBeenCalled();
     await React.act(async () => picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
     // Select the middle prompt by its visible text.
     // 按可见提示词选择中间回合。
@@ -64,6 +69,7 @@ it("previews the whole eligible prefix and submits only the chosen cutoff after 
     expect(request).toHaveBeenLastCalledWith("service_conversation_history_v1", {
       operation: "clean", session_id: "sample", through: eligible[1].through, generation: 3, revision: 18,
     });
+    expect(onCleaned).toHaveBeenCalledTimes(1);
   } finally {
     await React.act(async () => root.unmount());
     host.remove();

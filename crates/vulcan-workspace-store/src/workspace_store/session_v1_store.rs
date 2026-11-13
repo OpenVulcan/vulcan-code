@@ -150,20 +150,51 @@ pub struct SessionV1StorageLocator {
 }
 
 impl SessionV1StorageLocator {
-    /// Reads the metadata that publishes the display history coverage.
-    /// 读取发布展示历史覆盖信息的元数据。
-    pub fn cleaned_history_metadata(
+    /// Reads display history and its exact metadata without loading event segments.
+    /// 读取展示历史及其精确元数据，无需加载事件分段。
+    /// Returns the metadata, compaction availability, and published display records.
+    /// 返回元数据、压缩可用状态和已发布的展示记录。
+    pub fn read_cleaned_history_snapshot(
         &self,
-    ) -> Result<(MetadataDocument, bool), SessionV1StoreError> {
+    ) -> Result<
+        (
+            MetadataDocument,
+            bool,
+            vulcan_session_core::v1::history_cleanup::CleanedHistory,
+        ),
+        SessionV1StoreError,
+    > {
+        // Complete any metadata migration before taking the publication lock.
+        // 先完成可能发生的元数据升级，再取得发布锁。
+        let metadata = self.read_indexed_metadata()?;
+        // Normal sessions have no sidecar to coordinate with another reader or writer.
+        // 普通会话没有需要与其他读写方协调的独立历史文件。
+        let (metadata, history) = if metadata.cleaned_history.is_some() {
+            // Keep the selected sidecar from being retired while reading it.
+            // 防止所选历史文件在读取期间被退役。
+            let _guard =
+                super::session_v1::metadata_access::publication_lock(&self.layout.metadata_path())?;
+            // Read the publication again after acquiring its lock.
+            // 取得发布锁后重新读取发布指针。
+            let metadata = self.read_indexed_metadata()?;
+            // The pointer selects the exact matching sidecar.
+            // 指针选定精确匹配的历史文件。
+            let history = metadata
+                .cleaned_history
+                .as_ref()
+                .map(|publication| self.read_cleaned_history_version(publication))
+                .transpose()?
+                .unwrap_or_default();
+            (metadata, history)
+        } else {
+            (metadata, Default::default())
+        };
         // Only the small runtime document is needed to discover an active compaction.
         // 只需小型运行时文档即可发现生效压缩。
-        let metadata = self.read_indexed_metadata()?;
-        // Read the runtime generation selected by the same metadata.
-        // 读取同一元数据选定的运行时代次。
         let runtime = super::session_v1::documents::read_runtime(
             &self.layout.runtime_path(metadata.active_context_generation),
         )?;
-        Ok((metadata, runtime.current_compaction_id.is_some()))
+        Ok((metadata, runtime.current_compaction_id.is_some(), history))
     }
 
     /// Reads the exact display revision selected by a generation builder.

@@ -16,8 +16,8 @@ import {
 } from "@/components/conversation/conversation-branch-presentation-v1";
 import { createConversationRenderItemsProjector } from "@/components/conversation/conversation-transcript";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
-import { ConversationHistoryCleanup, type HistoryEventRange } from "@/components/conversation/conversation-history-cleanup";
-import { MarkdownImageWorkspacePathProvider } from "@/components/conversation/conversation-markdown";
+import { ConversationHistoryCleanup } from "@/components/conversation/conversation-history-cleanup";
+import { ConversationCleanedHistory, useConversationCleanedHistory } from "@/components/conversation/conversation-cleaned-history";
 import { DedicatedTranscriptMemoryProvider } from "@/components/conversation/dedicated-transcript-memory";
 import type { ConversationSurfaceExpandedState } from "@/components/conversation/conversation-layout-restore";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
@@ -202,22 +202,15 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // ownerReady prevents a stale previous-session window from entering the restored renderer.
   // ownerReady 防止上一会话的过期窗口进入恢复后的渲染器。
   const ownerReady = props.snapshot.owner?.session_id === props.sessionId;
-  // Coverage only affects the display projection for the exact session that loaded it.
-  // 覆盖范围仅影响加载它的精确会话展示投影。
-  const [historyCoverage, setHistoryCoverage] = React.useState<{ sessionId: string; ranges: HistoryEventRange[] } | null>(null);
-  // Rebind coverage when the selected session changes.
-  // 选中会话变化时重新绑定覆盖范围。
-  const onHistoryCoverage = React.useCallback((ranges: HistoryEventRange[]) => {
-    setHistoryCoverage({ sessionId: props.sessionId, ranges });
-  }, [props.sessionId]);
+  // Load the replacement rows alongside their coverage on every ordinary session open.
+  // 每次打开普通会话时，同时读取替换条目与其覆盖范围。
+  const historySessionId = ownerReady && props.conversation.dedicated !== true ? props.sessionId : null;
+  // One snapshot controls both hiding original events and showing retained rows.
+  // 同一快照控制原始事件的隐藏及保留条目的显示。
+  const cleanedHistory = useConversationCleanedHistory(historySessionId);
   // events preserves the exact controller order and never falls back to legacy messages.
   // events 保留控制器精确顺序，并且绝不回退到旧消息。
   const events = ownerReady ? props.snapshot.events : [];
-  // Refresh history capability only when a completed compaction actually appears.
-  // 只有确实出现新的已完成压缩时才刷新历史能力。
-  const latestCompaction = events.reduce<number | null>((latest, event) =>
-    event.event.kind === "api_stats" && event.event.purpose === "compaction" && event.event.status === "completed"
-      ? event.seq : latest, null);
   // dedicatedMemory keeps its identity while streaming deltas leave the memory facts unchanged.
   // dedicatedMemory 在流式增量未改变记忆事实时保持身份。
   // reviewTurnId is the Turn the review panel's last-turn source shows for this transcript.
@@ -271,11 +264,12 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       // Preserve canonical cursor events while omitting the ranges replaced by independent history.
       // 保留规范游标事件，同时省略已由独立历史替换的范围。
       const source = ownerReady && !props.sessionRunning ? withStoppedTurnStatsV1(props.snapshot) : events;
-      return historyCoverage?.sessionId === props.sessionId && historyCoverage.ranges.length > 0
-        ? source.filter((event) => !historyCoverage.ranges.some((range) => event.seq >= range.from && event.seq <= range.through))
+      const ranges = cleanedHistory.publication?.cleaned_ranges;
+      return ranges?.length
+        ? source.filter((event) => !ranges.some((range) => event.seq >= range.from && event.seq <= range.through))
         : source;
     },
-    [events, historyCoverage, ownerReady, props.sessionId, props.sessionRunning, props.snapshot],
+    [events, cleanedHistory.publication, ownerReady, props.sessionRunning, props.snapshot],
   );
   // projectBranchPresentation keeps per-event projections across snapshots of this surface: it projects everything
   // on first open or after the session changes, then re-projects only the events each streaming update replaced.
@@ -401,11 +395,9 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     <ConversationCollaborationStateContext.Provider value={collaborationState}>
     <DedicatedTranscriptMemoryProvider memory={dedicatedMemory}>
     <TurnChangeReviewTargetContext.Provider value={reviewTarget}>
-    {ownerReady && props.conversation.dedicated !== true ? (
-      <MarkdownImageWorkspacePathProvider value={props.workspacePath}>
-        <ConversationHistoryCleanup key={props.sessionId} sessionId={props.sessionId}
-          running={props.sessionRunning} compactionRevision={latestCompaction} onCoverage={onHistoryCoverage} />
-      </MarkdownImageWorkspacePathProvider>
+    {historySessionId !== null ? (
+      <ConversationHistoryCleanup key={historySessionId} sessionId={historySessionId}
+        running={props.sessionRunning} onCleaned={cleanedHistory.accept} />
     ) : null}
     <ConversationWorkspace
       autoExpandStreamingThinking={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "inline_output"}
@@ -413,6 +405,11 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       conversation={props.conversation}
       error={null}
       footer={props.footer}
+      cleanedHistory={cleanedHistory.publication && historySessionId !== null
+        && (cleanedHistory.publication.history.turns.length > 0 || cleanedHistory.publication.history.resources.length > 0) ? (
+        <ConversationCleanedHistory key={`cleaned-history:${historySessionId}`} sessionId={historySessionId}
+          history={cleanedHistory.publication.history} onRemove={cleanedHistory.remove} />
+      ) : null}
       hasMoreHistory={ownerReady && props.snapshot.has_more}
       hiddenThinkingBlockIds={hiddenThinkingBlockIds}
       historyLoading={historyLoading}

@@ -16,7 +16,7 @@ pub mod generation;
 pub mod history_cleanup;
 pub mod layout;
 pub mod loader;
-mod metadata_access;
+pub(super) mod metadata_access;
 pub mod segment;
 pub mod writer;
 

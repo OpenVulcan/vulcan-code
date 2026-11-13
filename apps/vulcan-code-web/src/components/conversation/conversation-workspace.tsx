@@ -148,6 +148,9 @@ export function ConversationWorkspace(props: {
   // Sticky footer rendered inside the transcript scroll container.
   // 渲染在转录滚动容器内部的粘性底部插槽。
   footer?: React.ReactNode;
+  // Independent history displayed above the retained conversation.
+  // 显示在保留会话上方的独立历史记录。
+  cleanedHistory?: React.ReactNode;
   // Whether the default empty placeholder should be hidden.
   // 是否隐藏默认空占位内容。
   suppressEmptyPlaceholder?: boolean;
@@ -627,7 +630,7 @@ export function ConversationWorkspace(props: {
                   <AlertDescription>{t("conversation.bodyLoadFailed").replace("{error}", props.error)}</AlertDescription>
                 </Alert>
               ) : null}
-              {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
+              {props.messages.length === 0 && !props.cleanedHistory && !props.suppressEmptyPlaceholder ? (
                 <p className="vk-transcript-note" role="status">
                   {props.conversation ? t("conversation.emptyLoaded") : t("conversation.emptyWaiting")}
                 </p>
@@ -648,6 +651,7 @@ export function ConversationWorkspace(props: {
                   </div>
                 </div>
               ) : null}
+              {props.cleanedHistory}
               <ConversationTurnSeatList
                 key={surfaceRestoreId}
                 cacheScopeKey={surfaceRestoreId}

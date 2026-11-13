@@ -23,8 +23,8 @@ use crate::{
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ConversationHistoryRequest {
-    /// Reads display coverage without opening the execution stream.
-    /// 读取展示覆盖信息，不打开执行事件流。
+    /// Reads the timeline replacement and its coverage without opening the execution stream.
+    /// 读取替换时间线及其覆盖信息，不打开执行事件流。
     Coverage {
         /// Exact indexed session identity.
         /// 精确的索引会话标识。
@@ -179,24 +179,16 @@ pub(crate) async fn service_conversation_history(
     // 通过既有 V1 会话入口取得存储和注册表。
     let (session_id, locator, registry) =
         resolve_exact_locator_and_registry(&state, raw_id).await?;
-    if matches!(request, ConversationHistoryRequest::Coverage { .. }) {
-        // The transcript can hide old pages using metadata only.
-        // 转录只需元数据即可隐藏旧分页。
-        let (metadata, enabled) = locator
-            .cleaned_history_metadata()
-            .map_err(|error| error.to_string())?;
-        return Ok(ConversationHistoryResponse {
-            enabled,
-            history: CleanedHistory::default(),
-            cleaned_ranges: metadata
-                .cleaned_history
-                .map_or_else(Vec::new, |publication| publication.ranges),
-            eligible: Vec::new(),
-            generation: metadata.segment_generation,
-            revision: metadata.document_revision,
-        });
-    }
-    if !matches!(request, ConversationHistoryRequest::Read { .. }) {
+    // Timeline reads and deletions need only the display publication.
+    // 时间线读取和移除只需要展示历史发布。
+    let display_only = matches!(
+        request,
+        ConversationHistoryRequest::Coverage { .. } | ConversationHistoryRequest::Delete { .. }
+    );
+    if matches!(
+        request,
+        ConversationHistoryRequest::Clean { .. } | ConversationHistoryRequest::Delete { .. }
+    ) {
         // Only mutations need a live owner and its publication locks.
         // 只有变更需要实时所有者及其发布锁。
         let (controller, _, _, _, _) = runtime_parts_from_state(&state)?;
@@ -218,6 +210,27 @@ pub(crate) async fn service_conversation_history(
         })
         .await
         .map_err(|error| error.to_string())??;
+    }
+    if display_only {
+        return tokio::task::spawn_blocking(move || {
+            // A single publication pairs the replacement rows with their hidden source ranges.
+            // 同一次发布将替换条目与需隐藏的来源范围配对。
+            let (metadata, enabled, history) = locator
+                .read_cleaned_history_snapshot()
+                .map_err(|error| error.to_string())?;
+            Ok(ConversationHistoryResponse {
+                enabled,
+                history,
+                cleaned_ranges: metadata
+                    .cleaned_history
+                    .map_or_else(Vec::new, |publication| publication.ranges),
+                eligible: Vec::new(),
+                generation: metadata.segment_generation,
+                revision: metadata.document_revision,
+            })
+        })
+        .await
+        .map_err(|error| error.to_string())?;
     }
     // Use the full durable source for protected-boundary and complete-turn inspection.
     // 使用完整持久来源检查保护边界和完整回合。

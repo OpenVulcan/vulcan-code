@@ -20,6 +20,7 @@ vi.mock("./conversation-measured-collapse", async (importOriginal) => {
 
 import { I18nProvider } from "@/i18n";
 import { loadedLocaleCatalog } from "@/i18n-catalogs";
+import * as serviceRuntime from "@/service/webui-service-runtime";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
@@ -403,6 +404,61 @@ function retryDiagnostic(requestId: string): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  it("restores cleaned turns on open and removes a single turn directly from its prompt footer", async () => {
+    // The old event window can still contain source rows when the display publication arrives.
+    // 展示发布到达时，旧事件窗口可能仍包含原始条目。
+    const events = completeTurnEvents();
+    const through = Math.max(...events.map((event) => event.seq));
+    const retained = eventSummary(through + 1, {
+      kind: "user_input", input_source: "root", input_id: 8, client_action_id: clientActionId("still-retained"),
+      text: "Retained runtime prompt",
+    });
+    // The server returns separate display records and replaces them after a deletion.
+    // 服务端返回独立的展示记录，并在移除后返回更新结果。
+    const removed = {
+      id: "first-turn", closed_at_ms: 1002,
+      inputs: [{ id: "prompt-a", created_at_ms: 1001, text: "Recovered historical prompt", supplementary: false, attachments: [] }],
+      answer: { id: "answer-a", text: "Recovered historical answer" },
+    };
+    const remaining = {
+      id: "second-turn", closed_at_ms: 1004,
+      inputs: [{ id: "prompt-b", created_at_ms: 1003, text: "Other historical prompt", supplementary: false, attachments: [] }],
+      answer: null,
+    };
+    const publication = { cleaned_ranges: [{ from: 1, through }], history: { turns: [removed, remaining], resources: [] } };
+    const request = vi.spyOn(serviceRuntime.serviceClient, "request").mockImplementation(async (_method, params) =>
+      params?.operation === "delete" ? { ...publication, history: { ...publication.history, turns: [remaining] } } : publication);
+    const runtime = vi.spyOn(serviceRuntime, "hasServiceRuntime").mockReturnValue(true);
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+      await React.act(async () => root.render(workspaceTree([...events, retained])));
+      const archived = host.querySelector('[data-cleaned-history-turn="first-turn"]')!;
+      expect(archived.textContent).toContain(removed.inputs[0].text);
+      expect(archived.textContent).toContain(removed.answer.text);
+      expect(host.querySelector(".vk-timeline")?.textContent).toContain(retained.event.kind === "user_input" ? retained.event.text : "");
+      expect(host.querySelectorAll(".vk-prompt-row")).toHaveLength(3);
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      const remove = archived.querySelector<HTMLButtonElement>(".vk-prompt-foot button")!;
+      await React.act(async () => remove.click());
+      const confirm = document.querySelector<HTMLButtonElement>('[role="dialog"] button[data-variant="danger"]')!;
+      await React.act(async () => confirm.click());
+      expect(request).toHaveBeenLastCalledWith("service_conversation_history_v1", {
+        operation: "delete", session_id: "session-branch-v1", ids: [removed.id],
+      });
+      expect(host.querySelector('[data-cleaned-history-turn="first-turn"]')).toBeNull();
+      expect(host.querySelector('[data-cleaned-history-turn="second-turn"]')?.textContent).toContain(remaining.inputs[0].text);
+      expect(host.querySelectorAll(".vk-prompt-row")).toHaveLength(2);
+    } finally {
+      await React.act(async () => root.unmount());
+      host.remove();
+      request.mockRestore();
+      runtime.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Host process notes use a system row even when their text resembles assistant Markdown.
   // 即使文字看起来像助手 Markdown，宿主过程提示也使用系统行。
   it("renders process notices as system status rows beside ordinary assistant text", () => {
