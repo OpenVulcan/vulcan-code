@@ -36,6 +36,9 @@ import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-st
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { appendToolRequestDraftMessages, createConversationBranchPresentationProjectorV1, projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { ConversationBranchWorkspaceV1, type ConversationBranchGenerationActionV1 } from "./conversation-branch-workspace-v1";
+import type { CleanedHistoryPublication } from "./conversation-cleaned-history";
+import { CONVERSATION_TURN_WINDOW_LAYOUT_EVENT } from "./conversation-layout-events";
+import { CONVERSATION_TURN_WINDOW_EXPAND_EVENT, ESTIMATED_TURN_HEIGHT_PX } from "./conversation-turn-window";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
 import type { ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
@@ -450,6 +453,98 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(host.querySelector('[data-cleaned-history-turn="first-turn"]')).toBeNull();
       expect(host.querySelector('[data-cleaned-history-turn="second-turn"]')?.textContent).toContain(remaining.inputs[0].text);
       expect(host.querySelectorAll(".vk-prompt-row")).toHaveLength(2);
+    } finally {
+      await React.act(async () => root.unmount());
+      host.remove();
+      request.mockRestore();
+      runtime.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Exercise archived and runtime rows in the same observer delivery, including a late history publication.
+  // 在同一次观察器派发中覆盖历史与运行时回合，同时模拟延迟到达的历史发布。
+  it("windows late cleaned history with runtime turns and expands both for transcript find", async () => {
+    // The history RPC resolves after the retained conversation already has a viewport observer.
+    // 历史 RPC 在保留会话已有视口观察器之后返回。
+    let resolveCoverage!: (publication: CleanedHistoryPublication) => void;
+    // Resolve from the test after the first viewport has committed.
+    // 在首个视口提交后从测试中完成请求。
+    const coverage = new Promise<CleanedHistoryPublication>((resolve) => { resolveCoverage = resolve; });
+    const request = vi.spyOn(serviceRuntime.serviceClient, "request").mockImplementation(() => coverage);
+    const runtime = vi.spyOn(serviceRuntime, "hasServiceRuntime").mockReturnValue(true);
+    // jsdom has no layout; drive the one production observer with explicit intersections.
+    // jsdom 没有布局能力，使用显式的相交状态驱动唯一的生产观察器。
+    const observer = { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
+    // Capture the observer callback so one delivery can contain both sources.
+    // 保存观察器回调，使同一次派发可包含两个来源。
+    let report!: IntersectionObserverCallback;
+    const createObserver = vi.fn(function MockObserver(callback: IntersectionObserverCallback) {
+      report = callback;
+      return observer;
+    });
+    vi.stubGlobal("IntersectionObserver", createObserver);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await React.act(async () => root.render(workspaceTree(completeTurnEvents())));
+      const scrollport = host.querySelector<HTMLElement>(".vk-transcript")!;
+      const runtimeShell = scrollport.querySelector<HTMLElement>("[data-conversation-turn-shell]")!;
+      const onLayout = vi.fn();
+      scrollport.addEventListener(CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, onLayout);
+      // Deliver a batch containing both source types, as the browser does when crossing their boundary.
+      // 像浏览器跨越两个来源的边界时一样，在同一批次派发两类回合。
+      const deliver = (entries: { target: HTMLElement; isIntersecting: boolean }[]) =>
+        report(entries.map(({ target, isIntersecting }) => ({
+          target, isIntersecting, time: 0, rootBounds: null, intersectionRatio: isIntersecting ? 1 : 0,
+          boundingClientRect: target.getBoundingClientRect(), intersectionRect: new DOMRect(),
+        })), observer as unknown as IntersectionObserver);
+      await React.act(async () => deliver([{ target: runtimeShell, isIntersecting: true }]));
+      // A history publication above the viewport must preserve the currently visible runtime anchor.
+      // 发布到视口上方的历史时，必须保留当前可见的运行时锚点。
+      vi.spyOn(scrollport, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 700, 600));
+      vi.spyOn(runtimeShell, "getBoundingClientRect").mockReturnValue(new DOMRect(0, -40, 700, 800));
+      onLayout.mockClear();
+      await React.act(async () => resolveCoverage({
+        cleaned_ranges: [],
+        history: { turns: [{ id: "archived", closed_at_ms: 1, inputs: [],
+          answer: { id: "saved-answer", text: "Archived body for viewport test" } }], resources: [] },
+      }));
+      const historyShell = scrollport.querySelector<HTMLElement>('[data-conversation-turn-shell="cleaned-history:archived"]')!;
+      expect(historyShell.dataset.conversationRowKey).toBe("cleaned-history:archived");
+      expect(historyShell.style.height).toBe(`${ESTIMATED_TURN_HEIGHT_PX}px`);
+      expect(historyShell.textContent).toBe("");
+      expect(createObserver).toHaveBeenCalledTimes(1);
+      expect(observer.observe).toHaveBeenCalledWith(historyShell);
+      expect(onLayout).toHaveBeenCalledTimes(1);
+      expect(onLayout).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { anchor: { rowKey: runtimeShell.dataset.conversationRowKey, offsetTop: -40 } },
+      }));
+      // One crossing produces one geometry event even though both sources change mounted state.
+      // 一次跨边界滚动只派发一次几何事件，即使两个来源的挂载状态都改变。
+      onLayout.mockClear();
+      await React.act(async () => deliver([
+        { target: runtimeShell, isIntersecting: false },
+        { target: historyShell, isIntersecting: true },
+      ]));
+      expect(onLayout).toHaveBeenCalledTimes(1);
+      expect(historyShell.textContent).toContain("Archived body for viewport test");
+      expect(runtimeShell.childElementCount).toBe(0);
+      vi.spyOn(historyShell, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 700, 840));
+      await React.act(async () => deliver([
+        { target: historyShell, isIntersecting: false },
+        { target: runtimeShell, isIntersecting: true },
+      ]));
+      expect(historyShell.textContent).toBe("");
+      expect(historyShell.style.height).toBe("840px");
+      // The same find request makes both sources available to the transcript's DOM search.
+      // 同一个查找请求让两种来源都可被时间线的 DOM 搜索检索。
+      await React.act(async () => scrollport.dispatchEvent(new CustomEvent(CONVERSATION_TURN_WINDOW_EXPAND_EVENT, {
+        detail: { reason: "find", active: true },
+      })));
+      expect(historyShell.textContent).toContain("Archived body for viewport test");
+      expect(runtimeShell.childElementCount).toBeGreaterThan(0);
     } finally {
       await React.act(async () => root.unmount());
       host.remove();

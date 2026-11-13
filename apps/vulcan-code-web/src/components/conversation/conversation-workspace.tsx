@@ -55,6 +55,7 @@ import { ConversationSelectionQuote, quoteInComposer } from "@/components/conver
 import { ConversationTextContextMenu } from "@/components/conversation/conversation-text-context-menu";
 import { isElectronRuntime } from "@/host-shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
+import type { CleanedHistoryProps } from "@/components/conversation/conversation-cleaned-history";
 import { ConversationTranscriptFrame } from "@/components/conversation/conversation-transcript-scrollbar";
 import { ConversationPromptNavigator } from "@/components/conversation/conversation-prompt-navigator";
 import { ConversationScrollTail } from "@/components/conversation/conversation-chrome";
@@ -148,9 +149,9 @@ export function ConversationWorkspace(props: {
   // Sticky footer rendered inside the transcript scroll container.
   // 渲染在转录滚动容器内部的粘性底部插槽。
   footer?: React.ReactNode;
-  // Independent history displayed above the retained conversation.
-  // 显示在保留会话上方的独立历史记录。
-  cleanedHistory?: React.ReactNode;
+  // Published history displayed before retained turns in the same viewport window.
+  // 在同一个视口窗口中显示于保留回合之前的已发布历史。
+  cleanedHistory?: CleanedHistoryProps | null;
   // Whether the default empty placeholder should be hidden.
   // 是否隐藏默认空占位内容。
   suppressEmptyPlaceholder?: boolean;
@@ -651,10 +652,10 @@ export function ConversationWorkspace(props: {
                   </div>
                 </div>
               ) : null}
-              {props.cleanedHistory}
               <ConversationTurnSeatList
                 key={surfaceRestoreId}
                 cacheScopeKey={surfaceRestoreId}
+                cleanedHistory={props.cleanedHistory}
                 renderItem={renderTimelineItem}
                 rowKeys={turnOrder}
                 rows={turnGroupByKey}

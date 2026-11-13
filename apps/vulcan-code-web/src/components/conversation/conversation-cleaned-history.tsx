@@ -7,6 +7,8 @@ import { useConversationSessionResourcesV1 } from "@/state/conversation-session-
 import { Alert, AlertDescription } from "@/ui-kit/primitives/alert";
 import { Button } from "@/ui-kit/primitives/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
+import { ConversationTurnShell } from "./conversation-turn-shell";
+import type { ConversationTurnWindow } from "./conversation-turn-window";
 
 // Source ranges only suppress replaced runtime events.
 // 来源范围仅用于隐藏已替换的运行时事件。
@@ -98,7 +100,7 @@ export function useConversationCleanedHistory(sessionId: string | null) {
 
 // Props provide one session's display publication and an independent-ID removal function.
 // 属性提供一个会话的展示发布和按独立标识移除的函数。
-interface CleanedHistoryProps {
+export interface CleanedHistoryProps {
   // Exact owner, display records, and removal callback.
   // 精确会话所有者、展示记录和移除回调。
   sessionId: string;
@@ -106,11 +108,23 @@ interface CleanedHistoryProps {
   onRemove: (id: string) => Promise<void>;
 }
 
+// cleanedHistoryTurnKey namespaces the published turn ID within the shared transcript.
+// cleanedHistoryTurnKey 为共享时间线里的已发布历史回合标识添加前缀。
+// Parameters: turnId is the published history ID. Returns the stable scroll anchor and shell key.
+// 参数：turnId 是已发布历史的标识。返回稳定的滚动锚点和外壳键。
+export function cleanedHistoryTurnKey(turnId: string): string {
+  return `cleaned-history:${turnId}`;
+}
+
 // Renders preserved turns in the transcript and confirms removal under the corresponding prompt.
 // 在会话时间线显示保留的回合，并在对应提示词下确认移除。
-// Takes the published display records and returns read-only transcript rows.
-// 接收已发布的展示记录，返回只读会话行。
-export function ConversationCleanedHistory({ sessionId, history, onRemove }: CleanedHistoryProps) {
+// Takes the published records and shared viewport state and returns the archived rows and their removal dialog.
+// 接收已发布记录和共享视口状态，返回历史行与删除确认框。
+export function ConversationCleanedHistory({ sessionId, history, onRemove, turnWindow }: CleanedHistoryProps & {
+  // The same viewport state that controls retained runtime turns.
+  // 与保留的运行时回合共用的视口状态。
+  turnWindow: ConversationTurnWindow;
+}) {
   const { t, locale } = useI18n();
   // A root prompt removes its turn; supplementary prompts and resources are independently removable.
   // 根提示词移除其所属回合，追加提示词和素材可独立移除。
@@ -165,28 +179,30 @@ export function ConversationCleanedHistory({ sessionId, history, onRemove }: Cle
 
   return <>
     {history.turns.filter((turn) => turn.inputs.length > 0 || turn.answer).map((turn) => (
-      <div className="grid gap-3" key={turn.id} data-cleaned-history-turn={turn.id}>
-        {turn.inputs.map((input) => (
-          <article className="vk-prompt-row" key={input.id}>
-            {input.supplementary && <span className="text-xs">{t("conversation.history.supplementary")}</span>}
-            {input.text && <div className="vk-prompt"><p className="vk-prompt-text">{input.text}</p></div>}
-            {input.attachments.length > 0 && <ul className="vk-prompt-files">
-              {input.attachments.map((id, occurrence) => <li key={`${id}:${occurrence}`}>{resourceLink(id)}</li>)}
-            </ul>}
-            <div className="vk-prompt-foot">
-              <time>{new Date(input.created_at_ms).toLocaleString(locale)}</time>
-              <Button size="xs" variant="ghost" onClick={() => input.supplementary ? beginRemoval(input.id, "input") : beginRemoval(turn.id, "turn")}>
-                {t("conversation.history.remove")}
-              </Button>
-            </div>
-          </article>
-        ))}
-        {turn.answer && <article className="vk-answer-row" data-role="assistant" data-final="">
-          <div className="vk-flow"><div className="vk-flow-body"><MarkdownMessage content={turn.answer.text} /></div></div>
-        </article>}
-        {turn.inputs.every((input) => input.supplementary) && <Button size="xs" variant="ghost" className="justify-self-end"
-          onClick={() => beginRemoval(turn.id, "turn")}>{t("conversation.history.remove")}</Button>}
-      </div>
+      <ConversationTurnShell key={turn.id} rowKey={cleanedHistoryTurnKey(turn.id)} turnWindow={turnWindow}>
+        <div className="grid gap-3" data-cleaned-history-turn={turn.id}>
+          {turn.inputs.map((input) => (
+            <article className="vk-prompt-row" key={input.id}>
+              {input.supplementary && <span className="text-xs">{t("conversation.history.supplementary")}</span>}
+              {input.text && <div className="vk-prompt"><p className="vk-prompt-text">{input.text}</p></div>}
+              {input.attachments.length > 0 && <ul className="vk-prompt-files">
+                {input.attachments.map((id, occurrence) => <li key={`${id}:${occurrence}`}>{resourceLink(id)}</li>)}
+              </ul>}
+              <div className="vk-prompt-foot">
+                <time>{new Date(input.created_at_ms).toLocaleString(locale)}</time>
+                <Button size="xs" variant="ghost" onClick={() => input.supplementary ? beginRemoval(input.id, "input") : beginRemoval(turn.id, "turn")}>
+                  {t("conversation.history.remove")}
+                </Button>
+              </div>
+            </article>
+          ))}
+          {turn.answer && <article className="vk-answer-row" data-role="assistant" data-final="">
+            <div className="vk-flow"><div className="vk-flow-body"><MarkdownMessage content={turn.answer.text} /></div></div>
+          </article>}
+          {turn.inputs.every((input) => input.supplementary) && <Button size="xs" variant="ghost" className="justify-self-end"
+            onClick={() => beginRemoval(turn.id, "turn")}>{t("conversation.history.remove")}</Button>}
+        </div>
+      </ConversationTurnShell>
     ))}
     {history.resources.length > 0 && <details>
       <summary className="cursor-pointer">{t("conversation.history.resources")} ({history.resources.length})</summary>

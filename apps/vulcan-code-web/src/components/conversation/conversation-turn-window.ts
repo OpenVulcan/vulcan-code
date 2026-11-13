@@ -15,6 +15,19 @@ export const ESTIMATED_TURN_HEIGHT_PX = 480;
 // 查找栏和转录全选在各自的有效期内请求完整的已加载 DOM。
 export const CONVERSATION_TURN_WINDOW_EXPAND_EVENT = "vulcan:conversation-turn-window-expand";
 
+// publishConversationTurnWindowLayout hands one committed geometry change to the existing scroll owner.
+// publishConversationTurnWindowLayout 把一次已经提交的几何变化交给现有滚动控制器。
+// Parameters: scrollport owns the changed shells and anchor is the reading position before the change. Returns nothing.
+// 参数：scrollport 持有变化的回合外壳，anchor 是变化前的阅读位置。无返回值。
+export function publishConversationTurnWindowLayout(
+  scrollport: HTMLElement,
+  anchor: ConversationTurnWindowLayoutDetail["anchor"],
+): void {
+  scrollport.dispatchEvent(new CustomEvent<ConversationTurnWindowLayoutDetail>(
+    CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, { detail: { anchor } },
+  ));
+}
+
 // ConversationTurnWindowRequest identifies which exact DOM operation needs all loaded text.
 // ConversationTurnWindowRequest 标识哪种 DOM 操作需要全部已加载文本。
 export interface ConversationTurnWindowRequest {
@@ -26,21 +39,27 @@ export interface ConversationTurnWindowRequest {
   active: boolean;
 }
 
-// useConversationTurnWindow observes persistent turn shells and returns the body keys and measured placeholder heights.
-// useConversationTurnWindow 观察持久回合外壳，返回应挂载的正文键及占位实测高度。
-// Parameters: scrollRef owns the viewport and rowKeys is the current order of the shells.
-// 参数：scrollRef 持有视口，rowKeys 为当前回合外壳顺序。
-export function useConversationTurnWindow(
-  scrollRef: React.RefObject<HTMLElement | null> | undefined,
-  rowKeys: readonly string[],
-): {
+// ConversationTurnWindow shares mounted keys and placeholder measurements across all transcript rows.
+// ConversationTurnWindow 为转录中的所有行共享挂载键和占位高度。
+export interface ConversationTurnWindow {
   // Null indicates that all turns should mount for a DOM-based action or an unsupported browser.
   // null 表示为 DOM 操作或缺少浏览器能力的环境挂载全部回合。
   mounted: ReadonlySet<string> | null;
   // Last measured height for a previously mounted body.
   // 曾挂载正文的上一次实测高度。
   heights: ReadonlyMap<string, number>;
-} {
+}
+
+// useConversationTurnWindow observes persistent turn shells and returns the body keys and measured placeholder heights.
+// useConversationTurnWindow 观察持久回合外壳，返回应挂载的正文键及占位实测高度。
+// Parameters: scrollRef owns the viewport and rowKeys is the current order of all turn shells.
+// 参数：scrollRef 持有视口，rowKeys 为所有回合外壳的当前顺序。
+// Returns: the shared window state for the supplied scrollport.
+// 返回值：给定滚动视口的共享窗口状态。
+export function useConversationTurnWindow(
+  scrollRef: React.RefObject<HTMLElement | null> | undefined,
+  rowKeys: readonly string[],
+): ConversationTurnWindow {
   // Observer support is also checked in the geometry-free rendering environment used by existing tests.
   // 既有测试使用无几何布局的渲染环境，也通过浏览器能力检查处理。
   const enabled = Boolean(scrollRef && typeof IntersectionObserver !== "undefined");
@@ -112,10 +131,7 @@ export function useConversationTurnWindow(
       const anchor = captureConversationViewportAnchor(scrollport);
       mountedRef.current = next;
       flushSync(() => setMounted(next));
-      scrollport.dispatchEvent(new CustomEvent<ConversationTurnWindowLayoutDetail>(
-        CONVERSATION_TURN_WINDOW_LAYOUT_EVENT,
-        { detail: { anchor } },
-      ));
+      publishConversationTurnWindowLayout(scrollport, anchor);
     };
 
     // Use one native observer for every shell, with a buffer in CSS pixels on either side.

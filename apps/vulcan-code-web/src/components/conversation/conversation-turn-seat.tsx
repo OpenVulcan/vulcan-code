@@ -1,7 +1,10 @@
 import React from "react";
 import type { ConversationTimelineItem } from "@/components/conversation/conversation-model";
 import { conversationTimelineItemKey } from "@/components/conversation/conversation-timeline";
-import { ESTIMATED_TURN_HEIGHT_PX, useConversationTurnWindow } from "./conversation-turn-window";
+import { ConversationCleanedHistory, cleanedHistoryTurnKey, type CleanedHistoryProps } from "./conversation-cleaned-history";
+import { ConversationHistoryLayoutBoundary } from "./conversation-history-layout-boundary";
+import { ConversationTurnShell } from "./conversation-turn-shell";
+import { useConversationTurnWindow } from "./conversation-turn-window";
 import type {
   ConversationTimelineProjectionStore,
   ConversationTurnProjection,
@@ -96,6 +99,9 @@ export interface ConversationTurnSeatListProps {
   // The exact scrollport enables body windowing on interactive surfaces.
   // 精确滚动视口为交互界面启用正文视口渲染。
   scrollRef?: React.RefObject<HTMLElement | null>;
+  // Published history that precedes the retained runtime rows in this window.
+  // 在此窗口中位于保留运行时行之前的已发布历史。
+  cleanedHistory?: CleanedHistoryProps | null;
 }
 
 // ConversationTurnSeatList prevents content-only row changes from reconciling every historical Seat.
@@ -109,9 +115,21 @@ export const ConversationTurnSeatList = React.memo(function ConversationTurnSeat
 ) {
   // The window keeps shell geometry stable when a turn's body is evicted.
   // 正文卸载时，视口窗口保留回合外壳的几何尺寸。
-  const { mounted, heights } = useConversationTurnWindow(props.scrollRef, props.rowKeys);
+  const { cleanedHistory, rowKeys } = props;
+  // Register both sources together when a publication arrives or the runtime window changes.
+  // 清理发布到达或运行时窗口变化时，一起登记两个来源的回合。
+  const cleanedTurns = cleanedHistory?.history.turns;
+  // The observer resyncs after the archived or retained shell order changes.
+  // 历史回合或保留回合的外壳顺序变化后，观察器重新同步。
+  const windowKeys = React.useMemo(() => cleanedTurns
+    ? [...cleanedTurns.map((turn) => cleanedHistoryTurnKey(turn.id)), ...rowKeys]
+    : rowKeys, [cleanedTurns, rowKeys]);
+  // Both sources take part in the same geometry transaction.
+  // 两个来源共用同一次几何校正。
+  const turnWindow = useConversationTurnWindow(props.scrollRef, windowKeys);
   return (
-    <>
+    <ConversationHistoryLayoutBoundary history={cleanedHistory?.history} scrollRef={props.scrollRef}>
+      {cleanedHistory && <ConversationCleanedHistory {...cleanedHistory} turnWindow={turnWindow} />}
       {props.rowKeys.map((rowKey) => {
         // row is required only when this ordered key mounts a new Seat before the Store layout commit.
         // row 仅在该有序键于 Store 布局提交前挂载新 Seat 时需要。
@@ -119,28 +137,22 @@ export const ConversationTurnSeatList = React.memo(function ConversationTurnSeat
         if (!row) {
           throw new Error(`Conversation timeline order has no projection: ${rowKey}`);
         }
-        // Mounted turns use natural height so streaming and folds still flow through the scroll owner.
-        // 已挂载回合使用自然高度，流式输出与折叠继续由滚动所有者处理。
-        const visible = mounted === null || mounted.has(rowKey);
         return (
-          <section
-            className="vk-turn"
-            data-conversation-row-key={rowKey}
-            data-conversation-turn-shell={rowKey}
-            data-conversation-turn-placeholder={visible ? undefined : ""}
+          <ConversationTurnShell
             key={props.cacheScopeKey ? `${props.cacheScopeKey}:${rowKey}` : rowKey}
-            style={visible ? undefined : { height: heights.get(rowKey) ?? ESTIMATED_TURN_HEIGHT_PX }}
+            rowKey={rowKey}
+            turnWindow={turnWindow}
           >
-            {visible ? <ConversationTurnSeat
+            <ConversationTurnSeat
               initialRow={row}
               renderItem={props.renderItem}
               rowKey={rowKey}
               store={props.store}
-            /> : null}
-          </section>
+            />
+          </ConversationTurnShell>
         );
       })}
-    </>
+    </ConversationHistoryLayoutBoundary>
   );
 }, conversationTurnSeatListPropsEqual);
 
@@ -158,5 +170,8 @@ function conversationTurnSeatListPropsEqual(
     && previous.rowKeys === next.rowKeys
     && previous.store === next.store
     && previous.renderItem === next.renderItem
-    && previous.scrollRef === next.scrollRef;
+    && previous.scrollRef === next.scrollRef
+    && previous.cleanedHistory?.sessionId === next.cleanedHistory?.sessionId
+    && previous.cleanedHistory?.history === next.cleanedHistory?.history
+    && previous.cleanedHistory?.onRemove === next.cleanedHistory?.onRemove;
 }

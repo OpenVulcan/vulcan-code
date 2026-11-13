@@ -368,6 +368,18 @@ export function useConversationScrollController(
     element: HTMLElement,
     surfaceId: string,
   ): ConversationScrollSnapshot => {
+    // An archived anchor can arrive after the retained event window. Keep its original offset until its body mounts.
+    // 历史锚点可能晚于保留的事件窗口到达。正文挂载前保留其原始偏移。
+    const restore = surfaceRestoreRef.current;
+    if (!followTailRef.current && restore?.surfaceId === surfaceId
+      && restore.userRevision === userRevisionRef.current && restore.snapshot.anchorKey) {
+      // A real body, rather than a provisional shell, can represent the saved offset.
+      // 只有真实正文能表示保存的偏移，占位外壳不能。
+      const mountedRows = element.querySelectorAll<HTMLElement>("[data-conversation-row-key]:not([data-conversation-turn-placeholder])");
+      if (!Array.from(mountedRows).some((row) => row.dataset.conversationRowKey === restore.snapshot.anchorKey)) {
+        return restore.snapshot;
+      }
+    }
     // snapshot captures the exact DOM position under the current ownership ledger.
     // snapshot 在当前所有权账本下捕获精确 DOM 位置。
     const snapshot = captureConversationScrollSnapshot(element, followTailRef.current);
@@ -657,6 +669,7 @@ export function useConversationScrollController(
       return;
     }
     cancelPendingFrame();
+    surfaceRestoreRef.current = null;
     publishFollowTail(true);
     writeScrollTop(element, element.scrollHeight, behavior);
     writeCurrentSnapshot(element, currentOptions.surfaceId);

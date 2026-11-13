@@ -17,7 +17,7 @@ import {
 import { createConversationRenderItemsProjector } from "@/components/conversation/conversation-transcript";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
 import { ConversationHistoryCleanup } from "@/components/conversation/conversation-history-cleanup";
-import { ConversationCleanedHistory, useConversationCleanedHistory } from "@/components/conversation/conversation-cleaned-history";
+import { useConversationCleanedHistory } from "@/components/conversation/conversation-cleaned-history";
 import { DedicatedTranscriptMemoryProvider } from "@/components/conversation/dedicated-transcript-memory";
 import type { ConversationSurfaceExpandedState } from "@/components/conversation/conversation-layout-restore";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
@@ -406,10 +406,9 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       error={null}
       footer={props.footer}
       cleanedHistory={cleanedHistory.publication && historySessionId !== null
-        && (cleanedHistory.publication.history.turns.length > 0 || cleanedHistory.publication.history.resources.length > 0) ? (
-        <ConversationCleanedHistory key={`cleaned-history:${historySessionId}`} sessionId={historySessionId}
-          history={cleanedHistory.publication.history} onRemove={cleanedHistory.remove} />
-      ) : null}
+        && (cleanedHistory.publication.history.turns.length > 0 || cleanedHistory.publication.history.resources.length > 0)
+        ? { sessionId: historySessionId, history: cleanedHistory.publication.history, onRemove: cleanedHistory.remove }
+        : null}
       hasMoreHistory={ownerReady && props.snapshot.has_more}
       hiddenThinkingBlockIds={hiddenThinkingBlockIds}
       historyLoading={historyLoading}

@@ -180,6 +180,9 @@ it("restores a deep reading offset after its placeholder becomes a real turn", a
     const row = host.querySelector<HTMLElement>("[data-conversation-row-key]")!;
     expect(scrollport.scrollTop).toBeGreaterThanOrEqual(turnTop);
     expect(scrollport.scrollTop).toBeLessThan(turnTop + placeholderHeight);
+    // The browser can deliver the provisional scroll before the body observer fires.
+    // 浏览器可能在正文观察器触发之前派发占位滚动事件。
+    await React.act(async () => scrollport.dispatchEvent(new Event("scroll")));
     expect(saved.anchorTop).toBe(-savedOffset);
     const provisionalTop = row.getBoundingClientRect().top;
     row.removeAttribute("data-conversation-turn-placeholder");
