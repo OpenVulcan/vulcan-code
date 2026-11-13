@@ -178,6 +178,8 @@ macOS 运行时最低支持 15.0。`make deps lua` 解压已校验的 LuaSkills 
 
 macOS Core 静态链接的 LuaJIT 为随包原生模块提供 Lua C API。Core 的构建脚本显式保留两种架构的模块导入，发行前用 `nm` 核对实际 Core 导出和实际模块导入，缺失符号直接中止打包。更新原生模块时同步更新 Core 的符号清单。
 
+Linux 与 macOS 共用 Core 的 Lua 符号清单。Linux 使用 ELF 链接参数保留并导出这些符号，发行归档前用 `readelf` 校验 Core 的动态符号表和各 Lua 模块的导入。发布作业将其 glibc 基线传给同一检查，Core 或随包 Lua 共享对象的实际 ELF 版本需求超出基线即中止打包。LuaSkills 上游 Linux 归档在 Ubuntu 22.04 构建，共享对象使用相对于自身位置的 `$ORIGIN` 路径查找归档内依赖。
+
 Rust 工具已存在时会只打印版本并跳过安装，不会重复编译或覆盖现有工具。Windows 通过 `make.ps1` 执行，类 Unix 环境通过 `make.sh` 转发到同一套 PowerShell 依赖入口。
 
 单独安装 Rust 工作区工具可以执行：

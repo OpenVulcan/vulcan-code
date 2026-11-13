@@ -219,6 +219,8 @@ jobs:
           target/release/vulcan-release-tool record --objects "$out/objects" --components "$out/components.json" \
             --version "$VERSION" --platform "$PLATFORM" --install-epoch "$INSTALL_EPOCH" --tree "$root"
       - name: Archive for the GitHub Release
+        env:
+          VULCAN_RELEASE_GLIBC_BASELINE: ${{ matrix.glibc }}
         run: node scripts/release-package.mjs package --out "$RUNNER_TEMP/release/archive"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
