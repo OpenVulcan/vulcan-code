@@ -1,6 +1,6 @@
 # Pin the repository toolchain so local and automated dependency resolution use the same Cargo contract.
 # 固定仓库工具链，使本地与自动化依赖解析使用相同的 Cargo 契约。
 [toolchain]
-channel = "1.97.1"
+channel = "1.99.1"
 components = ["clippy", "rustfmt"]
 profile = "minimal"
