@@ -705,6 +705,9 @@ impl SessionDocument {
     /// Validates metadata caches against a fully resident authoritative stream.
     /// 依据完整常驻的权威事件流校验 metadata 缓存。
     pub(super) fn validate_loaded_metadata(&self) -> Result<(), DomainError> {
+        if let Some(history) = &self.metadata.cleaned_history {
+            history.validate(self.metadata.id_frontier.next_seq)?;
+        }
         validate_active_request_config(&self.metadata.config.active_request)?;
         if let Some(fork_origin) = &self.metadata.fork_origin {
             validate_fork_origin(&self.metadata.session_id, fork_origin)?;

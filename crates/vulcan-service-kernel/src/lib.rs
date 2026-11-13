@@ -163,6 +163,7 @@ mod conversation_actions;
 mod conversation_drafts_v1;
 mod conversation_events_v1;
 mod conversation_generations_v1;
+mod conversation_history_cleanup;
 mod conversation_resources_v1;
 mod conversation_run_services;
 mod conversation_submission;

@@ -13,6 +13,7 @@ pub mod documents;
 pub mod errors;
 pub mod event_window;
 pub mod generation;
+pub mod history_cleanup;
 pub mod layout;
 pub mod loader;
 mod metadata_access;

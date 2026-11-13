@@ -27,6 +27,7 @@ pub mod dynamic_context;
 pub mod errors;
 pub mod event;
 pub mod goal;
+pub mod history_cleanup;
 pub mod ids;
 pub mod lifetime_usage;
 pub mod projection;

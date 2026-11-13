@@ -102,7 +102,7 @@ const RETIRED_TAIL_RETRIES: usize = 3;
 
 /// Runs `read`, repeating it when a concurrent save retired the tail bank it was reading.
 /// 运行 `read`，在并发保存使其正在读取的尾段 bank 失效时重复读取。
-fn read_across_tail_switch<T>(
+pub(super) fn read_across_tail_switch<T>(
     read: impl Fn() -> Result<T, SessionV1Error>,
 ) -> Result<T, SessionV1Error> {
     let mut retries = 0;

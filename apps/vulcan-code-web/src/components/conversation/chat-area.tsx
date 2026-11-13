@@ -20,6 +20,7 @@ import {
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
+import { ConversationHistoryDialogContext } from "@/state/conversation-history-dialog";
 import { useConversationTailStatusKind } from "@/state/conversation-live-stream-context";
 import { ConversationTailStatus } from "@/components/conversation/chat-area/tail-status";
 import { toast } from "@/ui-kit/primitives/toast";
@@ -75,6 +76,22 @@ export function ChatArea(props: ChatAreaProps) {
     conversationId: props.selectedConversationId,
   });
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
+  // Bind open requests to a normal persisted session rather than a composer draft.
+  // 将弹窗打开请求绑定到普通持久会话。
+  const historySessionId = selectedConversation && !selectedConversation.dedicated ? selectedConversation.id : null;
+  // Track which session opened the modal so switching sessions closes it.
+  // 记录打开弹窗的会话，使会话切换时关闭弹窗。
+  const [historyDialogSessionId, setHistoryDialogSessionId] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setHistoryDialogSessionId((current) => current === historySessionId ? current : null);
+  }, [historySessionId]);
+  // Share a single modal between the slash command and plus-menu item.
+  // 让斜杠指令和加号菜单项共用同一个弹窗。
+  const historyDialog = React.useMemo(() => historySessionId === null ? null : {
+    sessionId: historySessionId,
+    open: historyDialogSessionId === historySessionId,
+    setOpen: (open: boolean) => setHistoryDialogSessionId(open ? historySessionId : null),
+  }, [historyDialogSessionId, historySessionId]);
   // eventWindowFacts are the selected V1 window's facts ChatArea renders, the sole durable authority for Continue
   // eligibility; each keeps its identity while a reply only appends text, so streaming re-renders only the transcript.
   // eventWindowFacts 是 ChatArea 渲染的选中 V1 窗口事实，也是 Continue 资格的唯一可靠权威；回复只追加文本时各项保持身份，
@@ -657,6 +674,7 @@ export function ChatArea(props: ChatAreaProps) {
   );
   return (
     <AnswerReplyContext.Provider value={answerReplyStore}>
+      <ConversationHistoryDialogContext.Provider value={historyDialog}>
       <div
         className="vk-chat"
         data-empty={isEmptyConversation ? "" : undefined}
@@ -669,6 +687,7 @@ export function ChatArea(props: ChatAreaProps) {
           conversationSurfaceContent
         )}
       </div>
+      </ConversationHistoryDialogContext.Provider>
     </AnswerReplyContext.Provider>
   );
 }

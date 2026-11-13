@@ -24,7 +24,7 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 /// automatically on first read; older and future versions are rejected (AGENTS.md section 1 rule 12).
 /// 当前元数据模式版本。自 `METADATA_UPGRADE_BASELINE_VERSION` 起的版本在首次读取时自动升级；
 /// 更早与未来的版本一律拒绝（AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 14;
+pub const METADATA_SCHEMA_VERSION: u32 = 15;
 
 /// Oldest metadata schema that can still be upgraded; it was current on 2026-10-29.
 /// 仍可自动升级的最早元数据模式版本；即 2026-10-29 时的当前版本。
@@ -1159,6 +1159,10 @@ pub struct MetadataDocument {
     /// Current immutable context generation containing runtime and compactions.
     /// 当前包含 runtime 与 compactions 的不可变上下文 generation。
     pub active_context_generation: u64,
+    /// Independent display-history generation published with the cleaned event files.
+    /// 与清理后事件文件一同发布的独立展示历史代次。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleaned_history: Option<super::history_cleanup::HistoryPublication>,
     /// Cached start seq of the currently open Turn, if one crosses the active
     /// tail boundary. The event stream remains authoritative; this cursor only
     /// bounds precise startup reads.
@@ -1223,6 +1227,7 @@ impl MetadataDocument {
             input_state: InputState::default(),
             segment_generation: 1,
             active_context_generation: 1,
+            cleaned_history: None,
             open_turn_start_seq: None,
             split_list: Vec::new(),
             id_frontier: IdFrontier {

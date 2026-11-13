@@ -211,6 +211,7 @@ const COMPOSER_SLASH_COMMAND_DESCRIPTORS: Readonly<Record<string, ComposerSlashC
   model: { descriptionKey: "composer.slash.model", dedicated: "always" },
   reasoning: { descriptionKey: "composer.slash.reasoning", dedicated: "always" },
   compact: { descriptionKey: "composer.slash.compact", dedicated: "never" },
+  "clean-history": { descriptionKey: "conversation.history.title", dedicated: "never" },
   plan: { descriptionKey: "composer.slash.plan", dedicated: "never" },
   goal: { descriptionKey: "composer.slash.goal", dedicated: "never" },
   settings: { descriptionKey: "composer.slash.settings", dedicated: "always" },

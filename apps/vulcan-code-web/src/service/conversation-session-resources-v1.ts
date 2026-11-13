@@ -83,7 +83,16 @@ export class ServiceSessionResourceClientV1 implements SessionResourceRpcV1 {
       throw new Error("Session resource metadata requires an exact non-empty session id.");
     }
     if (resourceIds.length > SESSION_RESOURCE_LIST_V1_MAX_ITEMS) {
-      throw new Error(`Session resource metadata accepts at most ${SESSION_RESOURCE_LIST_V1_MAX_ITEMS} items.`);
+      // Keep each RPC under the shared server limit while preserving the exact caller order.
+      // 每次 RPC 遵守共享服务端上限，并保持调用方的精确顺序。
+      const resources: SessionResourceListV1Response["resources"] = [];
+      for (let start = 0; start < resourceIds.length; start += SESSION_RESOURCE_LIST_V1_MAX_ITEMS) {
+        // Validate each page using the same exact-owner and order checks as a single request.
+        // 对每批应用与单次请求相同的精确所有者和顺序校验。
+        const page = await this.list(sessionId, resourceIds.slice(start, start + SESSION_RESOURCE_LIST_V1_MAX_ITEMS));
+        resources.push(...page.resources);
+      }
+      return { sessionId, resources };
     }
     const payload = await this.service.request<unknown>("service_session_resource_list_v1", {
       sessionId,

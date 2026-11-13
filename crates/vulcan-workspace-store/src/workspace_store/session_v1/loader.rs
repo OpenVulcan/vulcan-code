@@ -74,6 +74,12 @@ struct SmallDocuments {
 /// Strictly loads one V1 session from its exact locator, retaining every event.
 /// 从精确定位器严格加载一个 V1 会话并保留全部事件。
 pub fn load_session(layout: &SessionV1Layout) -> Result<LoadedV1Session, SessionV1Error> {
+    super::event_window::read_across_tail_switch(|| load_session_once(layout))
+}
+
+/// Opens a full session from one captured metadata bank.
+/// 从一次捕获的元数据 bank 打开完整会话。
+fn load_session_once(layout: &SessionV1Layout) -> Result<LoadedV1Session, SessionV1Error> {
     let SmallDocuments {
         metadata,
         runtime_document,
@@ -148,6 +154,14 @@ pub fn load_session(layout: &SessionV1Layout) -> Result<LoadedV1Session, Session
 /// 映射做结构性校验；内容在首次精确加载时校验(计划 6.1.8)，因此 10 万事件
 /// 会话打开时不物化封口历史。
 pub fn load_session_tail_only(
+    layout: &SessionV1Layout,
+) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
+    super::event_window::read_across_tail_switch(|| load_session_tail_once(layout))
+}
+
+/// Opens the runtime tail from one captured metadata bank.
+/// 从一次捕获的元数据 bank 打开运行时尾部。
+fn load_session_tail_once(
     layout: &SessionV1Layout,
 ) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
     let SmallDocuments {

@@ -548,6 +548,7 @@ impl TestHostRuntimeRoot {
         vulcan_workspace_store::workspace_store::create_indexed_session_v1(
             &host_runtime,
             &vulcan_workspace_store::workspace_store::CreateSessionV1Request {
+                cleaned_history: None,
                 project_id: "v1-test-project",
                 storage_partition:
                     vulcan_workspace_store::workspace_store::SESSION_V1_STORAGE_PARTITION,

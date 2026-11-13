@@ -736,7 +736,7 @@ export function ComposerPanel(props: {
     onSubmitCreatedGoal: submitCreatedGoal,
   });
 
-  const slashSession = useComposerSlashSession(props.slashCommands, openGoalDialog);
+  const slashSession = useComposerSlashSession(props.slashCommands, openGoalDialog, props.conversationId, props.onSlashCommand);
   // Slash controller owns filtering, navigation, activation, and Enter-key priority.
   // slash 控制器管理筛选、导航、激活与 Enter 键优先级。
   const {
@@ -755,7 +755,7 @@ export function ComposerPanel(props: {
     commands: slashSession.commands,
     planModeEnabled,
     onSetPlanMode: handlePlanModeChange,
-    onRouteCommand: props.onSlashCommand,
+    onRouteCommand: slashSession.routeCommand,
     onOpenModelPicker: openModelPicker,
     onOpenReasoningPicker: openReasoningPicker,
     onOpenGoal: slashSession.openGoal,

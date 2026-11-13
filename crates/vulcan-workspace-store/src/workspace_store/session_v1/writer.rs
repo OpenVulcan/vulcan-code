@@ -194,6 +194,28 @@ pub fn create_session(
     compactions: &[CompactionNode],
     events: &[ConversationEvent],
 ) -> Result<MetadataDocument, SessionV1Error> {
+    create_session_with_history(
+        layout,
+        metadata,
+        runtime_lock,
+        runtime_updated_at_ms,
+        compactions,
+        events,
+        None,
+    )
+}
+
+/// Creates a complete session and optionally stages its inherited display history.
+/// 创建完整会话，并可暂存继承的展示历史。
+pub(crate) fn create_session_with_history(
+    layout: &SessionV1Layout,
+    metadata: &MetadataDocument,
+    runtime_lock: &RuntimeLock,
+    runtime_updated_at_ms: i64,
+    compactions: &[CompactionNode],
+    events: &[ConversationEvent],
+    history: Option<&vulcan_session_core::v1::history_cleanup::CleanedHistory>,
+) -> Result<MetadataDocument, SessionV1Error> {
     let final_dir = layout.session_dir();
     if final_dir.exists() {
         return Err(SessionV1Error::unsupported(
@@ -212,6 +234,7 @@ pub fn create_session(
         events,
     )
     .and_then(|filled| {
+        super::history_cleanup::stage_fork_history(&staging_layout, &filled, history)?;
         verify_initial_session_tree(
             &staging_layout,
             &filled,

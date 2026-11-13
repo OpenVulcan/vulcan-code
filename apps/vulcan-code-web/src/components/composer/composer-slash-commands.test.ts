@@ -11,12 +11,12 @@ const command = (id: string): ComposerSlashCommandSummary => ({ id, command: `/$
 const ids = (commands: ComposerSlashCommandSummary[]) => commands.map((entry) => entry.id);
 
 describe("composerSlashCommandsForSession", () => {
-  const catalog = ["model", "compact", "plan", "goal", "settings", "style", "collapse", "skill", "skills", "future"]
+  const catalog = ["model", "compact", "clean-history", "plan", "goal", "settings", "style", "collapse", "skill", "skills", "future"]
     .map(command);
 
   it("lists every routable command for ordinary sessions in catalog order", () => {
     expect(ids(composerSlashCommandsForSession(catalog, null))).toEqual(
-      ["model", "compact", "plan", "goal", "settings", "style", "collapse", "skill", "skills"],
+      ["model", "compact", "clean-history", "plan", "goal", "settings", "style", "collapse", "skill", "skills"],
     );
   });
 

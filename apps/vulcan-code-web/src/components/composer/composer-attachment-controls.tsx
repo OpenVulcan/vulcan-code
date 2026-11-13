@@ -8,6 +8,7 @@ import {
   CircleAlert,
   FileText,
   Image as ImageIcon,
+  History,
   ListChecks,
   Music2,
   Paperclip,
@@ -39,6 +40,7 @@ import {
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { ConversationHistoryDialogContext } from "@/state/conversation-history-dialog";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentPreparationSummary,
@@ -152,6 +154,9 @@ export function ComposerAttachmentMenu(props: ComposerAttachmentMenuProps) {
   // Dedicated sessions freeze Plan mode and goals at creation, so their entries are not offered.
   // 专职会话在创建时冻结计划模式与目标，因此不提供这些入口。
   const dedicated = useDedicatedComposer();
+  // The composer can open history only for its current persisted conversation.
+  // 输入区只能打开当前持久会话的历史窗口。
+  const historyDialog = React.useContext(ConversationHistoryDialogContext);
   const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf", "file"].includes(capability.kind));
   return (
     <>
@@ -212,6 +217,12 @@ export function ComposerAttachmentMenu(props: ComposerAttachmentMenuProps) {
           <Target size={15} />
           <span>{t("composer.goal")}</span>
         </DropdownMenuItem>
+        {historyDialog && historyDialog.sessionId === props.conversationId ? (
+          <DropdownMenuItem data-action="clean-history" onSelect={() => historyDialog.setOpen(true)}>
+            <History size={15} aria-hidden="true" />
+            <span>{t("conversation.history.title")}</span>
+          </DropdownMenuItem>
+        ) : null}
         </>}
       </DropdownMenuContent>
     </DropdownMenu>

@@ -188,6 +188,9 @@ fn upgrade_step(
         // 14 将 `config.context_compaction_window_node_id`（节点标识字符串）替换为
         // `config.context_window_selection`（`{"node": id}` 或 `{"custom": tokens}`）；缺省仍跟随模型。
         13 => upgrade_context_window_selection(path, raw)?,
+        // Existing sessions have no published independent history until explicitly cleaned.
+        // 旧会话在显式清理之前没有已发布的独立历史。
+        14 => {}
         other => {
             return Err(SessionV1Error::unsupported(
                 path,

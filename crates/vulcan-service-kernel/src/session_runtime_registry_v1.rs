@@ -1041,6 +1041,92 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionHandle {
+    /// Publishes the cleaned range with the same writer and request ordering as ordinary V1 mutations.
+    /// 使用普通 V1 变更的写入器和请求顺序发布清理范围。
+    pub(crate) fn clean_history(
+        &self,
+        through: Seq,
+        expected_generation: u64,
+        expected_revision: u64,
+    ) -> Result<(), String> {
+        // Serialize physical replacement and prevent in-memory mutations from crossing the switch.
+        // 串行化物理替换，并阻止内存变更跨越切换。
+        let _writer = self.writer.lock().map_err(|error| error.to_string())?;
+        // Retain the request publication order until the new resident owner is installed.
+        // 保持请求发布顺序直到新驻留所有者安装完成。
+        let _publisher = self
+            .mutation_publisher
+            .lock()
+            .map_err(|error| error.to_string())?;
+        self.ensure_admitted(SessionMutationAdmission::MetadataOnly)
+            .map_err(|error| error.to_string())?;
+        self.ensure_not_quarantined()
+            .map_err(|error| error.to_string())?;
+        // Require the same idle session the user previewed.
+        // 要求与用户预览时相同的空闲会话。
+        let mut resident = self.document.lock().map_err(|error| error.to_string())?;
+        if resident.active_turn().is_some_and(|turn| !turn.closed)
+            || resident.active_api().is_some()
+            || resident.metadata.dedicated.is_some()
+            || resident.metadata.child_execution_profile.is_some()
+            || resident.segment_generation() != expected_generation
+            || resident.memory_revision() != expected_revision
+            || resident.durable_revision() != expected_revision
+        {
+            return Err("Session changed or is running. Refresh the cleanup selection.".into());
+        }
+        // Load the complete durable source because the resident window may only hold the tail.
+        // 加载完整持久来源，因为驻留窗口可能只包含尾段。
+        let locator = self.storage_locator().map_err(|error| error.to_string())?;
+        // Use the exact storage location owned by the resident session.
+        // 使用驻留会话持有的精确存储位置。
+        let loaded = load_session_v1_full(&locator).map_err(|error| error.to_string())?;
+        if loaded.metadata != resident.metadata {
+            return Err("Session history source changed. Refresh the cleanup selection.".into());
+        }
+        // The replacement was validated against the exact publication before the atomic switch.
+        // 替换文档在原子切换前已按精确发布内容校验。
+        let replacement = locator
+            .publish_history_cleanup(&loaded.document, through)
+            .map_err(|error| error.to_string())?;
+        *resident = replacement;
+        Ok(())
+    }
+
+    /// Removes selected independent history records without editing the execution stream.
+    /// 删除选定的独立历史条目，不编辑执行事件流。
+    pub(crate) fn delete_history_entries(
+        &self,
+        ids: &std::collections::BTreeSet<uuid::Uuid>,
+    ) -> Result<(), String> {
+        // The same writer keeps display deletion from racing another publication.
+        // 同一写入器防止展示删除与其他发布竞争。
+        let _writer = self.writer.lock().map_err(|error| error.to_string())?;
+        // Serialize the pointer update with live document mutations.
+        // 将指针更新与实时文档变更串行化。
+        let _publisher = self
+            .mutation_publisher
+            .lock()
+            .map_err(|error| error.to_string())?;
+        self.ensure_admitted(SessionMutationAdmission::MetadataOnly)
+            .map_err(|error| error.to_string())?;
+        self.ensure_not_quarantined()
+            .map_err(|error| error.to_string())?;
+        // Preserve any newer in-memory request settings and change only the display pointer.
+        // 保留可能更新的内存请求设置，仅更新展示指针。
+        let mut resident = self.document.lock().map_err(|error| error.to_string())?;
+        // The exact storage owner performs the file update.
+        // 精确存储所有者完成文件更新。
+        let locator = self.storage_locator().map_err(|error| error.to_string())?;
+        // The new pointer must also be carried into every subsequent metadata flush.
+        // 后续每次元数据刷新也必须携带新指针。
+        let metadata = locator
+            .delete_cleaned_history(ids)
+            .map_err(|error| error.to_string())?;
+        resident.metadata.cleaned_history = metadata.cleaned_history;
+        Ok(())
+    }
+
     /// Builds one production handle around an already-published V1 document.
     /// 围绕一份已经发布的 V1 文档构建生产句柄。
     pub(crate) fn new(

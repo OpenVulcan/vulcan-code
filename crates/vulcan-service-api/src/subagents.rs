@@ -137,6 +137,7 @@ const COMPOSER_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("model", "/model"),
     ("reasoning", "/reasoning"),
     ("compact", "/compact"),
+    ("clean-history", "/clean-history"),
     ("plan", "/plan"),
     ("goal", "/goal"),
     ("settings", "/settings"),

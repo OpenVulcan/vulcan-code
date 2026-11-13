@@ -3,6 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "@/ui-kit/primitives/toast";
+import { ConversationHistoryDialogContext } from "@/state/conversation-history-dialog";
 import { ComposerPanel } from "./composer-panel";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
 import { ComposerEnterSendSettingsSection } from "@/components/features/settings/composer-enter-send-settings";
@@ -118,6 +119,32 @@ beforeEach(() => {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it("opens the same conversation history action from slash and the plus menu", async () => {
+  // Load the exact command as the current persisted composer draft.
+  // 将精确指令作为当前持久输入区草稿加载。
+  transport.read.mockImplementation(async (sessionId: string) => ({ sessionId, text: "/clean-history", attachments: [] }));
+  // Both entry points share the same session owner.
+  // 两个入口共用同一个会话所有者。
+  const props = composerProps({ slashCommands: [{ id: "clean-history", command: "/clean-history" }] });
+  const setOpen = vi.fn();
+  await act(async () => root.render(
+    <ConversationHistoryDialogContext.Provider value={{ sessionId: props.conversationId!, open: false, setOpen }}>
+      <ComposerPanel {...props} />
+    </ConversationHistoryDialogContext.Provider>,
+  ));
+  await pressEnter();
+  expect(setOpen).toHaveBeenCalledExactlyOnceWith(true);
+  expect(props.onSubmitPrompt).not.toHaveBeenCalled();
+  expect(props.onSlashCommand).not.toHaveBeenCalled();
+  // Open the real composer menu with the keyboard and select the history action.
+  // 用键盘打开真实输入区菜单并选择历史操作。
+  const plus = host.querySelector<HTMLButtonElement>(".vk-pick-add")!;
+  await act(async () => plus.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  const history = document.querySelector<HTMLElement>('[role="menuitem"][data-action="clean-history"]')!;
+  await act(async () => history.click());
+  expect(setOpen.mock.calls).toEqual([[true], [true]]);
+});
 
 it("blocks Enter exactly like the disabled send button when capabilities are unavailable during a run", async () => {
   transport.read.mockImplementation(async (sessionId: string) => ({ sessionId, text: "queued next message", attachments: [] }));

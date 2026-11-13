@@ -182,6 +182,7 @@ async fn fixture(
     create_indexed_session_v1(
         &controller,
         &CreateSessionV1Request {
+            cleaned_history: None,
             project_id,
             storage_partition:
                 vulcan_workspace_store::workspace_store::SESSION_V1_STORAGE_PARTITION,

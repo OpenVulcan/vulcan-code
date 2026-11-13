@@ -317,6 +317,7 @@ impl SessionDocument {
     /// Resolves and validates one root input retained as the new open history boundary.
     /// 解析并校验一条作为新开放历史边界保留的根输入。
     fn require_generation_root_target(&self, target_seq: Seq) -> Result<usize, DomainError> {
+        self.require_uncleaned_generation_target(target_seq)?;
         let index =
             target_seq
                 .value()
@@ -363,6 +364,7 @@ impl SessionDocument {
     /// Returns the event index only when the seq is the canonical terminal statistics event.
     /// 仅当该 seq 是规范终态统计事件时返回事件索引。
     fn require_generation_turn_end_target(&self, turn_end_seq: Seq) -> Result<usize, DomainError> {
+        self.require_uncleaned_generation_target(turn_end_seq)?;
         let index =
             turn_end_seq
                 .value()
@@ -390,6 +392,34 @@ impl SessionDocument {
             });
         }
         Ok(index)
+    }
+
+    /// Rejects positions at or before an extracted range because replay history is no longer complete there.
+    /// 拒绝已提取区间及其之前的位置，因为这些位置的重放历史已不完整。
+    fn require_uncleaned_generation_target(&self, target: Seq) -> Result<(), DomainError> {
+        if self
+            .metadata
+            .cleaned_history
+            .as_ref()
+            .is_some_and(|history| history.ranges.iter().any(|range| target <= range.through))
+        {
+            return Err(DomainError::InvalidGenerationInput {
+                field: "cleaned_history_target",
+            });
+        }
+        // Once history was cleaned, a regenerated session must retain its current compaction.
+        // 清理历史后，重新生成的会话必须保留当前压缩节点。
+        if self.metadata.cleaned_history.is_some()
+            && self.compactions.iter().any(|node| {
+                Some(node.compaction_id) == self.runtime_lock.current_compaction_id
+                    && target <= node.api_stats_seq
+            })
+        {
+            return Err(DomainError::InvalidGenerationInput {
+                field: "before_active_compaction",
+            });
+        }
+        Ok(())
     }
 
     /// Builds metadata whose semantic fields are complete and whose physical split map is unpublished.

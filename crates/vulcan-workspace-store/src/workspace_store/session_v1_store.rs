@@ -150,6 +150,57 @@ pub struct SessionV1StorageLocator {
 }
 
 impl SessionV1StorageLocator {
+    /// Reads the metadata that publishes the display history coverage.
+    /// 读取发布展示历史覆盖信息的元数据。
+    pub fn cleaned_history_metadata(
+        &self,
+    ) -> Result<(MetadataDocument, bool), SessionV1StoreError> {
+        // Only the small runtime document is needed to discover an active compaction.
+        // 只需小型运行时文档即可发现生效压缩。
+        let metadata = self.read_indexed_metadata()?;
+        // Read the runtime generation selected by the same metadata.
+        // 读取同一元数据选定的运行时代次。
+        let runtime = super::session_v1::documents::read_runtime(
+            &self.layout.runtime_path(metadata.active_context_generation),
+        )?;
+        Ok((metadata, runtime.current_compaction_id.is_some()))
+    }
+
+    /// Reads the exact display revision selected by a generation builder.
+    /// 读取生成构建器选中的精确展示修订。
+    pub fn read_cleaned_history_version(
+        &self,
+        publication: &vulcan_session_core::v1::history_cleanup::HistoryPublication,
+    ) -> Result<vulcan_session_core::v1::history_cleanup::CleanedHistory, SessionV1StoreError> {
+        Ok(super::session_v1::history_cleanup::read_history_version(
+            &self.layout,
+            publication,
+        )?)
+    }
+
+    /// Publishes local cleanup of a complete range with the caller holding the session writer.
+    /// 调用方持有会话写入器时，发布完整范围的本地清理。
+    pub fn publish_history_cleanup(
+        &self,
+        document: &SessionDocument,
+        through: Seq,
+    ) -> Result<SessionDocument, SessionV1StoreError> {
+        super::session_v1::history_cleanup::publish_cleanup(&self.layout, document, through)
+            .map(|(replacement, _)| replacement)
+            .map_err(SessionV1StoreError::from)
+    }
+
+    /// Deletes display records by independent IDs while the session writer is held.
+    /// 持有会话写入器时按独立标识删除展示记录。
+    pub fn delete_cleaned_history(
+        &self,
+        ids: &std::collections::BTreeSet<uuid::Uuid>,
+    ) -> Result<MetadataDocument, SessionV1StoreError> {
+        super::session_v1::history_cleanup::delete_history(&self.layout, ids)
+            .map(|(metadata, _)| metadata)
+            .map_err(SessionV1StoreError::from)
+    }
+
     /// Checks the exact metadata file without parsing it or changing storage.
     /// 检查精确元数据文件，不解析或修改存储。
     /// Returns false only for a missing path; malformed file types and I/O failures remain errors.
@@ -686,6 +737,9 @@ pub struct SessionV1EventRange {
 /// 创建一个带索引的 V1 会话所需的借用输入。
 #[derive(Debug)]
 pub struct CreateSessionV1Request<'a> {
+    /// Independent display history copied into a fork's staging tree.
+    /// 复制到分叉暂存树的独立展示历史。
+    pub cleaned_history: Option<&'a vulcan_session_core::v1::history_cleanup::CleanedHistory>,
     /// Owning project id stored only in the lightweight index.
     /// 仅存于轻量索引中的所属项目 ID。
     pub project_id: &'a str,
@@ -1439,13 +1493,14 @@ where
     let metadata = if locator.layout.session_dir().exists() {
         verify_existing()?
     } else {
-        match create_session(
+        match super::session_v1::writer::create_session_with_history(
             &locator.layout,
             request.metadata,
             request.runtime_lock,
             request.metadata.updated_at_ms,
             request.compactions,
             request.events,
+            request.cleaned_history,
         ) {
             Ok(metadata) => metadata,
             Err(_error) if locator.layout.session_dir().exists() => verify_existing()?,
@@ -2289,6 +2344,7 @@ connection.close()
         runtime_lock: &'a RuntimeLock,
     ) -> CreateSessionV1Request<'a> {
         CreateSessionV1Request {
+            cleaned_history: None,
             project_id: "project-id",
             storage_partition: SESSION_V1_STORAGE_PARTITION,
             date_bucket: "2026-08-27",

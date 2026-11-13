@@ -792,6 +792,7 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
     // date_bucket 通过 service-kernel 现有 time 依赖从给定时间戳派生，而不接受调用方路径文本。
     let date_bucket = session_v1_date_bucket(now_ms)?;
     let request = CreateSessionV1Request {
+        cleaned_history: None,
         project_id: &project_id,
         storage_partition: SESSION_V1_STORAGE_PARTITION,
         date_bucket: &date_bucket,
@@ -890,7 +891,16 @@ pub(crate) async fn create_or_get_forked_session_v1(
         });
     }
     let date_bucket = session_v1_date_bucket(request.now_ms)?;
+    // A fork copies display history into its own staged directory, independently of the source file.
+    // 分叉将展示历史复制进自己的暂存目录，独立于来源文件。
+    let cleaned_history = output
+        .metadata
+        .cleaned_history
+        .as_ref()
+        .map(|publication| source_locator.read_cleaned_history_version(publication))
+        .transpose()?;
     let storage_request = CreateSessionV1Request {
+        cleaned_history: cleaned_history.as_ref(),
         project_id: source_locator.project_id(),
         storage_partition: SESSION_V1_STORAGE_PARTITION,
         date_bucket: &date_bucket,

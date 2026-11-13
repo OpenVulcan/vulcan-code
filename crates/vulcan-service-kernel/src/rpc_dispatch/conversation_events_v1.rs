@@ -2,6 +2,9 @@
 //! V1 会话事件 RPC 路由。
 
 use super::*;
+use crate::conversation_history_cleanup::{
+    ConversationHistoryRequest, service_conversation_history,
+};
 use vulcan_service_api::{
     ConversationEditGenerationV1Request, ConversationEventHydrationV1Request,
     ConversationEventPageV1Request, ConversationEventReconnectV1Request,
@@ -17,6 +20,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_session_event_reconnect_v1",
     "service_edit_conversation_generation_v1",
     "service_fork_conversation_generation_v1",
+    "service_conversation_history_v1",
 ];
 
 /// Dispatches one V1 conversation-event RPC with strict whole-request parsing.
@@ -74,6 +78,13 @@ pub(super) async fn dispatch(
                 app,
                 state,
                 parse_request::<ConversationForkGenerationV1Request>(params, method)?,
+            )
+            .await,
+        ),
+        "service_conversation_history_v1" => rpc_json_result(
+            service_conversation_history(
+                state,
+                parse_request::<ConversationHistoryRequest>(params, method)?,
             )
             .await,
         ),
