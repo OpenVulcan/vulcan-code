@@ -65,7 +65,7 @@ impl OwnershipLock {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent).map_err(&io)?;
+            fs::create_dir_all(parent).map_err(io)?;
         }
         let owner_path = owner_record_path(&lock_path);
         let file = OpenOptions::new()
@@ -74,7 +74,7 @@ impl OwnershipLock {
             .create(true)
             .truncate(false)
             .open(&lock_path)
-            .map_err(&io)?;
+            .map_err(io)?;
         if let Err(error) = fs4::FileExt::try_lock(&file) {
             return Err(match error {
                 fs4::TryLockError::WouldBlock => OwnershipLockError::Held {
@@ -86,12 +86,12 @@ impl OwnershipLock {
         }
         // The already-held file remains content-free on Windows as well as Unix.
         // Windows 与 Unix 上，被持有的文件均保持无内容。
-        let mut record = File::create(&owner_path).map_err(&io)?;
+        let mut record = File::create(&owner_path).map_err(io)?;
         record
             .write_all(owner.as_bytes())
             .and_then(|()| record.write_all(b"\n"))
             .and_then(|()| record.flush())
-            .map_err(&io)?;
+            .map_err(io)?;
         Ok(Self {
             lock_path,
             owner_path,

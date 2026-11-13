@@ -223,10 +223,7 @@ impl Engine {
                 "The model returned an unexpected logit shape.",
             ));
         }
-        Ok(scores
-            .chunks_exact(3)
-            .map(|row| [row[0], row[1], row[2]])
-            .collect())
+        Ok(scores.as_chunks::<3>().0.to_vec())
     }
 }
 

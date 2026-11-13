@@ -3455,7 +3455,9 @@ fn decode_generic_hexadecimal_bytes(value: &str, index: usize) -> Result<Vec<u8>
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             // Each pair is ASCII by construction only when it is a valid hexadecimal byte.
             // 每个二元组仅在构成有效十六进制字节时才是合法 ASCII。

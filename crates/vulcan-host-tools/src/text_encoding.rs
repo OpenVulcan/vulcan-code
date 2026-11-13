@@ -484,11 +484,15 @@ fn unicode_pattern_encoding(bytes: &[u8]) -> Option<TextEncoding> {
     if bytes.len() >= 8 && bytes.len().is_multiple_of(4) {
         let units = bytes.len() / 4;
         let le_hits = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|chunk| chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 0)
             .count();
         let be_hits = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|chunk| chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0)
             .count();
         if le_hits.saturating_mul(4) >= units.saturating_mul(3) {
@@ -500,8 +504,18 @@ fn unicode_pattern_encoding(bytes: &[u8]) -> Option<TextEncoding> {
     }
     if bytes.len() >= 4 && bytes.len().is_multiple_of(2) {
         let units = bytes.len() / 2;
-        let le_hits = bytes.chunks_exact(2).filter(|chunk| chunk[1] == 0).count();
-        let be_hits = bytes.chunks_exact(2).filter(|chunk| chunk[0] == 0).count();
+        let le_hits = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|chunk| chunk[1] == 0)
+            .count();
+        let be_hits = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|chunk| chunk[0] == 0)
+            .count();
         if le_hits.saturating_mul(4) >= units.saturating_mul(3) {
             return Some(TextEncoding::Utf16Le);
         }
@@ -548,12 +562,14 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, TextCodecEr
         ));
     }
     let units = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| {
             if little_endian {
-                u16::from_le_bytes([chunk[0], chunk[1]])
+                u16::from_le_bytes(*chunk)
             } else {
-                u16::from_be_bytes([chunk[0], chunk[1]])
+                u16::from_be_bytes(*chunk)
             }
         })
         .collect::<Vec<_>>();
@@ -575,11 +591,11 @@ fn decode_utf32(bytes: &[u8], little_endian: bool) -> Result<String, TextCodecEr
         ));
     }
     let mut text = String::new();
-    for chunk in bytes.chunks_exact(4) {
+    for chunk in bytes.as_chunks::<4>().0 {
         let scalar = if little_endian {
-            u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+            u32::from_le_bytes(*chunk)
         } else {
-            u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+            u32::from_be_bytes(*chunk)
         };
         let character = char::from_u32(scalar).ok_or_else(|| {
             TextCodecError::new(

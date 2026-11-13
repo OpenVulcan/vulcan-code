@@ -905,25 +905,25 @@ pub(crate) fn http_failure(
     let public_field = |value: String| {
         crate::provider_tool_execution::sanitize_provider_diagnostic_text(value.as_str())
     };
-    let public_upstream_message = upstream_message.map(&public_field);
+    let public_upstream_message = upstream_message.map(public_field);
     ProviderExecutionFailure {
         host_http_message: None,
         error: Box::new(AiExecutionError {
             category,
             subcategory: error_type
                 .map(str::to_string)
-                .map(&public_field)
+                .map(public_field)
                 .or_else(|| Some(String::from("http"))),
             stage: String::from("response_headers"),
             http_status: Some(status),
             transport: Some(AiTransportKind::Http),
             websocket_close_code: None,
-            upstream_code: upstream_code.map(&public_field),
-            upstream_type: error_type.map(str::to_string).map(&public_field),
+            upstream_code: upstream_code.map(public_field),
+            upstream_type: error_type.map(str::to_string).map(public_field),
             upstream_parameter: error
                 .and_then(|value| value.get("param").and_then(Value::as_str))
                 .map(str::to_string)
-                .map(&public_field),
+                .map(public_field),
             upstream_message: public_upstream_message.clone(),
             request_id: parsed
                 .as_ref()
@@ -934,7 +934,7 @@ pub(crate) fn http_failure(
                         .or_else(|| value.pointer("/error/request_id").and_then(Value::as_str))
                         .map(str::to_string)
                 })
-                .map(&public_field),
+                .map(public_field),
             provider_id: None,
             entry_id: None,
             model_id: parsed
@@ -945,7 +945,7 @@ pub(crate) fn http_failure(
                         .and_then(Value::as_str)
                         .map(str::to_string)
                 })
-                .map(&public_field),
+                .map(public_field),
             message: public_upstream_message.unwrap_or_else(|| {
                 if body.is_empty() {
                     format!("Provider returned HTTP {status} with an empty error response.")
@@ -1055,16 +1055,16 @@ pub(crate) fn sanitize_ai_execution_error(
         let redacted = redact_exact_credential(value.as_str(), secret);
         crate::provider_tool_execution::sanitize_provider_diagnostic_text(redacted.as_str())
     };
-    error.subcategory = error.subcategory.take().map(&sanitize);
+    error.subcategory = error.subcategory.take().map(sanitize);
     error.stage = sanitize(std::mem::take(&mut error.stage));
-    error.upstream_code = error.upstream_code.take().map(&sanitize);
-    error.upstream_type = error.upstream_type.take().map(&sanitize);
-    error.upstream_parameter = error.upstream_parameter.take().map(&sanitize);
-    error.upstream_message = error.upstream_message.take().map(&sanitize);
-    error.request_id = error.request_id.take().map(&sanitize);
-    error.provider_id = error.provider_id.take().map(&sanitize);
-    error.entry_id = error.entry_id.take().map(&sanitize);
-    error.model_id = error.model_id.take().map(&sanitize);
+    error.upstream_code = error.upstream_code.take().map(sanitize);
+    error.upstream_type = error.upstream_type.take().map(sanitize);
+    error.upstream_parameter = error.upstream_parameter.take().map(sanitize);
+    error.upstream_message = error.upstream_message.take().map(sanitize);
+    error.request_id = error.request_id.take().map(sanitize);
+    error.provider_id = error.provider_id.take().map(sanitize);
+    error.entry_id = error.entry_id.take().map(sanitize);
+    error.model_id = error.model_id.take().map(sanitize);
     error.message = sanitize(std::mem::take(&mut error.message));
 }
 

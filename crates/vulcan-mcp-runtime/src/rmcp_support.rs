@@ -221,7 +221,7 @@ fn decode_standard_base64_bounded(data: &str) -> Result<Vec<u8>, String> {
     }
 
     let mut decoded = Vec::with_capacity(decoded_len);
-    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+    for (index, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let is_last = index + 1 == bytes.len() / 4;
         let first = decode_base64_value(chunk[0])?;
         let second = decode_base64_value(chunk[1])?;
