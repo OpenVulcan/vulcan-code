@@ -348,7 +348,10 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
  * spread the remaining cards apart with a gap between them. */
 /* 行在顶部紧排：折叠正文以最高高度作为最小高度下限，若行被拉伸，剩余卡片之间会被拉开出现空隙。 */
 .vk-tool-seq-body { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: calc(var(--vk-u) * 3); min-width: 0; }
-.vk-tool-seq-slot { min-width: 0; }
+/* Skipped slots cost no layout or paint yet stay searchable and in the accessibility tree; the
+ * auto size remembers each card's last rendered height so the transcript does not drift on unskip. */
+.vk-tool-seq-slot:not([data-leaving]) { min-width: 0; content-visibility: auto; contain-intrinsic-size: auto 3.5rem; }
+.vk-tool-seq-slot[data-leaving] { min-width: 0; }
 /* A 1-for-1 replacement in a folded run reads as a ticker: the old card slides out of the top while the
  * new one rises into place, both on one easing curve so they move together. The old card takes no layout
  * space, so the body height never doubles. The old card fades out before the new one fades fully in, so
