@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { copyFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -82,7 +82,7 @@ test('install.sh picks the platform, falls back between origins, verifies and pa
   const run = (env, args = ['--mode', 'terminal', '--yes']) => spawnSync('sh', [path.join(out, 'install.sh'), ...args], {
     encoding: 'utf8',
     input: '',
-    env: { ...process.env, FAKE_TRANSLATED: '0', ...env, PATH: `${fakes}:${process.env.PATH}`, TMPDIR: root },
+    env: { ...process.env, FAKE_TRANSLATED: '0', HOME: root, XDG_DATA_HOME: '', ...env, PATH: `${fakes}:${process.env.PATH}`, TMPDIR: root },
   });
 
   const linux = run({ FAKE_OS: 'Linux', FAKE_MACHINE: 'aarch64' });
@@ -102,6 +102,28 @@ test('install.sh picks the platform, falls back between origins, verifies and pa
   assert.equal(tampered.status, 1);
   assert.doesNotMatch(tampered.stdout, /tampered/);
   assert.match(tampered.stderr, /does not match its published SHA-256/);
+
+  const installedRoot = path.join(root, 'custom install');
+  const setupDir = path.join(installedRoot, 'setup');
+  const program = path.join(setupDir, 'vulcan-code-setup');
+  await mkdir(setupDir, { recursive: true });
+  await writeFile(path.join(setupDir, 'installation.json'), '{}');
+  await writeFile(program, '#!/bin/sh\nprintf "<%s>\\n" "$@"\nexit 7\n', { mode: 0o755 });
+  const env = { FAKE_OS: 'Linux', FAKE_MACHINE: 'aarch64' };
+  const reused = run(env, ['--prefix', installedRoot, '--yes']);
+  assert.equal(reused.status, 7, reused.stderr);
+  assert.deepEqual(reused.stdout.trim().split('\n'), ['<--prefix>', `<${installedRoot}>`, '<--yes>', '<--self-update>']);
+  assert.doesNotMatch(reused.stderr, /Downloading/);
+  const optedOut = run(env, ['update', `--prefix=${installedRoot}`, '--no-self-update']);
+  assert.doesNotMatch(optedOut.stdout, /<--self-update>/);
+  assert.doesNotMatch(run(env, ['status', '--prefix', installedRoot]).stdout, /<--self-update>/);
+
+  const data = path.join(root, 'xdg');
+  await mkdir(data);
+  await rename(installedRoot, path.join(data, 'vulcan-code'));
+  const fromXdg = run({ ...env, XDG_DATA_HOME: data }, []);
+  assert.equal(fromXdg.status, 7, fromXdg.stderr);
+  assert.equal(fromXdg.stdout.trim(), '<--self-update>');
 }));
 
 // The Windows script is checked in every PowerShell this machine has; 5.1 is the one that matters most.
@@ -144,30 +166,42 @@ test('install.ps1 verifies the setup program and passes its arguments and exit c
     });
     const [, unsigned] = await generate(path.join(root, 'unsigned'), null);
     const [, wrongSigner] = await generate(path.join(root, 'signed'), '0'.repeat(40));
+    // Keep download tests independent of a real setup installation on the test machine.
+    // 让下载测试独立于测试机器上实际安装的安装器。
+    const freshPrefix = `--prefix=${path.join(root, 'fresh')}`;
+    const installedRoot = path.join(root, 'existing installation');
+    const setupDir = path.join(installedRoot, 'setup');
+    await mkdir(setupDir, { recursive: true });
+    await writeFile(path.join(setupDir, 'installation.json'), '{}');
+    await copyFile(cmd, path.join(setupDir, 'vulcan-code-setup.exe'));
     for (const shell of powerShells) {
       const run = (script, ...args) => runAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args]);
-      const passed = await run(unsigned, '/d', '/c', 'echo', 'hello');
+      const passed = await run(unsigned, '/d', '/c', 'echo', 'hello', freshPrefix);
       assert.equal(passed.status, 0, `${shell}: ${passed.stderr}`);
       assert.match(passed.stdout, /hello/);
       assert.match(passed.stdout + passed.stderr, /trying the next origin/);
-      const failed = await run(unsigned, '/d', '/c', 'exit', '5');
+      const failed = await run(unsigned, '/d', '/c', 'exit /b 5', '&', 'rem', freshPrefix);
       assert.notEqual(failed.status, 0, shell);
       assert.match(failed.stderr + failed.stdout, /exited with 5/);
       // A cancelled setup program (CANCELLED_EXIT_CODE) changed nothing, so the script ends without a failure.
       // 被取消的安装器（CANCELLED_EXIT_CODE）未做任何改动，因此脚本结束时不报告失败。
-      const cancelled = await run(unsigned, '/d', '/c', 'exit', '130');
+      const cancelled = await run(unsigned, '/d', '/c', 'exit /b 130', '&', 'rem', freshPrefix);
       assert.equal(cancelled.status, 0, `${shell}: ${cancelled.stderr}`);
       assert.doesNotMatch(cancelled.stderr + cancelled.stdout, /exited with/);
-      const refused = await run(wrongSigner, '/d', '/c', 'echo', 'hello');
+      const refused = await run(wrongSigner, '/d', '/c', 'echo', 'hello', freshPrefix);
       assert.notEqual(refused.status, 0, shell);
       assert.doesNotMatch(refused.stdout, /hello/);
       assert.match(refused.stderr + refused.stdout, /not signed by the Vulcan Code certificate/);
+      const reused = await run(wrongSigner, '/d', '/c', 'echo', 'installed', '--prefix', installedRoot);
+      assert.equal(reused.status, 0, `${shell}: ${reused.stderr}`);
+      assert.match(reused.stdout, /installed/);
+      assert.doesNotMatch(reused.stdout, /Downloading/);
       // After the setup program, the session that ran the script has every user PATH entry; the
       // user PATH is only read here.
       // 安装器运行后，运行脚本的会话包含每个用户 PATH 条目；这里只读取用户 PATH。
       const session = await runAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', [
         `$env:Path = "$env:SystemRoot\\System32"`,
-        `& '${unsigned.replaceAll("'", "''")}' /d /c echo hello`,
+        `& '${unsigned.replaceAll("'", "''")}' /d /c echo hello '${freshPrefix.replaceAll("'", "''")}'`,
         `$expected = ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | Where-Object { $_ } | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') }) -join '|'`,
         `"EXPECTED=$expected"`,
         `"SESSION=$env:Path"`,
@@ -180,7 +214,7 @@ test('install.ps1 verifies the setup program and passes its arguments and exit c
       }
     }
     await copyFile(path.join(setups, setupProgramName(version, 'linux-x64')), path.join(setups, setupProgramName(version, 'windows-x64')));
-    const tampered = await runAsync(powerShells[0], ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', unsigned, '/d', '/c', 'echo', 'hello']);
+    const tampered = await runAsync(powerShells[0], ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', unsigned, '/d', '/c', 'echo', 'hello', freshPrefix]);
     assert.notEqual(tampered.status, 0);
     assert.match(tampered.stderr + tampered.stdout, /does not match its published SHA-256/);
   } finally {

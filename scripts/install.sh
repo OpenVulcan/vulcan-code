@@ -1,17 +1,12 @@
 #!/bin/sh
-# Downloads the Vulcan Code setup program @@VERSION@@ for this computer, checks its SHA-256,
-# and runs it; the setup program then verifies everything it installs with the release signing key.
-# 下载适合本机的 Vulcan Code 安装器 @@VERSION@@，校验其 SHA-256 后运行；安装器再用发布签名公钥校验
-# 它安装的全部内容。
+# Runs the installed setup program, or downloads @@VERSION@@ and checks its SHA-256 on a fresh install.
+# 运行现有安装器；首次安装时下载 @@VERSION@@ 并校验其 SHA-256。
 #
 #   curl -fsSL https://static.openvulcan.com/vulcancode/install.sh | sh
 #   curl -fsSL https://static.openvulcan.com/vulcancode/install.sh | sh -s -- --no-gui --yes
 #
-# Every argument goes to vulcan-code-setup unchanged; `--help` lists them. This file is a template:
-# scripts/entry-scripts.mjs fills in the version, the origins and the digests when a setup version is
-# published.
-# 每个参数原样交给 vulcan-code-setup；`--help` 列出全部参数。本文件是模板：发布安装器版本时由
-# scripts/entry-scripts.mjs 填入版本、下载源与摘要。
+# `--help` lists the setup program's arguments. scripts/entry-scripts.mjs fills this template.
+# `--help` 列出安装器参数。scripts/entry-scripts.mjs 填充本模板。
 
 set -eu
 
@@ -23,11 +18,62 @@ fail() {
     exit 1
 }
 
+# Under `curl | sh`, use the terminal instead of passing the script stream to the installer.
+# 在 `curl | sh` 下使用终端，避免把脚本输入流交给安装器。
+run_setup() {
+    if [ -t 0 ]; then
+        "$Program" "$@"
+    elif (exec < /dev/tty) 2> /dev/null; then
+        "$Program" "$@" < /dev/tty
+    else
+        "$Program" "$@" < /dev/null
+    fi
+}
+
 case "$(uname -s)" in
     Linux) Os=linux ;;
     Darwin) Os=macos ;;
     *) fail "unsupported operating system $(uname -s); on Windows use install.ps1" ;;
 esac
+
+# Locate the same root as paths::default_root and the --prefix option in args::parse.
+# 按 paths::default_root 和 args::parse 的 --prefix 选项定位安装目录。
+Root=
+case "$Os:${XDG_DATA_HOME:-}" in
+    linux:/*) Root="$XDG_DATA_HOME/vulcan-code" ;;
+    linux:*) if [ -n "${HOME:-}" ]; then Root="$HOME/.local/share/vulcan-code"; fi ;;
+    macos:*) if [ -n "${HOME:-}" ]; then Root="$HOME/Library/Application Support/VulcanCode"; fi ;;
+esac
+case "${1:-install}" in
+    install|update|-*) AutoUpdate=1 ;;
+    *) AutoUpdate=0 ;;
+esac
+ValueFor=
+for Arg do
+    if [ -n "$ValueFor" ]; then
+        if [ "$ValueFor" = --prefix ]; then Root="$Arg"; fi
+        ValueFor=
+        continue
+    fi
+    case "$Arg" in
+        --prefix=*) Root=${Arg#--prefix=} ;;
+        --prefix|--mode|--port-range|--with|--channel|--route) ValueFor="$Arg" ;;
+        --self-update|--no-self-update) AutoUpdate=0 ;;
+    esac
+done
+if [ -n "$Root" ] && [ -z "$ValueFor" ]; then
+    Program="$Root/setup/vulcan-code-setup"
+    if [ ! -L "$Root" ] && [ ! -L "$Root/setup" ] && [ -f "$Root/setup/installation.json" ] &&
+        [ ! -L "$Root/setup/installation.json" ] && [ -f "$Program" ] && [ -x "$Program" ] && [ ! -L "$Program" ]; then
+        printf 'Starting the installed Vulcan Code setup program\n' >&2
+        # Older installed programs need the explicit switch to update without asking.
+        # 旧安装器需要显式开关才能自动更新。
+        if [ "$AutoUpdate" = 1 ]; then set -- "$@" --self-update; fi
+        run_setup "$@"
+        exit "$?"
+    fi
+fi
+
 Machine=$(uname -m)
 case "$Machine" in
     x86_64|amd64) Arch=x64 ;;
@@ -89,15 +135,4 @@ Actual=$(sha256_of "$Program")
 chmod 755 "$Program"
 printf 'Starting the setup program %s\n' "$Version" >&2
 
-# Under `curl | sh` standard input is this script, so the setup program reads the terminal instead;
-# without a terminal it needs --yes.
-# 在 `curl | sh` 下标准输入是本脚本，因此安装器改为读取终端；没有终端时需要 --yes。
-Status=0
-if [ -t 0 ]; then
-    "$Program" "$@" || Status=$?
-elif (exec < /dev/tty) 2> /dev/null; then
-    "$Program" "$@" < /dev/tty || Status=$?
-else
-    "$Program" "$@" < /dev/null || Status=$?
-fi
-exit "$Status"
+run_setup "$@"

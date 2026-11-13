@@ -216,6 +216,7 @@ pub fn location_lines<'a>(
                 Location::DesktopShortcut(path) => ("setup.writes.desktopShortcut", Some(path)),
                 Location::AppBundle(path) => ("setup.writes.appBundle", Some(path)),
                 Location::UserPath(path) => ("setup.writes.userPath", Some(path)),
+                Location::ShellPath(path) => ("setup.writes.shellPath", Some(path)),
                 Location::UninstallEntry => ("setup.writes.uninstallEntry", None),
                 Location::UserService => (service, None),
                 Location::Linger => ("setup.writes.linger", None),

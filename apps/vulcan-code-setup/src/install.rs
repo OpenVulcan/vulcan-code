@@ -646,6 +646,9 @@ fn apply(
     root::remove_legacy_generations(&root, keep);
     drop(lock);
 
+    if !choices.gui {
+        integrate::headless_notes(&plan, &installed_version, &mut recorder);
+    }
     Ok(Outcome {
         platform,
         action,

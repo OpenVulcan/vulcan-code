@@ -49,6 +49,7 @@
   "setup.writes.desktopShortcut": "桌面快捷方式 {path}",
   "setup.writes.appBundle": "应用程序 {path}",
   "setup.writes.userPath": "用户 PATH 中的 {path}",
+  "setup.writes.shellPath": "在 {path} 中导出 PATH",
   "setup.writes.uninstallEntry": "“设置 > 应用”中用于卸载的条目",
   "setup.writes.userService": "systemd 用户单元 vulcan-code.service",
   "setup.writes.serviceLaunchAgent": "当前用户的登录项（launchd 代理）",

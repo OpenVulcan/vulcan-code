@@ -89,7 +89,7 @@ pub fn systemd_user_unit() -> Result<PathBuf, String> {
 /// 安装器不使用 workspace-hack，因此无法使用 `vulcan_runtime_assets::user_home_dir`；其测试从不解析
 /// 用户路径。
 #[allow(clippy::disallowed_methods)]
-fn home() -> Result<PathBuf, String> {
+pub(crate) fn home() -> Result<PathBuf, String> {
     dirs::home_dir().ok_or_else(|| String::from("cannot find the home directory"))
 }
 

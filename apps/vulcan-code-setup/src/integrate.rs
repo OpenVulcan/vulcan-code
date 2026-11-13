@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use vulcan_install_core::apparmor;
+use vulcan_install_core::install_root::CURRENT_LINK;
 use vulcan_install_core::names::Platform;
 
 use crate::paths;
@@ -55,6 +56,10 @@ pub const DESKTOP_COMMAND: &str = "vulcan-code";
 /// Command of the setup program on PATH.
 /// PATH 上安装器的命令。
 pub const SETUP_COMMAND: &str = "vulcan-code-setup";
+
+/// Command of Core on the Unix user PATH.
+/// Unix 用户 PATH 上的 Core 命令。
+const SERVICE_COMMAND: &str = "vulcan-code-service";
 
 /// Directory of the PATH forwarder below a Windows root; `vulcan-code-launcher` finds the root
 /// from it.
@@ -160,7 +165,7 @@ impl Plan<'_> {
     fn launchers(&self, layout: &Layout) -> Vec<(&'static str, String)> {
         let current = |entry: &str| format!("current/{entry}");
         let mut launchers = vec![(SETUP_COMMAND, format!("{SETUP_DIR}/{SETUP_PROGRAM}"))];
-        launchers.push(("vulcan-code-service", current(&layout.service_executable)));
+        launchers.push((SERVICE_COMMAND, current(&layout.service_executable)));
         if let Some(tui) = &layout.tui_executable {
             launchers.push((TUI_COMMAND, current(tui)));
         }
@@ -196,6 +201,10 @@ impl Plan<'_> {
         } else {
             if self.path {
                 locations.push(Location::Commands(paths::bin_dir()?));
+                #[cfg(unix)]
+                for profile in crate::shell_path::profiles()? {
+                    locations.push(Location::ShellPath(profile.path));
+                }
             }
             if self.gui && self.menu {
                 locations.push(if self.platform.is_macos() {
@@ -246,6 +255,10 @@ pub enum Location {
     /// This directory on the Windows user PATH.
     /// Windows 用户 PATH 中的此目录。
     UserPath(PathBuf),
+    /// Shell startup file receiving the PATH export.
+    /// 写入 PATH 导出的 Shell 启动文件。
+    #[cfg_attr(not(unix), allow(dead_code))]
+    ShellPath(PathBuf),
     /// The Windows uninstall entry.
     /// Windows 卸载项。
     UninstallEntry,
@@ -269,6 +282,7 @@ impl std::fmt::Display for Location {
             }
             Self::DesktopShortcut(path) => write!(formatter, "desktop shortcut {}", path.display()),
             Self::UserPath(dir) => write!(formatter, "user PATH: {}", dir.display()),
+            Self::ShellPath(path) => write!(formatter, "PATH export in {}", path.display()),
             Self::UninstallEntry => {
                 formatter.write_str("an entry in Settings > Apps for uninstalling")
             }
@@ -417,6 +431,87 @@ fn set_port_range(
     let report = run_service(&version.service(), &[SET_PORT_RANGE, range])?;
     recorder.notes.push(report);
     Ok(())
+}
+
+/// Appends copyable CLI instructions and Core's configured WebUI port to the completed run.
+/// 为已完成的安装追加可直接复制的 CLI 操作说明及 Core 配置的 WebUI 端口。
+pub fn headless_notes(plan: &Plan<'_>, version: &Version, recorder: &mut Recorder<'_>) {
+    let service = if plan.platform.is_windows() {
+        format!(
+            "& '{}'",
+            version.service().display().to_string().replace('\'', "''")
+        )
+    } else {
+        let service = plan
+            .root
+            .join(CURRENT_LINK)
+            .join(&version.layout.service_executable);
+        #[cfg(unix)]
+        let command = crate::shell_path::quote(&service.display().to_string());
+        #[cfg(not(unix))]
+        let command = service.display().to_string();
+        if let Ok(bin) = paths::bin_dir()
+            && recorder.items.contains(&Item::File {
+                path: bin.join(SERVICE_COMMAND),
+            })
+        {
+            recorder
+                .notes
+                .push(format!("Service shortcut in new shells: {SERVICE_COMMAND}"));
+        }
+        command
+    };
+    recorder.notes.push(format!(
+        "Register and start the user service: {service} {INSTALL_USER_SERVICE}"
+    ));
+    recorder.notes.push(format!(
+        "Remove user service registration: {service} {UNINSTALL_USER_SERVICE}"
+    ));
+    if plan.platform.is_macos() {
+        recorder.notes.push(String::from(
+            "Start the registered service: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.openvulcan.vulcancode.service.plist",
+        ));
+        recorder.notes.push(String::from(
+            "Stop the registered service: launchctl bootout gui/$(id -u)/com.openvulcan.vulcancode.service",
+        ));
+    } else if !plan.platform.is_windows() {
+        recorder.notes.push(String::from(
+            "Start: systemctl --user start vulcan-code.service",
+        ));
+        recorder.notes.push(String::from(
+            "Stop: systemctl --user stop vulcan-code.service",
+        ));
+        recorder.notes.push(String::from(
+            "Status: systemctl --user status vulcan-code.service",
+        ));
+    }
+    recorder.notes.push(format!(
+        "Run in the foreground: {service} --headless (stop with Ctrl+C)."
+    ));
+
+    match Description::read(&version.dir) {
+        Ok(description) => match description.port_range {
+            Some(range) if range.first == range.last => {
+                recorder.notes.push(format!(
+                    "Configured WebUI address: http://127.0.0.1:{}",
+                    range.first
+                ));
+            }
+            Some(range) => recorder.notes.push(format!(
+                "WebUI: first available loopback port in {}–{}. Try http://127.0.0.1:{} first.",
+                range.first, range.last, range.first
+            )),
+            None => recorder.notes.push(String::from(
+                "The Core did not report a configured WebUI port range.",
+            )),
+        },
+        Err(error) => recorder
+            .notes
+            .push(format!("Could not read the configured WebUI port: {error}")),
+    }
+    recorder.notes.push(String::from(
+        "The service startup output shows the bound WebUI URL. From another computer, forward that loopback port over SSH.",
+    ));
 }
 
 /// The Windows integration: the PATH forwarder, the user PATH, the desktop launcher and its
@@ -597,13 +692,22 @@ fn integrate_unix(
                 ));
             }
         }
-        let on_path = std::env::var_os("PATH")
-            .is_some_and(|value| std::env::split_paths(&value).any(|dir| dir == bin));
-        if !on_path {
-            recorder.notes.push(format!(
-                "Add {bin} to PATH to use the commands; for this shell: export PATH=\"{bin}:$PATH\"",
-                bin = bin.display()
-            ));
+        #[cfg(unix)]
+        {
+            // Track the resolved file so uninstall can undo the edit even if a dotfile symlink moves.
+            // 记录解析后的文件，使配置的符号链接迁移后仍能撤销修改。
+            for profile in crate::shell_path::profiles()? {
+                let path = crate::shell_path::destination(&profile.path)?;
+                crate::shell_path::install(&profile, &path, plan.root)?;
+                recorder.add(Item::ShellPath { path });
+            }
+            if !std::env::var_os("PATH")
+                .is_some_and(|value| std::env::split_paths(&value).any(|dir| dir == bin))
+            {
+                recorder.notes.push(String::from(
+                    "PATH is configured for new shells. Open a new terminal to use the shortcuts.",
+                ));
+            }
         }
     }
     let Some(desktop) = layout.desktop_executable.as_ref().filter(|_| plan.gui) else {
@@ -1184,6 +1288,10 @@ pub fn remove(
             Ok(())
         }
         Item::UserPath { dir } => remove_user_path(dir),
+        #[cfg(unix)]
+        Item::ShellPath { path } => crate::shell_path::remove(path, root),
+        #[cfg(not(unix))]
+        Item::ShellPath { .. } => Ok(()),
         Item::UninstallEntry { key } => remove_uninstall_entry(key),
         Item::ToastActivator { clsid } => remove_toast_activator(clsid),
         Item::UserService => match version {

@@ -14,6 +14,8 @@ mod root;
 mod screen;
 mod selfupdate;
 mod session;
+#[cfg(unix)]
+mod shell_path;
 pub mod state;
 mod status;
 mod uninstall;
@@ -104,7 +106,6 @@ fn self_update(
         channel,
         route,
         options.common.self_update,
-        options.common.yes,
         arguments,
     )
 }

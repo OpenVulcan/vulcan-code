@@ -49,6 +49,7 @@
   "setup.writes.desktopShortcut": "デスクトップショートカット {path}",
   "setup.writes.appBundle": "アプリケーション {path}",
   "setup.writes.userPath": "ユーザー PATH の {path}",
+  "setup.writes.shellPath": "{path} に PATH のエクスポート",
   "setup.writes.uninstallEntry": "「設定 > アプリ」のアンインストール用エントリ",
   "setup.writes.userService": "systemd ユーザーユニット vulcan-code.service",
   "setup.writes.serviceLaunchAgent": "このユーザーのログイン項目（launchd エージェント）",

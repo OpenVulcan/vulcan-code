@@ -49,6 +49,7 @@
   "setup.writes.desktopShortcut": "바탕 화면 바로 가기 {path}",
   "setup.writes.appBundle": "애플리케이션 {path}",
   "setup.writes.userPath": "사용자 PATH의 {path}",
+  "setup.writes.shellPath": "{path}에 PATH 내보내기",
   "setup.writes.uninstallEntry": "설정 > 앱의 제거 항목",
   "setup.writes.userService": "systemd 사용자 유닛 vulcan-code.service",
   "setup.writes.serviceLaunchAgent": "현재 사용자의 로그인 항목(launchd 에이전트)",

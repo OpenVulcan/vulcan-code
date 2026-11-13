@@ -34,7 +34,7 @@ status     shows what is installed and how to uninstall it
 --menu       a Start menu or application menu entry for the desktop app (default with --gui)
 --desktop-shortcut
              a desktop shortcut for the desktop app (Windows and Linux; off by default)
---path       puts vulcan-tui and vulcan-code-setup on PATH (default)
+--path       puts the installed command shortcuts on PATH (default)
 --service    starts the Core service with your login session, as your own user, so no
              administrator rights are needed (off by default)
 --linger     Linux: keeps the service running after you log out (loginctl enable-linger)
@@ -43,9 +43,8 @@ status     shows what is installed and how to uninstall it
 --channel    stable (default) or preview
 --route      download origins: auto (default), international, or china
 --prefix     installation directory; the platform default is used when omitted
---self-update     updates this setup program first when a newer one is published, without asking
---no-self-update  skips looking for a newer setup program; by default a terminal run asks, and a
-                  run with --yes keeps the current one unless the release requires a newer one
+--self-update     updates and restarts this setup program automatically (default)
+--no-self-update  skips looking for a newer setup program
 --mode, --no-shortcut
              kept from setup 0.1: --mode desktop, terminal or service means --gui, --no-gui, or
              --no-gui --service; --no-shortcut means --no-menu
@@ -81,12 +80,9 @@ pub enum Command {
 /// `install` 与 `update` 是否先把安装器替换为已发布的更新版本。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SelfUpdate {
-    /// Ask on a terminal; with `--yes`, update only when the release requires it.
-    /// 在终端中询问；带 `--yes` 时只在版本要求时更新。
-    #[default]
-    Ask,
     /// Update without asking.
     /// 不询问直接更新。
+    #[default]
     Always,
     /// Do not look for a newer setup program.
     /// 不查找更新的安装器。
@@ -214,6 +210,9 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
     };
     let mut install = InstallOptions::default();
     let mut purge = false;
+    // Keep explicit switches distinct from the default so status and uninstall still reject them.
+    // 区分显式开关与默认值，确保 status 和 uninstall 仍拒绝这两个选项。
+    let mut self_update = None;
     while let Some(argument) = rest.next() {
         let (flag, inline) = match argument.split_once('=') {
             Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
@@ -240,16 +239,7 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
             "-V" | "--version" => return Ok(Command::Version),
             "--self-update" | "--no-self-update" => {
                 switch_only(flag)?;
-                if install.common.self_update != SelfUpdate::Ask {
-                    return Err(String::from(
-                        "--self-update and --no-self-update are given more than once",
-                    ));
-                }
-                install.common.self_update = if on {
-                    SelfUpdate::Always
-                } else {
-                    SelfUpdate::Never
-                };
+                choose(&mut self_update, on, flag)?;
             }
             "-y" | "--yes" => {
                 switch_only(flag)?;
@@ -339,20 +329,35 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
         || install.service.is_some()
         || install.linger.is_some()
         || install.port_range.is_some();
-    let self_update = install.common.self_update != SelfUpdate::Ask;
+    if self_update == Some(false) {
+        install.common.self_update = SelfUpdate::Never;
+    }
     match verb {
         "install" if !purge => Ok(Command::Install(install)),
         "update" if !install_only && !purge => Ok(Command::Update(install.common)),
-        "status" if !install_only && !purge && !self_update => Ok(Command::Status(install.common)),
-        "uninstall" if !install_only && !self_update => Ok(Command::Uninstall(UninstallOptions {
-            common: install.common,
-            purge,
-        })),
+        "status" if !install_only && !purge && self_update.is_none() => {
+            Ok(Command::Status(install.common))
+        }
+        "uninstall" if !install_only && self_update.is_none() => {
+            Ok(Command::Uninstall(UninstallOptions {
+                common: install.common,
+                purge,
+            }))
+        }
         "install" | "update" | "status" | "uninstall" => {
             Err(format!("an option given is not accepted by {verb}"))
         }
         other => Err(format!("unknown command {other}")),
     }
+}
+
+/// Whether a standalone option consumes the following argument in `parse`.
+/// 独立选项在 `parse` 中是否使用紧随其后的参数作为值。
+pub(crate) fn takes_separate_value(argument: &str) -> bool {
+    matches!(
+        argument,
+        "--prefix" | "--mode" | "--port-range" | "--with" | "--channel" | "--route"
+    )
 }
 
 /// Parses a `--route` value.
@@ -397,6 +402,7 @@ mod tests {
              --no-menu --desktop-shortcut --port-range=18000-18029",
         );
         assert!(options.common.yes);
+        assert_eq!(options.common.self_update, SelfUpdate::Always);
         assert_eq!(options.gui, Some(true));
         assert_eq!(options.with.len(), 1);
         assert_eq!(options.channel, Some(Channel::Preview));
@@ -456,7 +462,7 @@ mod tests {
                 common: CommonOptions {
                     yes: true,
                     prefix: None,
-                    self_update: SelfUpdate::Ask,
+                    self_update: SelfUpdate::Always,
                 },
                 purge: true
             }))

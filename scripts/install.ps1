@@ -1,12 +1,11 @@
-# Downloads the Vulcan Code setup program @@VERSION@@ for Windows x64, checks its SHA-256
-# and Authenticode signature, and runs it; the setup program then verifies everything it installs with
-# the release signing key. Runs in Windows PowerShell 5.1 and PowerShell 7.
+# Runs the installed setup program, or downloads @@VERSION@@ and verifies its SHA-256 and
+# Authenticode signature on a fresh install. Runs in Windows PowerShell 5.1 and PowerShell 7.
 #
 #   irm https://static.openvulcan.com/vulcancode/install.ps1 | iex
 #   & ([scriptblock]::Create((irm https://static.openvulcan.com/vulcancode/install.ps1))) --no-gui --yes
 #   powershell -ExecutionPolicy Bypass -File install.ps1 --no-gui --yes
 #
-# Every argument goes to vulcan-code-setup unchanged; --help lists them. This file is a template:
+# --help lists the setup program's arguments. This file is a template:
 # scripts/entry-scripts.mjs fills in the version, the origins, the digest and the signer when a setup version
 # is published. It stays ASCII so Windows PowerShell 5.1 reads it the same in every code page, and it
 # works in a script block so nothing it sets leaks into the session that ran `iex`, except the user PATH
@@ -71,39 +70,79 @@
         }
     }
 
-    $File = "vulcan-code-setup-$Version-windows-x64.exe"
-    $Work = Join-Path ([IO.Path]::GetTempPath()) ('vulcan-code-setup-' + [Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $Work | Out-Null
+    # Match the install root and value-taking arguments in paths::default_root and args::parse.
+    $LocalData = [Environment]::GetFolderPath('LocalApplicationData')
+    $Root = if ($LocalData) { Join-Path $LocalData 'Programs\VulcanCode' }
+    $AutoUpdate = $args.Count -eq 0 -or $args[0] -cin @('install', 'update') -or $args[0] -clike '-*'
+    $ValueFor = $null
+    foreach ($Arg in $args) {
+        if ($ValueFor) {
+            if ($ValueFor -ceq '--prefix') { $Root = $Arg }
+            $ValueFor = $null
+            continue
+        }
+        if ($Arg -clike '--prefix=*') { $Root = $Arg.Substring('--prefix='.Length) }
+        if ($Arg -cin @('--prefix', '--mode', '--port-range', '--with', '--channel', '--route')) { $ValueFor = $Arg }
+        if ($Arg -cin @('--self-update', '--no-self-update')) { $AutoUpdate = $false }
+    }
+    $Program = $null
+    if ($Root -and -not $ValueFor) {
+        $RootPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Root)
+        $SetupDir = Join-Path $RootPath 'setup'
+        $RootItem = Get-Item -LiteralPath $RootPath -ErrorAction SilentlyContinue
+        $SetupDirItem = Get-Item -LiteralPath $SetupDir -ErrorAction SilentlyContinue
+        $State = Get-Item -LiteralPath (Join-Path $SetupDir 'installation.json') -ErrorAction SilentlyContinue
+        $Installed = Get-Item -LiteralPath (Join-Path $SetupDir 'vulcan-code-setup.exe') -ErrorAction SilentlyContinue
+        $ReparsePoint = [IO.FileAttributes]::ReparsePoint
+        if ($RootItem.PSIsContainer -and -not ($RootItem.Attributes -band $ReparsePoint) -and
+            $SetupDirItem.PSIsContainer -and -not ($SetupDirItem.Attributes -band $ReparsePoint) -and
+            $State -and -not $State.PSIsContainer -and -not ($State.Attributes -band $ReparsePoint) -and
+            $Installed -and -not $Installed.PSIsContainer -and -not ($Installed.Attributes -band $ReparsePoint)) {
+            $Program = $Installed.FullName
+        }
+    }
+
+    # Fresh installs and repairs still use the downloaded and verified program.
+    $SetupArgs = @($args)
+    $Work = $null
     try {
-        $Program = Join-Path $Work 'vulcan-code-setup.exe'
-        # The origins are tried in order; the mirror serves the same verified objects.
-        $Fetched = $false
-        foreach ($Origin in $Origins) {
-            Write-Host "Downloading the Vulcan Code setup program $Version from $Origin"
-            try {
-                Receive-Program "$Origin/setup/$Version/$File" $Program
-                $Fetched = $true
-                break
-            } catch {
-                if (-not [Console]::IsOutputRedirected) { Write-Host '' }
-                $Reason = $_.Exception
-                while ($Reason.InnerException) { $Reason = $Reason.InnerException }
-                Write-Warning "Cannot download from $Origin ($($Reason.Message)), trying the next origin"
+        if ($Program) {
+            Write-Host 'Starting the installed Vulcan Code setup program'
+            if ($AutoUpdate) { $SetupArgs += '--self-update' }
+        } else {
+            $File = "vulcan-code-setup-$Version-windows-x64.exe"
+            $Work = Join-Path ([IO.Path]::GetTempPath()) ('vulcan-code-setup-' + [Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $Work | Out-Null
+            $Program = Join-Path $Work 'vulcan-code-setup.exe'
+            # The origins are tried in order; the mirror serves the same verified objects.
+            $Fetched = $false
+            foreach ($Origin in $Origins) {
+                Write-Host "Downloading the Vulcan Code setup program $Version from $Origin"
+                try {
+                    Receive-Program "$Origin/setup/$Version/$File" $Program
+                    $Fetched = $true
+                    break
+                } catch {
+                    if (-not [Console]::IsOutputRedirected) { Write-Host '' }
+                    $Reason = $_.Exception
+                    while ($Reason.InnerException) { $Reason = $Reason.InnerException }
+                    Write-Warning "Cannot download from $Origin ($($Reason.Message)), trying the next origin"
+                }
             }
-        }
-        if (-not $Fetched) { throw "Cannot download $File" }
-        $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Program).Hash.ToLowerInvariant()
-        if ($Actual -ne $Digest) {
-            throw "$File does not match its published SHA-256 (expected $Digest, got $Actual)"
-        }
-        if ($Signer) {
-            $Signature = Get-AuthenticodeSignature -LiteralPath $Program
-            if ($Signature.Status -ne 'Valid' -or $Signature.SignerCertificate.Thumbprint -ne $Signer) {
-                throw "$File is not signed by the Vulcan Code certificate ($($Signature.Status))"
+            if (-not $Fetched) { throw "Cannot download $File" }
+            $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Program).Hash.ToLowerInvariant()
+            if ($Actual -ne $Digest) {
+                throw "$File does not match its published SHA-256 (expected $Digest, got $Actual)"
             }
+            if ($Signer) {
+                $Signature = Get-AuthenticodeSignature -LiteralPath $Program
+                if ($Signature.Status -ne 'Valid' -or $Signature.SignerCertificate.Thumbprint -ne $Signer) {
+                    throw "$File is not signed by the Vulcan Code certificate ($($Signature.Status))"
+                }
+            }
+            Write-Host "Starting the setup program $Version"
         }
-        Write-Host "Starting the setup program $Version"
-        & $Program @args
+        & $Program @SetupArgs
         # 130 is CANCELLED_EXIT_CODE of apps/vulcan-code-setup: the user left it and nothing was changed.
         if ($LASTEXITCODE -eq 130) { return }
         if ($LASTEXITCODE -ne 0) { throw "vulcan-code-setup exited with $LASTEXITCODE" }
@@ -121,6 +160,6 @@
         }
         if ($Added) { Write-Host 'vulcan-tui and vulcan-code-setup work in this PowerShell session now.' }
     } finally {
-        Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
+        if ($Work) { Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue }
     }
 } @args

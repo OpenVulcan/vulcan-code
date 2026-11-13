@@ -5,7 +5,6 @@
 //! 在 `install` 或 `update` 之前更新安装器自身（方案 18.6 节）：安装器独立发布，通道的已签名安装器
 //! 指针所指的更新版本替换当前安装器，并以相同参数再次运行。产品版本只通过 `minSetupVersion` 提出要求。
 
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -14,11 +13,11 @@ use vulcan_install_core::layout::setup_file_key;
 use vulcan_install_core::names::{Channel, Platform, ReleaseVersion};
 use vulcan_install_core::setup::{SetupFile, SetupPointer};
 use vulcan_install_core::signing::BUILT_IN_KEYS;
-use vulcan_install_core::update::{find_setup_update, find_update};
+use vulcan_install_core::update::find_setup_update;
 
 use crate::args::SelfUpdate;
 use crate::install::{USER_AGENT, channels};
-use crate::prompt::{confirm, megabytes};
+use crate::prompt::megabytes;
 
 /// The version of this setup program, defined only in its `Cargo.toml`.
 /// 本安装器的版本，只在其 `Cargo.toml` 中定义。
@@ -49,15 +48,13 @@ pub enum Outcome {
     Finished(i32),
 }
 
-/// Looks for a newer setup program on `channel` and, when one is wanted or required, replaces this
-/// program with it and runs it with `arguments`.
-/// 在 `channel` 上查找更新的安装器；需要或要求更新时，用它替换本程序并以 `arguments` 运行。
+/// Checks `channel` unless opted out, then verifies, replaces and restarts with `arguments`.
+/// 未关闭自更新时检查 `channel`，校验后替换本程序并以 `arguments` 重启。
 pub fn check(
     platform: Platform,
     channel: Channel,
     route: Route,
     choice: SelfUpdate,
-    yes: bool,
     arguments: &[String],
 ) -> Result<Outcome, String> {
     let program = std::env::current_exe()
@@ -83,28 +80,6 @@ pub fn check(
         }
     };
     let newer = &pointer.version;
-    let wanted = match choice {
-        SelfUpdate::Always => true,
-        SelfUpdate::Never => false,
-        SelfUpdate::Ask if yes || !std::io::stdin().is_terminal() => {
-            required(&mut downloader, platform, channel, &own).is_some()
-        }
-        SelfUpdate::Ask => confirm(
-            &format!(
-                "A newer setup program {newer} is available (this one is {own}). Update it and \
-                 continue?"
-            ),
-            false,
-        )?,
-    };
-    if !wanted {
-        return match required(&mut downloader, platform, channel, &own) {
-            Some((release, minimum)) => Err(format!(
-                "{release} needs setup program {minimum} or newer, and this one is {own}"
-            )),
-            None => Ok(Outcome::Continue),
-        };
-    }
     let file = pointer
         .program(platform)
         .map_err(|error| error.to_string())?;
@@ -114,31 +89,6 @@ pub fn check(
     );
     replace(&mut downloader, &program, &pointer, file)?;
     restart(&program, arguments)
-}
-
-/// The newest product release on `channel` and the setup version it requires, when that is newer
-/// than `own`; a lookup that fails requires nothing here, since the release is checked again
-/// before anything is installed.
-/// `channel` 上的最新产品版本及其要求的安装器版本（当它比 `own` 更新时）；查找失败时这里不作要求，
-/// 因为安装任何内容之前还会再次检查该版本。
-fn required(
-    downloader: &mut Downloader,
-    platform: Platform,
-    channel: Channel,
-    own: &ReleaseVersion,
-) -> Option<(ReleaseVersion, ReleaseVersion)> {
-    let floor: ReleaseVersion = "0.0.0".parse().ok()?;
-    let offer = find_update(
-        downloader,
-        BUILT_IN_KEYS,
-        platform,
-        channels(channel),
-        &floor,
-    )
-    .ok()
-    .flatten()?;
-    let minimum = offer.manifest.min_setup_version?;
-    (minimum > *own).then_some((offer.manifest.version, minimum))
 }
 
 /// Where the running program is moved before it is replaced on Windows.
@@ -197,11 +147,17 @@ fn replace(
 /// The arguments the updated program runs with: the same, except that it does not update again.
 /// 更新后的程序运行时的参数：与原参数相同，只是不再更新。
 fn restart_arguments(arguments: &[String]) -> Vec<String> {
-    let mut next: Vec<String> = arguments
-        .iter()
-        .filter(|argument| argument.as_str() != "--self-update")
-        .cloned()
-        .collect();
+    let mut next = Vec::with_capacity(arguments.len() + 1);
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "--self-update" {
+            continue;
+        }
+        next.push(argument.clone());
+        if crate::args::takes_separate_value(argument) {
+            next.extend(arguments.next().cloned());
+        }
+    }
     next.push(String::from(NO_SELF_UPDATE));
     next
 }
@@ -238,13 +194,27 @@ mod tests {
 
     #[test]
     fn the_restarted_program_keeps_the_arguments_but_never_updates_again() {
-        let arguments: Vec<String> = ["install", "--self-update", "--mode", "terminal"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let arguments: Vec<String> = [
+            "install",
+            "--self-update",
+            "--mode",
+            "terminal",
+            "--prefix",
+            "--self-update",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         assert_eq!(
             restart_arguments(&arguments),
-            ["install", "--mode", "terminal", NO_SELF_UPDATE]
+            [
+                "install",
+                "--mode",
+                "terminal",
+                "--prefix",
+                "--self-update",
+                NO_SELF_UPDATE
+            ]
         );
         assert!(crate::args::parse(&restart_arguments(&arguments)).is_ok());
     }

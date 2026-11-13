@@ -49,6 +49,7 @@
   "setup.writes.desktopShortcut": "Desktop shortcut {path}",
   "setup.writes.appBundle": "Application {path}",
   "setup.writes.userPath": "{path} on the user PATH",
+  "setup.writes.shellPath": "PATH export in {path}",
   "setup.writes.uninstallEntry": "An entry in Settings > Apps for uninstalling",
   "setup.writes.userService": "The systemd user unit vulcan-code.service",
   "setup.writes.serviceLaunchAgent": "A login item for your user (launchd agent)",

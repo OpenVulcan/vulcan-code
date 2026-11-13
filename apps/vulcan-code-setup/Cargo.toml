@@ -4,7 +4,7 @@ description = "Setup program that installs, updates, modifies and removes a per-
 # The setup program is released apart from the product (`release-setup.yml`) and keeps its own
 # version here; only a change to the setup program itself raises it.
 # 安装器独立于产品发布（`release-setup.yml`），其版本只在此处定义；只有安装器本身变化时才递增。
-version = "0.2.11"
+version = "0.2.12"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -49,6 +49,7 @@ vulcan-install-core = { workspace = true, features = ["http"] }
 # 上无法监听 `/dev/tty`（"Failed to initialize input reader"），因此安装器改用其基于 select/poll 的
 # `/dev/tty` 输入源。
 crossterm = { workspace = true, features = ["use-dev-tty"] }
+tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # COM interfaces for the shortcuts, which `windows-sys` does not wrap.

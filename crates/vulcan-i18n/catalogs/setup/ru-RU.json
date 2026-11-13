@@ -49,6 +49,7 @@
   "setup.writes.desktopShortcut": "Ярлык на рабочем столе {path}",
   "setup.writes.appBundle": "Приложение {path}",
   "setup.writes.userPath": "{path} в пользовательском PATH",
+  "setup.writes.shellPath": "Экспорт PATH в {path}",
   "setup.writes.uninstallEntry": "Запись в «Параметры > Приложения» для удаления",
   "setup.writes.userService": "Пользовательский модуль systemd vulcan-code.service",
   "setup.writes.serviceLaunchAgent": "Объект входа для вашего пользователя (агент launchd)",

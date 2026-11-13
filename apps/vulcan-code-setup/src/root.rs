@@ -336,6 +336,22 @@ pub struct Description {
     /// 服务设置文件；由接受 `--set-port-range` 的版本报告。
     #[serde(default)]
     pub settings_path: Option<PathBuf>,
+    /// The configured WebUI port range from the installed Core's description.
+    /// 已安装 Core 的描述所报告的 WebUI 配置端口范围。
+    #[serde(default)]
+    pub port_range: Option<PortRange>,
+}
+
+/// The two endpoints Core reports in the `portRange` part of `--describe`.
+/// Core 在 `--describe` 的 `portRange` 中报告的两个端口端点。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub struct PortRange {
+    /// The first loopback port Core tries.
+    /// Core 首个尝试的回环端口。
+    pub first: u16,
+    /// The last loopback port Core tries.
+    /// Core 最后尝试的回环端口。
+    pub last: u16,
 }
 
 impl Description {

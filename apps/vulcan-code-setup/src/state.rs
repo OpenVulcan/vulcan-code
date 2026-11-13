@@ -18,11 +18,10 @@ pub use vulcan_install_core::install_root::{SETUP_DIR, SETUP_STATE_FILE as STATE
 /// [`SETUP_DIR`] 中的标记文件：切换了版本的运行在服务重新注册之前留下它，使失败后重跑仍会注册服务。
 pub const SERVICE_PENDING_FILE: &str = "service-pending";
 
-/// Format version of [`STATE_FILE`]; formats 1 and 2 are upgraded when read, other versions are
-/// refused. Format 3 added [`Item::AppArmorProfile`].
-/// [`STATE_FILE`] 的格式版本；格式 1 与 2 在读取时升级，其他版本一律拒绝。格式 3 新增
-/// [`Item::AppArmorProfile`]。
-pub const STATE_SCHEMA: u32 = 3;
+/// Format version of [`STATE_FILE`]; formats 1–3 are upgraded when read, and unknown formats fail.
+/// Format 4 adds [`Item::ShellPath`].
+/// [`STATE_FILE`] 的格式版本；格式 1 至 3 在读取时升级，未知格式报错。格式 4 新增 [`Item::ShellPath`]。
+pub const STATE_SCHEMA: u32 = 4;
 
 /// One thing created outside the version directories.
 /// 在版本目录之外创建的一项内容。
@@ -58,6 +57,13 @@ pub enum Item {
         /// Absolute path.
         /// 绝对路径。
         dir: PathBuf,
+    },
+    /// An owned PATH export in a shell startup file.
+    /// Shell 启动文件中由本安装拥有的 PATH 导出。
+    ShellPath {
+        /// The resolved profile file that contains the managed block.
+        /// 包含受管区块的配置文件解析路径。
+        path: PathBuf,
     },
     /// The per-user uninstall entry under `HKCU\...\Uninstall`.
     /// `HKCU\...\Uninstall` 下的每用户卸载项。
@@ -248,9 +254,9 @@ impl SetupState {
             1 => serde_json::from_slice::<StateV1>(&bytes)
                 .map_err(invalid)?
                 .upgrade(),
-            // Format 2 has the same fields; format 3 only added an item kind.
-            // 格式 2 字段相同；格式 3 只新增了一种条目。
-            2 => SetupState {
+            // Formats 2–4 share the same fields; each newer version only adds an item kind.
+            // 格式 2 至 4 的字段相同，每个新版本只新增一种条目。
+            2 | 3 => SetupState {
                 schema: STATE_SCHEMA,
                 ..serde_json::from_slice::<SetupState>(&bytes).map_err(invalid)?
             },

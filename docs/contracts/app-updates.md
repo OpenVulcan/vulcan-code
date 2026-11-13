@@ -86,7 +86,7 @@
    然后无人值守运行安装器（`setup_command`：稳定版为 `update --yes --prefix <根>`，预览版为
    `install --yes --channel preview --prefix <根>`，因为安装器否则只查看安装时记录的通道，这会把安装器记录的
    通道改为预览），输出写入 `updates/setup-update.log`。安装器发现该版本已有安装记录便跳过下载，只切换、
-   刷新集成并清理；`minSetupVersion` 要求时它先自更新。安装器未成功退出或当前版本未达到组装的版本时写入
+   刷新集成并清理；安装器在应用更新前也会检查自身版本并自动更新。安装器未成功退出或当前版本未达到组装的版本时写入
    `updates/setup-failure.json`（`SETUP_FAILURE_FILE`），下一次服务启动以重启错误报告一次后删除。之后若数据根
    仍空闲（安装器注册用户服务时已启动服务），辅助进程以原参数启动当前版本的服务；原服务在用户单元中时改为
    `--install-user-service`。桌面端等待旧 Core 退出后继续等待下一个 Core（最多 15 分钟），再从稳定入口重新
@@ -125,17 +125,16 @@
   `install.ps1` 位于 `setup/<版本>/`，不可变；已签名指针 `setup/channels/<通道>.json`（与产品指针同一把 Ed25519
   密钥）列出版本及每个文件的 SHA-256 与大小，必须恰好覆盖五个平台与两个脚本，stable 不得指向预发布版本。
   `release-setup.yml` 先发布到 preview，`promote-setup.yml` 校验 preview 指针后为同一组文件签署 stable 指针。
-- **入口脚本**：两个脚本在安装器发布时由 `scripts/entry-scripts.mjs` 填入版本、下载源（`AUTO_ORIGINS`）、各平台
-  摘要与 Windows 签名证书指纹；它们只下载并校验安装器，再把全部参数原样交给它。程序无法修改启动它的 Shell
-  的环境，因此 `install.ps1` 在安装器成功后把当前会话缺少的用户 PATH 条目加入会话（`irm | iex` 时即用户自己的
-  窗口，命令立即可用）；Linux 与 macOS 的 `curl | sh` 运行在子 Shell 中，`~/.local/bin` 不在 PATH 时安装器给出
-  本 Shell 可执行的 `export` 命令。`promote-setup.yml` 把
+- **入口脚本**：两个脚本先从平台默认目录或 `--prefix` 查找由独立安装器管理的现有安装，找到时直接运行其安装器。
+  对未明确选择自更新行为的 `install` 或 `update` 传入 `--self-update`，使旧安装器也能自动升级。首次安装或
+  本地安装器缺失时，按 `scripts/entry-scripts.mjs` 填入的下载源（`AUTO_ORIGINS`）、摘要与 Windows 签名证书指纹
+  下载并校验。Windows 的 `irm | iex` 在安装器成功后将持久用户 PATH 合入当前会话；类 Unix 的 `curl | sh`
+  在子 Shell 执行，当前终端继承的 PATH 不会变动。 `promote-setup.yml` 把
   stable 安装器指针所列的脚本按摘要校验后放到主下载源顶层（缓存 60 秒）；openvulcan-web 把 `setup/` 与顶层
   脚本同步到中国镜像。
-- **自更新**：`install`、`update` 之前读取所选通道（preview 同时读 stable）的安装器指针，只与自身版本比较；
-  产品更新不改变安装器字节，也不提示更新安装器。交互时询问，`--self-update` 直接更新，`--yes` 或无终端时只在
-  最新产品版本的 `minSetupVersion` 高于自身时更新，`--no-self-update` 跳过。替换后以相同参数加
-  `--no-self-update` 重新运行。组装前仍按所装版本的 `minSetupVersion` 检查，不满足即停止。
+- **自更新**：`install`、`update` 之前读取所选通道（preview 同时读 stable）的已签名安装器指针，与自身版本比较。
+  有新版本时自动下载、校验、替换并重启，无需确认。显式 `--no-self-update` 跳过。替换后保留原安装参数并用
+  `--no-self-update` 防止重复检查。组装前仍按所装版本的 `minSetupVersion` 检查，不满足即停止。
 - **Inno 安装包**：产品发布在构建前下载 stable 安装器指针与 Windows 程序，经 `vulcan-release-tool setup-check`
   校验后按原样装入完整安装包与 Inno 更新包的 `{app}\setup\vulcan-code-setup.exe`（不再签名），卸载时删除；stable 安装器指针缺失或校验
   失败时产品发布停止。
@@ -145,10 +144,15 @@
   失败时提示 sudo；只在本程序启用时记录并在卸载时撤销）。端口范围（`--port-range`）调用 Core
   `--set-port-range` 写入 Core 拥有的 `service-settings.json`，安装器不保存副本。旧的 `--mode`、`--no-shortcut`
   继续接受。root 安装与无 systemd 用户实例时给出说明，不注册系统级服务。
+- **类 Unix PATH 与命令行安装**：选择 `--path` 后，安装器在用户 Shell 的启动文件加入受管区块，在新 Shell
+  导出 `~/.local/bin`。Bash 使用生效的登录配置和 `.bashrc`，Zsh 使用 `.zprofile` 与 `.zshrc`，fish 使用用户的
+  `fish/conf.d`，POSIX 登录 Shell 使用 `.profile`。重复安装复用原区块，关闭 PATH 集成或卸载时只移除该安装
+  的区块。纯命令行安装结束后显示服务注册、前台启动和停止、适用的服务管理器命令，以及从已安装 Core
+  的 `--describe` 读取的 WebUI 端口范围。服务启动输出显示实际绑定地址。
 - **Windows 桌面集成**：GUI 安装时把 `bin/vulcan-code-launcher.exe` 复制为 `<root>\VulcanCode.exe`，快捷方式用
   运行布局（schema 4）的 `desktopIdentity` 写入 AppUserModelID 与通知激活 CLSID，与 Inno 安装包一致；同时把
   安装器放入 PATH 并作为卸载入口的 `DisplayIcon`/卸载命令。完成与 `status` 时告知卸载命令。
-- **安装记录**：`installation.json` 为 v2；读取 v1 时先把原字节保存为 `installation.json.v1`，再升级写回。
+- **安装记录**：`installation.json` 为 v4，新增 Shell PATH 区块所在文件。读取 v1 至 v3 时先备份原字节到带原版本号的文件，再升级写回。
   只记录本程序创建的文件、目录与系统集成，卸载时只撤销这些项。
 - **卸载**：Windows 无法删除运行中的程序，因此确认后、任何改动之前先结束程序位于安装根目录下的进程（桌面应用、
   服务、TUI），结束不了即停止并保持安装完整；当前版本已缺失时直接移除指向本根目录 `versions` 的登录 `Run` 值。

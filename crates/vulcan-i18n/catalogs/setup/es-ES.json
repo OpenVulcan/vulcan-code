@@ -49,6 +49,7 @@
   "setup.writes.desktopShortcut": "Acceso directo en el escritorio {path}",
   "setup.writes.appBundle": "Aplicación {path}",
   "setup.writes.userPath": "{path} en el PATH del usuario",
+  "setup.writes.shellPath": "Exportación de PATH en {path}",
   "setup.writes.uninstallEntry": "Una entrada en Configuración > Aplicaciones para desinstalar",
   "setup.writes.userService": "La unidad de usuario de systemd vulcan-code.service",
   "setup.writes.serviceLaunchAgent": "Un elemento de inicio de sesión para tu usuario (agente de launchd)",

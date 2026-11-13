@@ -49,6 +49,7 @@
   "setup.writes.desktopShortcut": "Desktopverknüpfung {path}",
   "setup.writes.appBundle": "Anwendung {path}",
   "setup.writes.userPath": "{path} im Benutzer-PATH",
+  "setup.writes.shellPath": "PATH-Export in {path}",
   "setup.writes.uninstallEntry": "Ein Eintrag unter Einstellungen > Apps zum Deinstallieren",
   "setup.writes.userService": "Die systemd-Benutzereinheit vulcan-code.service",
   "setup.writes.serviceLaunchAgent": "Ein Anmeldeobjekt für deinen Benutzer (launchd-Agent)",

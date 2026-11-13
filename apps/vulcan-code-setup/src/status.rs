@@ -91,6 +91,7 @@ pub fn status(options: &CommonOptions) -> Result<(), String> {
             Item::File { path } | Item::Bundle { path } => path.display().to_string(),
             Item::Directory { .. } => continue,
             Item::UserPath { dir } => format!("user PATH entry {}", dir.display()),
+            Item::ShellPath { path } => format!("PATH export in {}", path.display()),
             Item::UninstallEntry { key } => format!("uninstall entry {key}"),
             Item::Shortcut { path } => format!("shortcut {}", path.display()),
             Item::ToastActivator { clsid } => format!("notification activator {clsid}"),

@@ -283,6 +283,7 @@ fn describe(item: &Item) -> Option<String> {
         Item::File { path } | Item::Bundle { path } => Some(path.display().to_string()),
         Item::Directory { .. } => None,
         Item::UserPath { dir } => Some(format!("{} from the user PATH", dir.display())),
+        Item::ShellPath { path } => Some(format!("PATH export in {}", path.display())),
         Item::UninstallEntry { .. } => Some(String::from("the entry in Settings > Apps")),
         Item::Shortcut { path } => Some(format!("the shortcut {}", path.display())),
         Item::ToastActivator { .. } => None,
