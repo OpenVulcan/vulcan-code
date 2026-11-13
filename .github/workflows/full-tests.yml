@@ -34,6 +34,12 @@ jobs:
       - uses: ./.github/actions/rust-setup
         with:
           shared-key: tests
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      # The synchronization entry point checks the host pnpm version before using managed runtimes.
+      # 同步入口使用受管运行时前会检查宿主 pnpm 版本。
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
       - name: Test runner, bundled tools, Lua payload, managed Node and synced resources
         env:
           GITHUB_TOKEN: ${{ github.token }}

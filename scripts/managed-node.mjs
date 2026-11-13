@@ -64,7 +64,10 @@ async function publish(target, identity, bytes, archiveName, archiveRoot, source
     // archive 仅存放已经验证的官方载荷。
     const archive = path.join(staging, archiveName);
     await writeFile(archive, bytes);
-    await execute('tar', ['-xf', archive, '-C', staging], { windowsHide: true });
+    // Use Windows bsdtar for ZIP support and drive-letter paths even under Git Bash.
+    // 在 Git Bash 下也使用 Windows bsdtar，以支持 ZIP 与带盘符的路径。
+    const tar = process.platform === 'win32' ? path.join(process.env.SystemRoot, 'System32', 'tar.exe') : 'tar';
+    await execute(tar, ['-xf', archive, '-C', staging], { windowsHide: true });
     // extracted is the exact documented root, never a candidate-path search.
     // extracted 是文档规定的精确根目录，绝不进行候选路径搜索。
     const extracted = path.join(staging, archiveRoot);
