@@ -100,6 +100,221 @@ fn copy_runtime_directory(source: &Path, destination: &Path) {
     }
 }
 
+/// Opens Context7's credential and usage views with fresh UI runtimes and isolated SQLite files.
+/// 用全新的界面运行时和隔离 SQLite 文件打开 Context7 的凭据与用量视图。
+/// Takes no arguments; asserts cold initialization and preservation of existing encrypted data.
+/// 无参数；断言冷启动初始化成功且已有加密数据保持不变。
+#[test]
+#[ignore = "Requires VULCAN_PLUGIN_TEST_LUA_RUNTIME pointing to installed native Lua packages"]
+fn context7_credential_and_usage_open_from_cold_storage() {
+    // Use the installed native packages so the test also exercises OpenSSL module loading.
+    // 使用已安装的原生包，使测试同时覆盖 OpenSSL 模块加载。
+    let packaged_runtime = std::env::var_os("VULCAN_PLUGIN_TEST_LUA_RUNTIME")
+        .map(std::path::PathBuf::from)
+        .expect("set VULCAN_PLUGIN_TEST_LUA_RUNTIME to the installed native Lua runtime");
+    // The repository supplies the production plugin and bridge sources.
+    // 仓库提供生产插件与桥接源码。
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    // Each case starts with independent storage and an unused persistent UI instance.
+    // 每个场景都从独立存储与尚未使用的持久界面实例开始。
+    for (case, prepare_schema, store_key) in [
+        ("fresh", false, false),
+        ("missing credential", true, false),
+        ("existing credential and usage", true, true),
+    ] {
+        // All state, including any generated test key material, lives under this root.
+        // 全部状态（包括生成的测试密钥材料）均位于此临时根目录。
+        let temporary = tempfile::tempdir().unwrap();
+        // The native host needs a path understood by its Lua module loader.
+        // 原生宿主需要 Lua 模块加载器能识别的路径。
+        let root = temporary.path();
+        // Copy only the native payload required by the production plugin.
+        // 仅复制生产插件需要的原生载荷。
+        for directory in ["libs", "lua_packages"] {
+            copy_runtime_directory(&packaged_runtime.join(directory), &root.join(directory));
+        }
+        // The bridge is sourced from the same checkout as the plugin.
+        // 桥接与插件使用同一个检出目录的源码。
+        let bridge = root.join("system_lua_lib/vulcan-plugin-bridge");
+        copy_runtime_directory(
+            &repository.join("plugin-bridge/vulcan-plugin-bridge"),
+            &bridge,
+        );
+        for directory in ["user_plugins", "managed_runtime"] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        // The native SQLite adapter posts work back to this separate executor.
+        // 原生 SQLite 适配器将工作提交给这个独立执行器。
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        // Bind every database used by the host to the disposable fixture.
+        // 将宿主使用的全部数据库绑定到可丢弃的测试夹具。
+        let host = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root: root.to_path_buf(),
+            sqlite_path: root.join("app.sqlite3"),
+            sqlite_binding_id: "context7-test-app".into(),
+            system_statistics_sqlite_path: root.join("statistics.sqlite3"),
+            system_statistics_sqlite_binding_id: "context7-test-statistics".into(),
+        });
+        // The real adapter applies migration and query policy to the plugin's own SQLite file.
+        // 真实适配器对插件自己的 SQLite 文件执行迁移与查询规则。
+        let storage = Arc::new(PluginStorageService::new(
+            &host,
+            runtime.handle().clone(),
+            root.join("plugin_state"),
+        ));
+        // Use the same embedded Lua engine as production.
+        // 使用与生产环境相同的嵌入式 Lua 引擎。
+        let engine = LuaEngine::new(LuaEngineOptions::new(
+            LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+            LuaRuntimeHostOptions::with_runtime_root(vulcan_runtime_assets::native_host_path(root)),
+        ))
+        .unwrap();
+        // Load the bundled plugin by its real manifest and expose its real Action schemas.
+        // 按真实清单加载内置插件，并使用真实 Action Schema。
+        let manager = VulcanPluginRuntimeManager::new(
+            Arc::new(engine),
+            repository.join("plugins"),
+            root.join("user_plugins"),
+            bridge,
+            root.join("managed_runtime"),
+            root.join("plugin_state"),
+            root.join("plugin_runtime"),
+        );
+        manager
+            .initialize_formal_runtime(vulcan_plugin_runtime::VulcanPluginRuntimeSettings::default())
+            .unwrap();
+        manager
+            .install_host_services(VulcanPluginHostServices {
+                storage: Some(storage.clone()),
+                vldb: None,
+                ui_events: Some(Arc::new(
+                    crate::plugin_ui_events::ServicePluginUiEventPublisher::new(
+                        vulcan_service_api::ServiceEventEmitter::new(Vec::new()),
+                    ),
+                )),
+            })
+            .unwrap();
+        manager
+            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+            .unwrap();
+        // Run the declared Action with explicit arguments; reuse selects the real UI path for the assertions.
+        // 以明确参数运行声明的 Action；reuse 为断言选择真实界面路径。
+        let invoke = |action_id: &str, arguments, reuse_enabled_runtime| {
+            runtime
+                .block_on(manager.invoke_action(VulcanPluginActionRequest {
+                    plugin_id: "context7".into(),
+                    action_id: action_id.into(),
+                    arguments,
+                    caller: VulcanPluginActionCaller::PluginUi,
+                    workspace_root: root.to_path_buf(),
+                    reuse_enabled_runtime,
+                }))
+                .unwrap_or_else(|error| panic!("{case}: {action_id}: {error}"))
+        };
+        // Seed only fixture rows; run each statement through the real storage adapter.
+        // 只填充夹具数据；每条语句通过真实存储适配器执行。
+        let execute = |sql: &str| {
+            runtime
+                .block_on(storage.sqlite_execute(
+                    "context7",
+                    json!({ "sql": sql, "params": [] }),
+                    None,
+                ))
+                .unwrap();
+        };
+        // Capture the complete encrypted envelope without exposing its values in test output.
+        // 捕获完整加密信封，避免在测试输出中显示其中的值。
+        let stored_credential = || {
+            runtime.block_on(storage.sqlite_query(
+                "context7",
+                json!({ "sql": "SELECT * FROM context7_credential WHERE singleton_id = 1", "params": [] }),
+                None,
+            )).unwrap()
+        };
+        if prepare_schema {
+            // Seed via a one-shot Action so the persistent UI VM has never initialized storage.
+            // 用一次性 Action 准备数据，使持久界面虚拟机仍未初始化存储。
+            if store_key {
+                invoke(
+                    "credential-set",
+                    json!({ "apiKey": "ctx7sk-local-fixture-only" }),
+                    false,
+                );
+                execute(
+                    r#"
+INSERT INTO context7_request_events
+  (request_id, operation, auth_mode, credential_generation, status, duration_ms, created_at_ms)
+SELECT 'fixture', 'query_docs', 'api_key', credential_generation, 'success', 27, unixepoch('now') * 1000
+FROM context7_credential
+"#,
+                );
+                execute(
+                    r#"
+INSERT INTO context7_quota_snapshot
+  (auth_mode, credential_generation, quota_limit, quota_remaining, http_status, observed_at_ms)
+SELECT 'api_key', credential_generation, 100, 73, 200, unixepoch('now') * 1000
+FROM context7_credential
+"#,
+                );
+            } else {
+                invoke("usage-get", json!({ "rangeDays": 30 }), false);
+                execute("DELETE FROM context7_credential WHERE singleton_id = 1");
+                assert_eq!(stored_credential()["row_count"], 0);
+            }
+        }
+        // Compare the entire stored row, including wrapping key, nonce, ciphertext and tag.
+        // 比较完整存储行，包括包装密钥、随机数、密文和标签。
+        let credential_before = store_key.then(stored_credential);
+        // Run the credential read first, as it can be the first action on the settings page.
+        // 先读取凭据状态，因为它可能是设置页的首个 Action。
+        let status = invoke("credential-status", json!({}), true);
+        // The usage view must agree with the credential view and retain existing history and quota.
+        // 用量视图必须与凭据视图一致，并保留已有历史与配额。
+        let usage = invoke("usage-get", json!({ "rangeDays": 30 }), true);
+        assert_eq!(status["configured"], store_key, "{case}");
+        assert_eq!(
+            status["mode"],
+            if store_key { "api_key" } else { "anonymous" },
+            "{case}"
+        );
+        assert_eq!(usage["credential"], status, "{case}");
+        assert_eq!(
+            usage["localStats"]["requests"],
+            u64::from(store_key),
+            "{case}"
+        );
+        if let Some(credential_before) = credential_before {
+            assert!(
+                stored_credential() == credential_before,
+                "{case}: encrypted credential changed"
+            );
+            assert_eq!(usage["localStats"]["apiKeyRequests"], 1);
+            assert_eq!(usage["quotaSnapshot"]["quotaLimit"], 100);
+            assert_eq!(usage["quotaSnapshot"]["quotaRemaining"], 73);
+            assert_eq!(
+                usage["quotaSnapshot"]["credentialGeneration"],
+                status["credentialGeneration"]
+            );
+        } else {
+            assert_eq!(stored_credential()["row_count"], 1, "{case}");
+            assert_eq!(status["credentialGeneration"], 0, "{case}");
+            assert!(usage["quotaSnapshot"].is_null(), "{case}");
+        }
+        manager.close_formal_runtime_blocking().unwrap();
+    }
+}
+
 /// TimedVldb records production hostcall latency while retaining the real SQL execution service.
 /// TimedVldb 在保留真实 SQL 执行服务的同时记录生产 Hostcall 延迟。
 struct TimedVldb {

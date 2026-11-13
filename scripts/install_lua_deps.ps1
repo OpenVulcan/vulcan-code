@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 # Use the same host-aware extractor as the host dependency installer.
 # 与宿主依赖安装器使用同一套按宿主选择的解压逻辑。
 . (Join-Path $PSScriptRoot 'dependency-archive.ps1')
+. (Join-Path $PSScriptRoot 'macos-lua-runtime.ps1')
 
 # Relaunch under PowerShell 7 when available so UTF-8 sources and modern script behavior stay stable.
 # 若检测到 PowerShell 7，则自动在其下重启，确保 UTF-8 源文件与现代脚本行为保持稳定。
@@ -528,8 +529,15 @@ function Install-LuaRuntimePayloads {
         [string]$Platform
     )
 
-    $MarkerFile = Join-Path $RuntimeInstallRoot ".installed-$RuntimeTag-$Platform"
+    # A separate macOS layout marker makes pre-fix caches re-extract the verified archive.
+    # macOS 布局使用独立标记，让修复前的缓存从已校验归档重新解压。
+    $IsMacRuntime = $Platform -in @('macos-arm64', 'macos-x64')
+    # LayoutSuffix distinguishes transformed archives from prior raw macOS installs.
+    # LayoutSuffix 将经过转换的归档与此前未转换的 macOS 安装区分开。
+    $LayoutSuffix = if ($IsMacRuntime) { '-loader-layout-v2' } else { '' }
+    $MarkerFile = Join-Path $RuntimeInstallRoot ".installed-$RuntimeTag-$Platform$LayoutSuffix"
     if (Test-RuntimeInstallReady -MarkerFile $MarkerFile) {
+        if ($IsMacRuntime) { Confirm-MacLuaRuntime -Root $RuntimeInstallRoot }
         Write-Host "==> LuaSkills runtime payloads already installed ($RuntimeTag, $Platform)."
         return
     }
@@ -542,6 +550,9 @@ function Install-LuaRuntimePayloads {
 
     try {
         Expand-DependencyTarArchive -ArchivePath $RuntimeArchivePath -DestinationPath $RuntimeTempDir
+        if ($IsMacRuntime) {
+            Confirm-MacLuaRuntime -Root $RuntimeTempDir -Relocate
+        }
 
         Clear-RuntimeInstallRoot
 

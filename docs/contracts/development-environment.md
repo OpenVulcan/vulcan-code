@@ -172,6 +172,10 @@ make init-system
 
 Lua 运行时安装器通过 `scripts/dependency-archive.ps1` 使用共享解压规则：Windows 使用系统 `tar.exe` 或 PATH 中的同名应用，Linux/macOS 使用 PATH 中的 `tar`。原生 tar 返回非零退出码时立即失败，不继续发布文件或写入安装标记。RTK 与 sg/rg 一样由 `install-locked-tools.mjs` 按锁文件安装（`make deps tools`）；Linux arm64 上 RTK 从锁定的源码归档本机编译，需要已安装的固定工具链与 C 编译器（`init-system` 已提供），约增加数分钟。
 
+macOS 运行时最低支持 15.0。`make deps lua` 解压已校验的 LuaSkills 归档后，由 `scripts/macos-lua-runtime.ps1` 把 `lua_packages/lib/lua` 下的原生模块改为加载器查找的 `.dylib` 后缀，并使用 Apple 工具将非系统依赖指向随包 `libs`，重新签名并回读实际加载命令。Lua cURL 显式链接 macOS 15 两种架构提供的 `/usr/lib/libcurl.4.dylib`，原归档中依赖 Homebrew 的 libcurl 副本不进入发行物。缺库、无法解析的加载路径或超过 15.0 的最低版本会中止准备。旧布局缓存从已校验归档重建。
+
+`make sync` 和 `make sync release` 在复制前检查已准备的 macOS 原生库，替换发行目录中的旧原生库目录，并用本机工具链构建探针。探针通过随包 LuaJIT 从同步后的目录加载原生模块，验证 OpenSSL 随机数、AES-GCM 和 cURL HTTPS 句柄创建，不发起外部请求。更新 LuaSkills、官方归档或 macOS 支持下限时须复核这些加载规则和系统 libcurl 的 ABI。
+
 Rust 工具已存在时会只打印版本并跳过安装，不会重复编译或覆盖现有工具。Windows 通过 `make.ps1` 执行，类 Unix 环境通过 `make.sh` 转发到同一套 PowerShell 依赖入口。
 
 单独安装 Rust 工作区工具可以执行：
