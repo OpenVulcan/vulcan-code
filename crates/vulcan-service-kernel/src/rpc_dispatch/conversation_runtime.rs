@@ -2,6 +2,7 @@
 //! 会话运行时 RPC 路由。
 
 use super::*;
+use crate::media_upload::{classify_dropped_composer_files, stage_dropped_composer_file};
 /// Exact public RPC wire names owned by this domain router.
 /// 本领域路由持有的精确公开 RPC 线协议名称。
 #[cfg(test)]
@@ -11,7 +12,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_cancel_conversation_submission",
     "service_plan_composer_attachments",
     "service_classify_dropped_composer_files",
-    "service_stage_dropped_composer_file",
+    crate::media_upload::STAGE_DROPPED_COMPOSER_FILE_RPC,
     "service_discard_composer_attachment_plans",
     "service_prepare_composer_attachment",
     "service_model_attachment_capabilities",
@@ -169,6 +170,7 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "modelSelection")?,
                 rpc_optional_param(params, "sessionSettings")?,
                 rpc_optional_param(params, "attachments")?,
+                rpc_optional_param(params, "droppedPlanId")?,
             )
             .await,
         ),
@@ -185,6 +187,8 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "modelSelection")?,
                 rpc_optional_param(params, "attachments")?,
                 rpc_optional_param(params, "queuedInputActionId")?,
+                rpc_optional_param(params, "draftSlotKey")?,
+                rpc_optional_param(params, "droppedPlanId")?,
             )
             .await,
         ),
@@ -211,29 +215,23 @@ pub(super) async fn dispatch(
         "service_classify_dropped_composer_files" => {
             // Decode only file descriptors so route preflight never consumes uploaded bytes.
             // 仅解析文件描述，确保路线预检不接收上传字节。
-            let files: Vec<_> = rpc_required_param(params, "files")?;
             rpc_json_result(
-                classify_dropped_composer_files(
-                    &state,
-                    rpc_optional_param::<String>(params, "conversationId")?.as_deref(),
-                    rpc_optional_param(params, "modelSelection")?.as_ref(),
-                    &files,
-                )
-                .await,
+                classify_dropped_composer_files(&state, rpc_required_param(params, "request")?)
+                    .await,
             )
         }
-        "service_stage_dropped_composer_file" => rpc_json_result(
-            stage_dropped_composer_file(
-                state,
-                rpc_optional_param(params, "projectId")?,
-                rpc_optional_param(params, "conversationId")?,
-                rpc_required_param(params, "draftSlotKey")?,
-                rpc_optional_param(params, "modelSelection")?,
-                rpc_required_param(params, "file")?,
-                rpc_required_param(params, "dataBase64")?,
+        crate::media_upload::STAGE_DROPPED_COMPOSER_FILE_RPC => {
+            let plan_id = rpc_required_param(params, "planId")?;
+            let index = rpc_required_param(params, "index")?;
+            let data_base64 = rpc_required_param(params, "dataBase64")?;
+            rpc_json_result(
+                crate::spawn_service_blocking_task(move || {
+                    stage_dropped_composer_file(&state, plan_id, index, data_base64)
+                })
+                .await
+                .map_err(|error| error.to_string())?,
             )
-            .await,
-        ),
+        }
         "service_discard_composer_attachment_plans" => {
             rpc_json_result(crate::media_upload::discard_composer_attachment_plans(
                 rpc_required_param(params, "transferIds")?,

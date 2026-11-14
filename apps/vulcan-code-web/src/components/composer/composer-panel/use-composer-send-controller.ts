@@ -63,8 +63,9 @@ export interface UseComposerSendControllerOptions {
   // 为本次提交暂存拖入原文件之前，重新验证这些文件。
   droppedFiles?: {
     count: number;
-    prepare: (prompt: string) => Promise<{
-      prompt: string; attachments: ComposerAttachmentSummary[]; complete: () => void; rollback: () => Promise<void>;
+    prepare: (prompt: string, attachments: ComposerAttachmentSummary[]) => Promise<{
+      prompt: string; attachments: ComposerAttachmentSummary[]; planId?: string;
+      complete: () => void; rollback: (restoredAttachments?: ComposerAttachmentSummary[]) => Promise<void>;
     } | null>;
   };
   // Whether the selected backend conversation currently has an active run.
@@ -271,12 +272,17 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       if (options.beforeSubmit && !(await options.beforeSubmit())) {
         return;
       }
+      // Use the submitted prefix verbatim in both the batch plan and the prompt RPC.
+      // 在批次规划和提示词 RPC 中逐项使用同一待提交附件前缀。
+      const submittedAttachments = options.projectAttachmentsForSubmission
+        ? options.projectAttachmentsForSubmission(options.attachments)
+        : options.attachments;
       // Keep the originals available for retry if preparation or submission fails.
       // 准备或提交失败时保留原始文件供重试。
       let dropped: Awaited<ReturnType<NonNullable<UseComposerSendControllerOptions["droppedFiles"]>["prepare"]>> = null;
       try {
         if (options.droppedFiles?.count) {
-          dropped = await options.droppedFiles.prepare(prompt);
+          dropped = await options.droppedFiles.prepare(prompt, submittedAttachments);
           if (!dropped) return;
         }
       } catch (error) {
@@ -285,11 +291,6 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
         });
         return;
       }
-      // Freeze owner-local delivery decisions before clearing changes attachment preparation refs.
-      // 在清空草稿改变附件准备 ref 前，冻结属于该所有者的传输决策。
-      const submittedAttachments = options.projectAttachmentsForSubmission
-        ? options.projectAttachmentsForSubmission(options.attachments)
-        : options.attachments;
       // Freeze explicit session settings before awaiting durable draft writes or another render.
       // 在等待草稿持久写入或下一次渲染前，冻结显式会话设置。
       const submittedSessionSettings = options.captureSessionSettings();
@@ -317,6 +318,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
           draftSlotKey: submittedDraft.draftSlotKey,
           prompt: dropped?.prompt ?? prompt,
           attachments: dropped ? [...submittedAttachments, ...dropped.attachments] : submittedAttachments,
+          ...(dropped?.planId ? { droppedPlanId: dropped.planId } : {}),
           ...(sendMode === "insert" ? { insertIntoCurrentTurn: true } : {}),
           ...submissionSettings,
           sessionSettings: submittedSessionSettings,
@@ -328,7 +330,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       } finally {
         if (!accepted) {
           options.restoreFailedSubmission(submittedDraft);
-          await dropped?.rollback();
+          await dropped?.rollback(submittedDraft.attachments);
         }
       }
     } finally {

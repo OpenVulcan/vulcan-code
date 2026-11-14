@@ -156,6 +156,9 @@ export interface ComposerSubmission {
   // Staged attachments submitted before the prompt text.
   // 在提示词文本之前提交的已暂存附件。
   attachments: ComposerAttachmentSummary[];
+  // Core-issued delivery plan for this exact managed prefix and dropped-file suffix.
+  // 由 Core 签发，绑定精确托管附件前缀及拖入附件后缀的交付规划。
+  droppedPlanId?: string;
   // Composer execution mode selected by the user.
   // 用户选择的输入区执行模式。
   executionMode: string;

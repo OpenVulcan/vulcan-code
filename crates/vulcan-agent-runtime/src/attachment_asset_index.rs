@@ -60,7 +60,8 @@ pub use media_references::{find_attachment_media_reference, record_attachment_me
 pub use replay::{
     is_project_resource_attachment, load_attachment_asset_record_for_attachment,
     project_resource_asset_id, resolve_attachment_replay_status,
-    resolve_indexed_attachment_resource, resolve_owned_attachment_resource,
+    resolve_indexed_attachment_metadata, resolve_indexed_attachment_resource,
+    resolve_owned_attachment_resource,
 };
 pub(crate) use replay::{
     resolve_owned_attachment_resource_metadata, resolve_owned_attachment_resource_metadata_for_kind,

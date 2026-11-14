@@ -1389,6 +1389,7 @@
   "composer.attachment.menu": "附件",
   "composer.attachment.empty": "当前无可用附件类型",
   "composer.attachment.dropPathUnavailable": "当前模型无法直接接收此文件。请拖入或粘贴文件的实际路径或链接以引用它。",
+  "composer.attachment.dropSourceUnavailable": "请重新拖入原文件，或粘贴它的路径或链接。",
   "composer.attachment.remove": "移除附件",
   "composer.attachment.processing": "正在确认上传资源",
   "composer.attachment.preparationBlocked": "仍有 {count} 个附件正在准备，完成后才能发送。",

@@ -47,15 +47,15 @@ use super::{
     PromptSessionMaterializationKind, SharedServiceBridgeState, SubmissionActivation,
     active_kernel_session_ids, capture_preserved_workspace_run_state,
     capture_webui_prompt_preparation_generation, capture_webui_prompt_preparation_workspace,
-    composer_attachment_draft_scope, composer_attachment_summary_to_core,
-    composer_attachment_summary_to_provider_core, composer_attachment_workspace_path_from_snapshot,
-    current_unix_millis_text, current_unix_millis_value, defer_attachment_delivery_to_v1,
-    emit_pending_prompts_changed_delta, emit_service_event_with_trace,
-    enqueue_webui_pending_prompt_from_submission, ensure_session_terminal_settlement_settled,
-    hydrate_retained_submission_session_if_needed, load_workspace_for_submission,
-    mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
-    materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
-    parse_session_id, persist_initial_submission_goal, preserve_active_session_run_state,
+    composer_attachment_draft_scope, composer_attachment_summary_to_provider_core,
+    composer_attachment_workspace_path_from_snapshot, current_unix_millis_text,
+    current_unix_millis_value, defer_attachment_delivery_to_v1, emit_pending_prompts_changed_delta,
+    emit_service_event_with_trace, enqueue_webui_pending_prompt_from_submission,
+    ensure_session_terminal_settlement_settled, hydrate_retained_submission_session_if_needed,
+    load_workspace_for_submission, mark_webui_prompt_preparation_failed,
+    mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
+    owning_project_id_for_session, parse_prompt_session_target, parse_session_id,
+    persist_initial_submission_goal, preserve_active_session_run_state,
     provider_tool_capability_key, refresh_exact_vmm_hook_session_projection,
     resolve_composer_attachment_summary_for_workspace, retain_slow_submission_diagnostic,
     retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
@@ -1967,6 +1967,9 @@ struct ContinuationUserSubmission {
     /// Composer attachments retained for explicit unsupported-input rejection.
     /// 为显式拒绝不支持输入而保留的输入区附件。
     attachments: Option<Vec<ComposerAttachmentSummary>>,
+    /// Exact draft and frozen delivery plan for an optional dropped-file supplement.
+    /// 补充消息包含拖入文件时的精确草稿及冻结交付规划。
+    dropped_plan: Option<(String, uuid::Uuid)>,
 }
 
 /// Returns whether one settled Continue terminal may be acknowledged without an RPC error.
@@ -2069,13 +2072,23 @@ pub(super) async fn service_continue_conversation(
     model_selection: Option<SubmissionModelSelection>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
     queued_input_action_id: Option<String>,
+    draft_slot_key: Option<String>,
+    dropped_plan_id: Option<uuid::Uuid>,
 ) -> Result<SubmitConversationPromptAck, String> {
+    let dropped_plan = dropped_plan_id
+        .map(|plan_id| {
+            draft_slot_key
+                .map(|slot| (slot, plan_id))
+                .ok_or("Dropped file continuation requires a draft slot.")
+        })
+        .transpose()?;
     let has_supplement = prompt.is_some()
         || hidden_model_guidance.is_some()
         || execution_mode.is_some()
         || reasoning_effort.is_some()
         || model_selection.is_some()
-        || attachments.is_some();
+        || attachments.is_some()
+        || dropped_plan.is_some();
     if let Some(queued_input_action_id) = queued_input_action_id {
         if has_supplement {
             return Err(String::from(
@@ -2098,6 +2111,7 @@ pub(super) async fn service_continue_conversation(
         reasoning_effort,
         model_selection,
         attachments,
+        dropped_plan,
     });
     service_continue_conversation_with_submission(
         app,
@@ -2224,6 +2238,7 @@ async fn service_continue_conversation_with_submission(
         reasoning_effort,
         model_selection,
         attachments,
+        dropped_plan,
     ) = match user_submission {
         Some(submission) => (
             Some(submission.prompt),
@@ -2232,16 +2247,20 @@ async fn service_continue_conversation_with_submission(
             submission.reasoning_effort,
             submission.model_selection,
             submission.attachments,
+            submission.dropped_plan,
         ),
-        None => (None, None, None, None, None, None),
+        None => (None, None, None, None, None, None, None),
     };
+    let (draft_slot_key, dropped_plan_id) = dropped_plan
+        .map(|(slot, plan)| (Some(slot), Some(plan)))
+        .unwrap_or_default();
     let acknowledgement = service_start_conversation_execution(
         app,
         state,
         client_continuation_id,
         None,
         Some(conversation_id),
-        None,
+        draft_slot_key,
         prompt,
         hidden_model_guidance,
         execution_mode,
@@ -2249,6 +2268,7 @@ async fn service_continue_conversation_with_submission(
         model_selection,
         None,
         attachments,
+        dropped_plan_id,
         None,
         ExistingSessionHydrationPolicy::TrustRetainedSnapshot,
         ConversationSubmissionMode::Continuation,
@@ -2302,24 +2322,27 @@ pub(super) async fn service_submit_conversation_prompt_rpc(
     model_selection: Option<SubmissionModelSelection>,
     session_settings: Option<SubmissionSessionSettings>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
+    dropped_plan_id: Option<uuid::Uuid>,
 ) -> Result<SubmitConversationPromptAck, String> {
-    service_submit_conversation_prompt(
+    service_start_conversation_execution(
         app,
         state,
         client_submission_id,
         project_id,
         conversation_id,
         Some(draft_slot_key),
-        prompt,
+        Some(prompt),
         hidden_model_guidance,
         execution_mode,
         reasoning_effort,
         model_selection,
         session_settings,
         attachments,
+        dropped_plan_id,
         None,
         ExistingSessionHydrationPolicy::HydrateIfEmpty,
         ConversationSubmissionMode::UserPrompt,
+        None,
         SubmissionActivation::Foreground,
     )
     .await
@@ -2361,6 +2384,7 @@ pub(super) async fn service_submit_conversation_prompt(
         model_selection,
         session_settings,
         attachments,
+        None,
         preauthorized_turn_admission,
         existing_session_hydration_policy,
         submission_mode,
@@ -2725,6 +2749,7 @@ async fn service_start_conversation_execution(
     model_selection: Option<SubmissionModelSelection>,
     session_settings: Option<SubmissionSessionSettings>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
+    dropped_plan_id: Option<uuid::Uuid>,
     preauthorized_turn_admission: Option<ExistingSubmissionAdmissionAuthorization>,
     existing_session_hydration_policy: ExistingSessionHydrationPolicy,
     submission_mode: ConversationSubmissionMode,
@@ -2920,11 +2945,33 @@ async fn service_start_conversation_execution(
             .map_err(|error| error.to_string())?,
         None => None,
     };
-    // existingBoundRequestConfig is captured only from durable Session V1 authority. Submitted
-    // selector echoes are ignored for established sessions because explicit picker RPCs already own
-    // pending Meta updates.
-    // existingBoundRequestConfig 仅从可靠 Session V1 权威捕获。已有会话会忽略提交时回显的
-    // 选择器值，因为显式选择器 RPC 已经唯一负责更新待生效 Meta。
+    // Resolve the exact attachment owner before claiming any browser send plan.
+    // 在领取浏览器发送规划之前解析精确附件所有者。
+    let attachment_workspace_path = composer_attachment_workspace_path_from_snapshot(
+        &workspace_snapshot,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
+    let dropped_request_config = if let Some(plan_id) = dropped_plan_id {
+        Some(
+            crate::media_upload::claim_dropped_composer_plan(
+                &state,
+                plan_id,
+                &attachment_workspace_path,
+                attachment_draft_scope.as_deref(),
+                &attachment_summaries,
+                client_submission_id.as_str(),
+                &agent_runtime,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    // An existing queued receipt is authoritative on retries. A fresh send uses the previously
+    // frozen Core drop plan or captures the next V1 configuration at this boundary.
+    // 重试以已有排队回执为权威。新发送使用此前冻结的 Core 拖入规划，
+    // 或在此边界捕获下一次 V1 配置。
     let existing_bound_request_config = match existing_submission_v1_authority.as_ref() {
         Some(authority) => {
             let bound_from_existing_input = authority
@@ -2950,16 +2997,24 @@ async fn service_start_conversation_execution(
                 .map_err(|error| error.to_string())?;
             Some(match bound_from_existing_input {
                 Some(config) => config,
-                None => crate::session_request_config_v1::reconcile_pending_reasoning_for_next_user_boundary_v1(
-                    authority.handle.as_ref(),
-                    agent_runtime.public_ai_runtime.as_ref(),
-                )?,
+                None => match dropped_request_config.as_ref() {
+                    Some(config) => config.clone(),
+                    None => crate::session_request_config_v1::reconcile_pending_reasoning_for_next_user_boundary_v1(
+                        authority.handle.as_ref(),
+                        agent_runtime.public_ai_runtime.as_ref(),
+                    )?,
+                },
             })
         }
         None => None,
     };
     let (reasoning_effort, model_selection) = if submission_session_id.is_some() {
         (None, None)
+    } else if let Some(config) = dropped_request_config.as_ref() {
+        (
+            reasoning_effort,
+            Some(crate::media_upload::dropped_plan_model(config)?),
+        )
     } else {
         (reasoning_effort, model_selection)
     };
@@ -2971,13 +3026,6 @@ async fn service_start_conversation_execution(
             "Client input retry text differs from its originally accepted input.",
         ));
     }
-    // attachmentWorkspacePath binds every browser-provided asset id to the loaded authoritative project before any path can be read or persisted.
-    // attachmentWorkspacePath 在读取或持久化任何路径前，把每个浏览器提供的资产标识绑定到已加载的权威项目。
-    let attachment_workspace_path = composer_attachment_workspace_path_from_snapshot(
-        &workspace_snapshot,
-        project_id.as_deref(),
-        conversation_id.as_deref(),
-    )?;
     let authoritative_attachment_summaries = attachment_summaries
         .into_iter()
         .map(|summary| {
@@ -3000,12 +3048,12 @@ async fn service_start_conversation_execution(
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // canonicalAttachments never retain request-local delivery decisions.
-    // canonicalAttachments 永远不保留单次请求局部传输决策。
+    // Preserve the conservative metadata-only decision in V1 so the same ordered prefix reserves the same budget.
+    // 在 V1 中保留保守的仅元数据决定，使同一有序前缀占用相同额度。
     let attachments = authoritative_attachment_summaries
         .iter()
         .cloned()
-        .map(composer_attachment_summary_to_core)
+        .map(composer_attachment_summary_to_provider_core)
         .collect::<Result<Vec<_>, _>>()?;
     let attachments_for_draft_promotion = attachments.clone();
     // Capture each managed draft's exact lease-bound origin before queue admission or lease promotion can release it.
@@ -3060,14 +3108,6 @@ async fn service_start_conversation_execution(
             }
         })
         .collect::<Result<Vec<_>, String>>()?;
-    // requestedProviderAttachments carries only a conservative metadata-only reduction; every
-    // byte-exposing mode is recomputed from the exact route at the actual dispatch boundary.
-    // requestedProviderAttachments 仅携带保守的仅元数据降级；每种暴露字节的模式都会在实际分发边界
-    // 根据精确路线重新计算。
-    let requested_provider_attachments = authoritative_attachment_summaries
-        .into_iter()
-        .map(composer_attachment_summary_to_provider_core)
-        .collect::<Result<Vec<_>, _>>()?;
     // A same-id retry stays on the durable enqueue receipt even if live activity has since cleared.
     // 同 ID 重试沿用持久化排队回执，即使实时活动已经结束。
     let replaying_scheduled_input = match (&existing_submission_v1_authority, &accepted_input) {
@@ -3162,7 +3202,7 @@ async fn service_start_conversation_execution(
                 session_id,
                 workspace_path: attachment_workspace_path,
                 hidden_model_guidance,
-                attachments: requested_provider_attachments,
+                attachments,
                 attachment_draft_scope,
                 reasoning_effort: queued_reasoning_effort,
                 model_selection: Some(queued_model_selection),
@@ -3210,7 +3250,7 @@ async fn service_start_conversation_execution(
     }
     // The provisional legacy request must not upload or inline bytes before prompt-owned V1 preparation.
     // 临时旧请求不能在提示词所有的V1准备之前上传或内联字节。
-    let provider_attachments = defer_attachment_delivery_to_v1(&requested_provider_attachments);
+    let provider_attachments = defer_attachment_delivery_to_v1(&attachments);
     let materialize_started_at = current_unix_millis_value();
     // materialization_project_id pins a new session to the exact project selected under preflight ownership.
     // materialization_project_id 将新会话固定到预检所有权下选择的精确项目。

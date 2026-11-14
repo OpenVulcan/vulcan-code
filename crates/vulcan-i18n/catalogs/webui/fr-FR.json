@@ -1389,6 +1389,7 @@
   "composer.attachment.menu": "Pièces jointes",
   "composer.attachment.empty": "Aucun type de pièce jointe disponible",
   "composer.attachment.dropPathUnavailable": "Ce fichier ne peut pas être envoyé au modèle sélectionné. Indiquez son chemin réel ou son lien pour le référencer.",
+  "composer.attachment.dropSourceUnavailable": "Déposez à nouveau le fichier d’origine ou collez son chemin ou son lien.",
   "composer.attachment.remove": "Retirer la pièce jointe",
   "composer.attachment.processing": "Confirmation de la ressource envoyée",
   "composer.attachment.preparationBlocked": "{count} pièce(s) jointe(s) en cours de préparation. Attendez la fin avant d’envoyer.",

@@ -365,6 +365,7 @@ pub(crate) fn test_service_state_with_parent_session(
             hydrated_session_ids: BTreeSet::new(),
         }),
         pending_prompt_process_mirrors: BTreeMap::new(),
+        dropped_composer_plans: BTreeMap::new(),
         agent_runtime: None,
         native_vmm_maintenance: None,
         workspace_watcher: None,

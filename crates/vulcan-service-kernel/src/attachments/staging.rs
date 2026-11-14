@@ -75,8 +75,19 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
         project_id.as_deref(),
         conversation_id.as_deref(),
     )?;
-    let descriptor = attachment_descriptor_from_mime_type(&mime_type)
-        .or_else(|| attachment_descriptor_from_path_fallback(&file_name));
+    stage_composer_attachment_base64(&workspace_path, &file_name, &mime_type, &data_base64)
+}
+
+/// Stages the exact named payload in an already validated workspace and returns its managed summary.
+/// 在已验证的工作区暂存指定名称的有效载荷，并返回托管附件摘要。
+pub(crate) fn stage_composer_attachment_base64(
+    workspace_path: &str,
+    file_name: &str,
+    mime_type: &str,
+    data_base64: &str,
+) -> Result<ComposerAttachmentSummary, String> {
+    let descriptor = attachment_descriptor_from_mime_type(mime_type)
+        .or_else(|| attachment_descriptor_from_path_fallback(file_name));
     let bytes = BASE64_STANDARD
         .decode(data_base64.trim())
         .map_err(|error| {
@@ -88,7 +99,7 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
         })?;
     let attachment = if let Some(descriptor) = descriptor {
         stage_project_attachment_bytes(
-            &workspace_path,
+            workspace_path,
             &descriptor,
             file_name.trim(),
             None,
@@ -96,10 +107,10 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
         )?
     } else {
         stage_project_generic_attachment_bytes(
-            &workspace_path,
+            workspace_path,
             file_name.trim(),
             None,
-            &mime_type,
+            mime_type,
             bytes.as_slice(),
         )?
     };

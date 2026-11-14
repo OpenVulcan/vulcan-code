@@ -1389,6 +1389,7 @@
   "composer.attachment.menu": "附件",
   "composer.attachment.empty": "目前沒有可用的附件類型",
   "composer.attachment.dropPathUnavailable": "目前的模型無法直接接收此檔案。請拖入或貼上檔案的實際路徑或連結以引用它。",
+  "composer.attachment.dropSourceUnavailable": "請重新拖入原始檔案，或貼上其路徑或連結。",
   "composer.attachment.remove": "移除附件",
   "composer.attachment.processing": "正在確認上載的資源",
   "composer.attachment.preparationBlocked": "仍有 {count} 個附件正在準備，完成後才能傳送。",

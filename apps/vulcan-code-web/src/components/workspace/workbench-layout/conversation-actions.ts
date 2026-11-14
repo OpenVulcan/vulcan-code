@@ -201,6 +201,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       submission.reasoningEffort,
       submission.modelSelection,
       submission.sessionSettings,
+      submission.droppedPlanId,
     );
     if (!ack) {
       if (selectedDraftConversation) {

@@ -544,7 +544,8 @@ export function ComposerPanel(props: {
   // 将拖入准入和原始文件句柄与托管附件草稿分开。
   const droppedFiles = useComposerDroppedFiles({
     draftSlotKey, projectId: props.projectId, conversationId: props.conversationId, modelSelection: activeModelSelection,
-    attachments, routeRevision: routePlanningRevision, setDraftInput, setDragOver: setIsAttachmentDragOver, flushRoute: flushComposerRouteSelections,
+    attachments, projectAttachments: attachmentPreparation.projectForSubmission, routeRevision: routePlanningRevision,
+    setDraftInput, setDragOver: setIsAttachmentDragOver, flushRoute: flushComposerRouteSelections,
   });
   // Keep shortcuts visible in the placeholder or the note under a populated running draft.
   // 在占位提示或运行中已有内容的草稿下方显示快捷键。

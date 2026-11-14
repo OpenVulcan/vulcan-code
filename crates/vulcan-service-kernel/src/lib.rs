@@ -478,6 +478,7 @@ pub fn create_service_bridge_state(
         workbench_generation: 0,
         workspace_snapshot: None,
         pending_prompt_process_mirrors: BTreeMap::new(),
+        dropped_composer_plans: BTreeMap::new(),
         agent_runtime: None,
         native_vmm_maintenance: None,
         workspace_watcher: None,

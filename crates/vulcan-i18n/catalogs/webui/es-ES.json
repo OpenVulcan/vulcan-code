@@ -1389,6 +1389,7 @@
   "composer.attachment.menu": "Adjuntos",
   "composer.attachment.empty": "No hay tipos de adjunto disponibles",
   "composer.attachment.dropPathUnavailable": "Este archivo no se puede enviar al modelo seleccionado. Para referenciarlo, introduce su ruta real o su enlace.",
+  "composer.attachment.dropSourceUnavailable": "Vuelve a arrastrar el archivo original o pega su ruta o enlace.",
   "composer.attachment.remove": "Quitar el adjunto",
   "composer.attachment.processing": "Confirmando el recurso subido",
   "composer.attachment.preparationBlocked": "Todavía se están preparando {count} adjuntos. Espera a que terminen antes de enviar.",

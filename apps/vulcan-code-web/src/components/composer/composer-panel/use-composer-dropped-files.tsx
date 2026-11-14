@@ -9,7 +9,51 @@ import type { ComposerAttachmentSummary } from "@/types";
 
 // A dropped file holds its original browser handle and any verified reference until send.
 // 拖入文件保留原始浏览器句柄和已验证引用，直到发送。
-type DroppedFile = { file: File; reference: string | null };
+type DroppedFile = {
+  // Browser-owned original; absent after reloading the client.
+  // 浏览器持有的原件，客户端刷新后为空。
+  file: File | null;
+  // Display name identifies the item if the browser cannot restore its original handle.
+  // 浏览器无法恢复原件句柄时，用展示名称识别此项。
+  name: string;
+  // Genuine native path or explicit dropped URI, when the client provided one.
+  // 客户端提供的真实原生路径或明确拖入 URI。
+  reference: string | null;
+};
+
+// Session storage keeps only local reference metadata and isolates independent browser tabs.
+// 会话存储只保存本地引用元数据，并隔离不同浏览器标签页。
+const DROP_DRAFT_STORAGE_PREFIX = "vulcan.composer.pending-drops.v1:";
+
+// Restores one draft's reference list, leaving its browser-owned file handles empty.
+// 恢复单份草稿的引用列表，浏览器持有的文件句柄保持为空。
+function readDroppedDraft(owner: string): DroppedFile[] {
+  try {
+    const stored = window.sessionStorage?.getItem(DROP_DRAFT_STORAGE_PREFIX + owner);
+    if (!stored) return [];
+    const values: unknown = JSON.parse(stored);
+    if (!Array.isArray(values)) return [];
+    return values.flatMap((entry: unknown) => {
+      if (typeof entry !== "object" || entry === null || !("name" in entry)
+        || typeof entry.name !== "string" || !("reference" in entry)
+        || (entry.reference !== null && typeof entry.reference !== "string")) return [];
+      return [{ file: null, name: entry.name, reference: entry.reference }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+// Writes the recoverable references and display names for one draft without storing bytes.
+// 写入单份草稿可恢复的引用与展示名称，无需存储字节。
+function writeDroppedDraft(owner: string, files: readonly DroppedFile[]): void {
+  const key = DROP_DRAFT_STORAGE_PREFIX + owner;
+  if (files.length) {
+    window.sessionStorage?.setItem(key, JSON.stringify(files.map(({ name, reference }) => ({ name, reference }))));
+  } else {
+    window.sessionStorage?.removeItem(key);
+  }
+}
 
 // The live owner and route are read again after pending model writes finish.
 // 待生效模型写入完成后，重新读取活动所有者与路线。
@@ -20,6 +64,7 @@ interface DroppedFilesOptions {
   modelSelection: ComposerModelSelectionSnapshot | null;
   routeRevision: string;
   attachments: ComposerAttachmentSummary[];
+  projectAttachments: (attachments: ComposerAttachmentSummary[]) => ComposerAttachmentSummary[];
   setDraftInput: React.Dispatch<React.SetStateAction<string>>;
   setDragOver: (active: boolean) => void;
   flushRoute: () => Promise<boolean>;
@@ -51,14 +96,34 @@ export function useComposerDroppedFiles(options: DroppedFilesOptions) {
   // One component may switch among several drafts without releasing their browser file handles.
   // 同一组件可在多个草稿间切换，同时保留各自的浏览器文件句柄。
   const [drafts, setDrafts] = React.useState(() => new Map<string, DroppedFile[]>());
+  // Cache restored entries so removing or completing an item retains exact object identity.
+  // 缓存恢复条目，使移除或完成操作保留精确对象身份。
+  const restoredDrafts = React.useRef(new Map<string, DroppedFile[]>());
   const latest = React.useRef(options);
   latest.current = options;
-  const files = drafts.get(options.draftSlotKey);
+  const ownerFiles = drafts.get(options.draftSlotKey);
+  if (!ownerFiles && !restoredDrafts.current.has(options.draftSlotKey)) {
+    restoredDrafts.current.set(options.draftSlotKey, readDroppedDraft(options.draftSlotKey));
+  }
+  const files = ownerFiles ?? restoredDrafts.current.get(options.draftSlotKey) ?? [];
   const checking = React.useRef<string | null>(null);
   const [checkingSlot, setCheckingSlot] = React.useState<string | null>(null);
   // Keep inspection and submission mutually exclusive for this draft.
   // 当前草稿的拖入检查和提交准备互斥。
   const preparing = React.useRef(false);
+
+  // Commits an exact owner list immediately so refresh during a pending send can recover the references.
+  // 立即提交精确所有者的列表，使发送等待期间刷新也可恢复引用。
+  function updateDroppedDraft(owner: string, next: DroppedFile[]): void {
+    setDrafts(previous => new Map(previous).set(owner, next));
+    try {
+      writeDroppedDraft(owner, next);
+    } catch (error) {
+      toast.error(t("composer.error.draftPersistFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   // Reserve the drop target for native files and URI lists, including path-only drops.
   // 为原生文件与 URI 列表保留拖放目标，包括仅路径的拖放。
@@ -86,7 +151,7 @@ export function useComposerDroppedFiles(options: DroppedFilesOptions) {
       return;
     }
     const candidates = incoming.map(file => ({
-      file, reference: droppedReference(file, incoming.length === 1 && uris.length === 1 ? uris[0] : null),
+      file, name: file.name, reference: droppedReference(file, incoming.length === 1 && uris.length === 1 ? uris[0] : null),
     }));
     checking.current = owner;
     setCheckingSlot(owner);
@@ -95,9 +160,14 @@ export function useComposerDroppedFiles(options: DroppedFilesOptions) {
       const current = latest.current;
       // Include originals already pending so the same route budget is used across multiple drops.
       // 包含已待传的原文件，使多次拖放共用同一路线预算。
-      const existing = files ?? [];
-      const plans = (await classifyDroppedComposerFiles(current.conversationId, current.modelSelection,
-        [...existing.map(item => item.file), ...incoming])).slice(existing.length);
+      const existing = files.flatMap(item => item.file ? [item.file] : []);
+      const { eligible } = await classifyDroppedComposerFiles({
+        projectId: current.projectId, conversationId: current.conversationId, draftSlotKey: owner,
+        modelSelection: current.modelSelection, attachments: current.projectAttachments(current.attachments),
+        maxNewAttachments: Math.max(0, MAX_COMPOSER_ATTACHMENTS - current.attachments.length),
+        files: [...existing, ...incoming], forSubmission: false,
+      });
+      const plans = eligible.slice(existing.length);
       if (!sameDropTarget(latest.current, current)) return;
       const references: string[] = [];
       const pending: DroppedFile[] = [];
@@ -107,13 +177,20 @@ export function useComposerDroppedFiles(options: DroppedFilesOptions) {
         else if (item.reference) references.push(item.reference);
         else missingPath = true;
       }
-      const slots = Math.max(0, MAX_COMPOSER_ATTACHMENTS - latest.current.attachments.length - (files?.length ?? 0));
-      if (pending.length > slots) toast.info(t("composer.attachment.partialMaxLimit").replace("{count}", String(MAX_COMPOSER_ATTACHMENTS)));
+      // One drop replaces at most one recovered occurrence of the same source.
+      // 每个拖入文件最多替换一个同源的恢复条目。
+      const retained = files.slice();
+      for (const candidate of candidates) {
+        const replacement = retained.findIndex(item => !item.file && (
+          item.reference ? item.reference === candidate.reference : item.name === candidate.name
+        ));
+        if (replacement >= 0 && (candidate.reference || pending.includes(candidate))) retained.splice(replacement, 1);
+      }
       if (missingPath) toast.info(t("composer.attachment.dropPathUnavailable"));
       if (references.length) latest.current.setDraftInput(input => appendReferences(input, references));
-      if (slots && pending.length) setDrafts(previous => new Map(previous).set(owner, [
-        ...(previous.get(owner) ?? []), ...pending.slice(0, slots),
-      ]));
+      if (retained.length !== files.length || pending.length) {
+        updateDroppedDraft(owner, [...retained, ...pending]);
+      }
     } catch (error) {
       if (latest.current.draftSlotKey === owner) {
         toast.error(t("composer.attachment.unsupported"), { description: error instanceof Error ? error.message : String(error) });
@@ -126,90 +203,107 @@ export function useComposerDroppedFiles(options: DroppedFilesOptions) {
 
   // Reclassify against the actual sending route before reading any file or creating an asset.
   // 在读取任何文件或创建资产之前，按实际发送路线重新判定。
-  async function prepare(prompt: string): Promise<{
-    prompt: string; attachments: ComposerAttachmentSummary[]; complete: () => void; rollback: () => Promise<void>;
+  async function prepare(prompt: string, submittedAttachments: ComposerAttachmentSummary[]): Promise<{
+    prompt: string; attachments: ComposerAttachmentSummary[]; planId?: string;
+    complete: () => void; rollback: (restoredAttachments?: ComposerAttachmentSummary[]) => Promise<void>;
   } | null> {
     const owner = options.draftSlotKey;
-    if (!files?.length) return null;
+    if (!files.length) return null;
     if (checking.current !== null || preparing.current || !sameDropTarget(latest.current, options)) return null;
     preparing.current = true;
     setCheckingSlot(owner);
     const current = latest.current;
     const attachments: ComposerAttachmentSummary[] = [];
     let handedToSubmission = false;
+    // Release the draft barrier after the send or its rollback actually settles.
+    // 发送或回滚真正结算后才释放草稿屏障。
+    function finish(): void {
+      preparing.current = false;
+      setCheckingSlot(null);
+    }
     // Dispose of draft references for files prepared by an abandoned or rejected submission.
     // 清理被放弃或拒绝的提交所准备的文件草稿引用。
-    async function rollback(): Promise<void> {
-      if (!attachments.length) return;
-      const existing = latest.current.draftSlotKey === owner ? latest.current.attachments : current.attachments;
+    async function rollback(restoredAttachments?: ComposerAttachmentSummary[]): Promise<void> {
       try {
-        await reconcileComposerAttachmentDraftLease(current.projectId, current.conversationId, owner, existing);
+        if (attachments.length) {
+          // Use the restored snapshot directly because React may still render the cleared draft.
+          // 直接使用恢复快照，因为 React 可能仍渲染已清空的草稿。
+          const existing = restoredAttachments
+            ?? (latest.current.draftSlotKey === owner ? latest.current.attachments : current.attachments);
+          await reconcileComposerAttachmentDraftLease(current.projectId, current.conversationId, owner, existing);
+        }
       } catch (error) {
         if (latest.current.draftSlotKey === owner) {
           toast.error(t("composer.error.draftPersistFailed"), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
+      } finally {
+        finish();
       }
     }
     try {
-      const plans = await classifyDroppedComposerFiles(current.conversationId, current.modelSelection, files.map(item => item.file));
-      if (!sameDropTarget(latest.current, current)) return null;
-      if (files.some((item, index) => !plans[index] && !item.reference)) {
+      if (files.some(item => !item.file && !item.reference)) {
+        toast.info(t("composer.attachment.dropSourceUnavailable"));
+        return null;
+      }
+      const originals = files.flatMap(item => item.file ? [item.file] : []);
+      const { eligible, planId } = originals.length ? await classifyDroppedComposerFiles({
+        projectId: current.projectId, conversationId: current.conversationId, draftSlotKey: owner,
+        modelSelection: current.modelSelection, attachments: submittedAttachments,
+        maxNewAttachments: Math.max(0, MAX_COMPOSER_ATTACHMENTS - submittedAttachments.length),
+        files: originals, forSubmission: true,
+      }) : { eligible: [], planId: null };
+      if (latest.current.draftSlotKey !== owner) return null;
+      let decisionIndex = 0;
+      const decisions = files.map((item) => Boolean(item.file && eligible[decisionIndex++]));
+      if (files.some((item, index) => !decisions[index] && !item.reference)) {
         toast.info(t("composer.attachment.dropPathUnavailable"));
         return null;
       }
       const references: string[] = [];
+      // Stage indices count only originals because recovered references have no wire file.
+      // 暂存索引只统计原件，因为已恢复引用没有线上文件。
+      let stageIndex = 0;
       for (const [index, item] of files.entries()) {
-        if (!sameDropTarget(latest.current, current)) return null;
-        if (plans[index]) {
-          const attachment = await stageDroppedComposerFile(
-            current.projectId, current.conversationId, owner, current.modelSelection, item.file,
-          );
-          if (attachment) {
-            attachments.push(attachment);
-            continue;
+        if (latest.current.draftSlotKey !== owner) return null;
+        if (item.file) {
+          if (decisions[index]) {
+            if (!planId) throw new Error("Core did not return a dropped-file send plan.");
+            attachments.push(await stageDroppedComposerFile(planId, stageIndex, item.file));
           }
+          stageIndex += 1;
         }
-        if (!item.reference) {
-          toast.info(t("composer.attachment.dropPathUnavailable"));
-          return null;
-        }
-        references.push(item.reference);
+        if (!decisions[index] && item.reference) references.push(item.reference);
       }
-      if (!sameDropTarget(latest.current, current)) return null;
+      if (latest.current.draftSlotKey !== owner) return null;
       handedToSubmission = true;
       return {
         prompt: appendReferences(prompt, references),
         attachments,
+        ...(planId ? { planId } : {}),
         rollback,
-        complete: () => setDrafts(previous => {
-          const remaining = previous.get(owner)?.filter(item => !files.includes(item)) ?? [];
-          const updated = new Map(previous);
-          if (remaining.length) updated.set(owner, remaining);
-          else updated.delete(owner);
-          return updated;
-        }),
+        complete: () => {
+          updateDroppedDraft(owner, []);
+          finish();
+        },
       };
     } finally {
       if (!handedToSubmission) await rollback();
-      preparing.current = false;
-      setCheckingSlot(null);
     }
   }
 
   // Render pending originals separately from the managed attachment strip.
   // 将待传原始文件与托管附件条分开渲染。
-  const preview = files?.length ? (
+  const preview = files.length ? (
     <div>
       {files.map((item, index) => (
         <Button key={index} type="button" size="sm" variant="ghost" disabled={checkingSlot === options.draftSlotKey} title={t("composer.attachment.remove")}
-          onClick={() => setDrafts(previous => new Map(previous).set(options.draftSlotKey,
-            (previous.get(options.draftSlotKey) ?? []).filter(file => file !== item)))}>
-          {item.file.name} ×
+          onClick={() => updateDroppedDraft(options.draftSlotKey, files.filter(file => file !== item))}>
+          {item.file ? item.name : item.reference ?? item.name} ×
         </Button>
       ))}
     </div>
   ) : null;
-  return { count: files?.length ?? 0, checking: checkingSlot === options.draftSlotKey, dragOver, drop, prepare, preview };
+  return { count: files.length, checking: checkingSlot === options.draftSlotKey, dragOver, drop, prepare, preview };
 }

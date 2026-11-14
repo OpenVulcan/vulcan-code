@@ -1389,6 +1389,7 @@
   "composer.attachment.menu": "添付ファイル",
   "composer.attachment.empty": "利用できる添付ファイルの種類はありません",
   "composer.attachment.dropPathUnavailable": "選択したモデルにはこのファイルを送信できません。参照するには実際のパスまたはリンクを入力してください。",
+  "composer.attachment.dropSourceUnavailable": "元のファイルをもう一度ドロップするか、パスまたはリンクを貼り付けてください。",
   "composer.attachment.remove": "添付ファイルを削除",
   "composer.attachment.processing": "アップロードしたリソースを確認しています",
   "composer.attachment.preparationBlocked": "{count} 個の添付ファイルをまだ準備中です。完了してから送信してください。",

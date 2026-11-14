@@ -258,6 +258,23 @@ pub fn resolve_indexed_attachment_resource(
     resolve_indexed_attachment_resource_internal(workspace_path, None, reference, expected_kind)
 }
 
+/// Resolves this indexed draft asset's kind, size and identity without reading its payload.
+/// 无需读取载荷，即可解析此索引草稿资产的类别、大小与身份。
+/// Paths and file size are verified against the index; submission still verifies the content digest.
+/// 按索引校验路径及文件大小，正式提交仍验证内容摘要。
+pub fn resolve_indexed_attachment_metadata(
+    workspace_path: &str,
+    asset_id: &str,
+    expected_kind: ConversationAttachmentKind,
+) -> Result<ConversationAttachment, String> {
+    resolve_indexed_attachment_resource_metadata_internal(
+        workspace_path,
+        None,
+        &format!("attachment://{asset_id}"),
+        Some(expected_kind),
+    )
+}
+
 /// Resolves and verifies one indexed attachment with optional canonical conversation ownership enforcement.
 /// 解析并校验一条索引附件，并可选强制校验规范会话所有权。
 ///

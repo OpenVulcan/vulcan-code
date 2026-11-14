@@ -112,6 +112,14 @@ async function pressEnter(init: KeyboardEventInit = {}): Promise<KeyboardEvent> 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Use separate storage areas for persistent preferences and this simulated browser tab.
+  // 永久偏好与本模拟浏览器标签页使用各自独立的存储。
+  const tab = new Map<string, string>();
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => tab.get(key) ?? null,
+    setItem: (key: string, value: string) => { tab.set(key, value); },
+    removeItem: (key: string) => { tab.delete(key); },
+  });
   // stored isolates browser preferences without relying on Node's optional localStorage.
   // stored 隔离浏览器偏好，无需依赖 Node 的可选 localStorage。
   const stored = new Map<string, string>();
@@ -165,18 +173,20 @@ it("references unsupported CHM, restricted image and oversized video through the
     new File([new Uint8Array(2048)], "recording.mp4", { type: "video/mp4" }),
   ];
   vi.stubGlobal("vulcanDesktop", { localFile: { inspect: vi.fn(), pathForFile: (file: File) => `D:/Examples/${file.name}` } });
-  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue([false, false, false]);
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue({ eligible: [false, false, false], planId: null });
   const props = composerProps({ isConversationRunning: false });
   await mount(props);
   await dragIntoComposer(files);
   expect(host.querySelector("textarea")?.value).toBe("D:/Examples/guide.chm\nD:/Examples/drawing.gif\nD:/Examples/recording.mp4");
-  expect(classifyDroppedComposerFiles).toHaveBeenCalledWith(props.conversationId, null, files);
+  expect(classifyDroppedComposerFiles).toHaveBeenCalledWith(expect.objectContaining({
+    conversationId: props.conversationId, files, attachments: [], forSubmission: false,
+  }));
   expect(stageDroppedComposerFile).not.toHaveBeenCalled();
   expect(props.onStageAttachmentBytes).not.toHaveBeenCalled();
 });
 
 it("inserts a dropped URL and asks for a path when an unsupported file has no native locator", async () => {
-  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue([false]);
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue({ eligible: [false], planId: null });
   const feedback = vi.spyOn(toast, "info");
   await mount(composerProps());
   await dragIntoComposer([], "https://example.test/reference");
@@ -191,7 +201,9 @@ it("rechecks dropped files before staging and keeps rejected originals as refere
   const image = new File(["image"], "drawing.gif", { type: "image/gif" });
   const video = new File(["video"], "recording.mp4", { type: "video/mp4" });
   vi.stubGlobal("vulcanDesktop", { localFile: { inspect: vi.fn(), pathForFile: (file: File) => `D:/Examples/${file.name}` } });
-  vi.mocked(classifyDroppedComposerFiles).mockResolvedValueOnce([true, true]).mockResolvedValueOnce([false, true]);
+  vi.mocked(classifyDroppedComposerFiles)
+    .mockResolvedValueOnce({ eligible: [true, true], planId: null })
+    .mockResolvedValueOnce({ eligible: [false, true], planId: "frozen-send" });
   const staged = { kind: "video", localPath: "/staged/recording.mp4", fileName: "recording.mp4", mimeType: "video/mp4", assetId: "video-asset" } satisfies ComposerAttachmentSummary;
   vi.mocked(stageDroppedComposerFile).mockResolvedValueOnce(staged);
   transport.loadSession.mockResolvedValue({
@@ -206,10 +218,70 @@ it("rechecks dropped files before staging and keeps rejected originals as refere
   await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="composer.aria.send"]')!.click(); });
   expect(classifyDroppedComposerFiles).toHaveBeenCalledTimes(2);
   expect(stageDroppedComposerFile).toHaveBeenCalledTimes(1);
-  expect(vi.mocked(stageDroppedComposerFile).mock.calls[0]?.[4]).toBe(video);
+  expect(stageDroppedComposerFile).toHaveBeenCalledWith("frozen-send", 1, video);
   expect(props.onSubmitPrompt).toHaveBeenCalledWith(expect.objectContaining({
-    prompt: "D:/Examples/drawing.gif", attachments: [staged],
+    prompt: "D:/Examples/drawing.gif", attachments: [staged], droppedPlanId: "frozen-send",
   }));
+});
+
+it("includes the managed prefix when classifying a new drop", async () => {
+  // The loaded fixture represents a PDF previously added through the file picker.
+  // 加载的夹具表示此前通过文件选择器添加的 PDF。
+  const managed = { kind: "file", localPath: "/staged/picked.pdf", fileName: "picked.pdf",
+    mimeType: "application/pdf", assetId: "managed-pdf" } satisfies ComposerAttachmentSummary;
+  transport.read.mockImplementation(async (sessionId: string) => ({ sessionId, text: "", attachments: [managed] }));
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue({ eligible: [false], planId: null });
+  const dropped = new File(["pdf"], "second.pdf", { type: "application/pdf" });
+  await mount(composerProps());
+  await dragIntoComposer([dropped], "file:///D:/Examples/second.pdf");
+  expect(classifyDroppedComposerFiles).toHaveBeenCalledWith(expect.objectContaining({
+    attachments: [expect.objectContaining({ assetId: managed.assetId })], files: [dropped],
+  }));
+  expect(host.querySelector("textarea")?.value).toContain("file:///D:/Examples/second.pdf");
+  expect(stageDroppedComposerFile).not.toHaveBeenCalled();
+});
+
+it("restores only a reference after remount and sends it without staging", async () => {
+  transport.loadSettings.mockResolvedValue(publicAiSettingsWithInvalidDefaultFixture());
+  transport.loadSession.mockResolvedValue({
+    enabledCapabilities: [], selections: {}, extensionTargetSets: {}, extensionModes: {},
+    mediaUnderstandingSelections: {}, conflicts: [], requestsStarted: true,
+  } satisfies PublicAiSessionProviderToolSettings);
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue({ eligible: [true], planId: null });
+  const props = composerProps({ isConversationRunning: false });
+  await mount(props);
+  await dragIntoComposer([new File(["original bytes"], "pending.mp4", { type: "video/mp4" })], "file:///D:/Examples/pending.mp4");
+  await act(async () => { root.unmount(); });
+  root = createRoot(host);
+  await mount(props);
+  expect(host.textContent).toContain("file:///D:/Examples/pending.mp4");
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="composer.aria.send"]')!.click(); });
+  expect(classifyDroppedComposerFiles).toHaveBeenCalledTimes(1);
+  expect(stageDroppedComposerFile).not.toHaveBeenCalled();
+  expect(props.onSubmitPrompt).toHaveBeenCalledWith(expect.objectContaining({
+    prompt: "file:///D:/Examples/pending.mp4", attachments: [],
+  }));
+  expect(host.textContent).not.toContain("file:///D:/Examples/pending.mp4");
+});
+
+it("blocks a recovered file without a path until the browser supplies a new original", async () => {
+  transport.loadSettings.mockResolvedValue(publicAiSettingsWithInvalidDefaultFixture());
+  transport.loadSession.mockResolvedValue({
+    enabledCapabilities: [], selections: {}, extensionTargetSets: {}, extensionModes: {},
+    mediaUnderstandingSelections: {}, conflicts: [], requestsStarted: true,
+  } satisfies PublicAiSessionProviderToolSettings);
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue({ eligible: [true], planId: null });
+  const feedback = vi.spyOn(toast, "info");
+  const props = composerProps({ isConversationRunning: false });
+  await mount(props);
+  await dragIntoComposer([new File(["original bytes"], "no-path.gif", { type: "image/gif" })]);
+  await act(async () => { root.unmount(); });
+  root = createRoot(host);
+  await mount(props);
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="composer.aria.send"]')!.click(); });
+  expect(feedback).toHaveBeenCalledWith("composer.attachment.dropSourceUnavailable");
+  expect(stageDroppedComposerFile).not.toHaveBeenCalled();
+  expect(props.onSubmitPrompt).not.toHaveBeenCalled();
 });
 
 it("blocks Enter exactly like the disabled send button when capabilities are unavailable during a run", async () => {

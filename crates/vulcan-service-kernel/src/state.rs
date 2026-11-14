@@ -822,6 +822,12 @@ pub struct ServiceBridgeState {
     /// Process-local pending-prompt compatibility mirrors keyed by session id.
     /// 按会话标识索引的进程内待发送提示词兼容镜像。
     pub(crate) pending_prompt_process_mirrors: BTreeMap<SessionId, PendingPromptProcessMirror>,
+    /// Process-local dropped-file send plans and their creation times.
+    /// 进程内拖入文件发送规划及其创建时间。
+    pub(crate) dropped_composer_plans: BTreeMap<
+        uuid::Uuid,
+        (std::time::Instant, Arc<Mutex<crate::media_upload::DroppedComposerPlan>>),
+    >,
     /// Long-lived shared agent runtime bridge.
     /// 长生命周期共享 Agent 运行时桥接。
     pub(crate) agent_runtime: Option<AgentRuntimeBridge>,

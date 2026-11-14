@@ -14,6 +14,7 @@ use vulcan_workspace_store::{
     workspace_store::{delete_active_project_row_v1, ensure_session_v1_storage_schema},
 };
 
+mod dropped_composer_http;
 mod recovery_http;
 
 /// The exact project inserted into each isolated recovery database.

@@ -38,6 +38,7 @@ export async function submitConversationPrompt(
   reasoningEffort: string | null,
   modelSelection: ComposerModelSelectionSnapshot | null,
   sessionSettings: ComposerSessionSettingsSnapshot | null,
+  droppedPlanId?: string,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -54,6 +55,7 @@ export async function submitConversationPrompt(
     reasoningEffort,
     modelSelection,
     sessionSettings,
+    droppedPlanId,
   });
 }
 
@@ -81,6 +83,8 @@ export async function continueConversation(
       reasoningEffort: supplement?.reasoningEffort,
       modelSelection: supplement?.modelSelection,
       attachments: supplement?.attachments,
+      draftSlotKey: supplement?.droppedPlanId ? supplement.draftSlotKey : undefined,
+      droppedPlanId: supplement?.droppedPlanId,
     },
     { signal },
   );
@@ -860,25 +864,38 @@ function droppedComposerFileFacts(file: File) {
   return { fileName: file.name, mimeType: file.type, byteLen: file.size };
 }
 
-// Ask Core to classify dropped files in their current order without transferring their contents.
-// 请求 Core 按当前顺序判定拖入文件，不传递文件内容。
+// Identifies the exact ordered composer draft used by Core for drop classification.
+// 标识 Core 用于拖入分类的精确有序输入区草稿。
+interface DroppedComposerFileRequest {
+  projectId: string | null;
+  conversationId: string | null;
+  draftSlotKey: string;
+  modelSelection: ComposerModelSelectionSnapshot | null;
+  attachments: ComposerAttachmentSummary[];
+  // Remaining UI attachment slots before admitting pending and new originals.
+  // 准入待发与新增原件前，界面剩余的附件槽位。
+  maxNewAttachments: number;
+  files: File[];
+  forSubmission: boolean;
+}
+
+// Returns per-file delivery decisions and an optional frozen plan without transferring file bytes.
+// 返回逐文件交付决定及可选冻结规划，不传递文件字节。
 export function classifyDroppedComposerFiles(
-  conversationId: string | null, modelSelection: ComposerModelSelectionSnapshot | null, files: File[],
-): Promise<boolean[]> {
+  request: DroppedComposerFileRequest,
+): Promise<{ eligible: boolean[]; planId: string | null }> {
   return serviceClient.request("service_classify_dropped_composer_files", {
-    conversationId, modelSelection, files: files.map(droppedComposerFileFacts),
+    request: { ...request, files: request.files.map(droppedComposerFileFacts) },
   });
 }
 
-// Stage an eligible dropped file under its draft owner and recheck the route at the write boundary.
-// 以草稿所有者暂存符合条件的拖入文件，并在写入边界重新检查路线。
+// Transfers the original bytes of the position already admitted by Core and returns its managed asset.
+// 传递 Core 已准入位置的原始字节，并返回其托管资产。
 export async function stageDroppedComposerFile(
-  projectId: string | null, conversationId: string | null, draftSlotKey: string,
-  modelSelection: ComposerModelSelectionSnapshot | null, file: File,
-): Promise<ComposerAttachmentSummary | null> {
+  planId: string, index: number, file: File,
+): Promise<ComposerAttachmentSummary> {
   return serviceClient.request("service_stage_dropped_composer_file", {
-    projectId, conversationId, draftSlotKey, modelSelection,
-    file: droppedComposerFileFacts(file), dataBase64: await blobToBase64(file),
+    planId, index, dataBase64: await blobToBase64(file),
   });
 }
 

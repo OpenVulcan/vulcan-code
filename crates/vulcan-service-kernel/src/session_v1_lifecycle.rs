@@ -677,6 +677,14 @@ pub(crate) fn register_project_prompt_attachments_v1(
     // 每次出现保留自己的来源分类及时间顺序位置。
     let mut preparations = Vec::with_capacity(resource_ids.len());
     for ((resource_id, origin), attachment) in resource_ids.iter().zip(origins).zip(attachments) {
+        // An explicit metadata-only draft decision must survive into V1, where native counts are charged.
+        // 显式草稿仅元数据决定必须保留到 V1，因为原生数量在那里结算。
+        if attachment.delivery_mode
+            == Some(vulcan_core::types::ConversationAttachmentDeliveryMode::MetadataOnly)
+        {
+            preparations.push(UserPromptResourcePreparation::Unproven);
+            continue;
+        }
         match origin {
             PromptAttachmentOrigin::Staged(Some(origin)) => {
                 if let vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload { receipt: Some(receipt), .. } = &origin.delivery {
