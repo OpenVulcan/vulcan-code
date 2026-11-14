@@ -212,7 +212,7 @@ async fn prepare_shell_job_redaction(
     let environment = environment
         .ok_or_else(|| NativeToolError::new("Shell job output redaction is not ready."))?;
     environment
-        .effective(session_id)
+        .prepare_historical_job_redaction(session_id)
         .await
         .map_err(NativeToolError::new)?;
     Ok(())

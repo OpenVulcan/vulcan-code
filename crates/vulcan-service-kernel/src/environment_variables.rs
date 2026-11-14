@@ -132,6 +132,17 @@ impl NativeEnvironmentHost for KernelEnvironmentHost {
         session_effective_environment(&self.registry, &state, session_id).await
     }
 
+    async fn historical_job_secrets(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<(String, String)>, String> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| String::from("The service is shutting down."))?;
+        historical_job_secrets(&state, &session_id.to_string()).await
+    }
+
     async fn set_session_variable(
         &self,
         session_id: SessionId,
@@ -679,13 +690,44 @@ pub(crate) async fn register_activity_environment_secrets(
     raw_session_id: &str,
     task_runtime: &TaskRuntime,
 ) -> Result<(), String> {
-    let locator = historical_job_environment_locator(state, raw_session_id).await?;
-    for variable in effective_environment_at(state, &locator).await? {
-        if variable.kind == EnvironmentVariableKind::Secret {
-            task_runtime.register_environment_secret(&variable.name, &variable.value)?;
-        }
+    for (name, value) in historical_job_secrets(state, raw_session_id).await? {
+        task_runtime.register_environment_secret(&name, &value)?;
     }
     Ok(())
+}
+
+/// Collects all applicable stored secret values for one job owner, including shadowed names.
+/// 收集一个任务归属会话所有适用的已存储密钥值，包括被同名覆盖的值。
+/// Returns the name/value pairs only for registration with the output filter.
+/// 返回仅用于输出过滤器登记的名称和值。
+async fn historical_job_secrets(
+    state: &SharedServiceBridgeState,
+    raw_session_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let locator = historical_job_environment_locator(state, raw_session_id).await?;
+    let database = database_of(state)?;
+    let records = list_environment_variables(&database).await?;
+    let session = load_session_environment(&locator)?;
+
+    // A retained log can predate the current scope precedence, so filter by scope before any name merging.
+    // 保留的日志可能早于当前作用域优先级，因此先按作用域过滤，不合并同名变量。
+    let applicable = records
+        .into_iter()
+        .filter(|record| {
+            record.kind == EnvironmentVariableKind::Secret
+                && match &record.scope {
+                    EnvironmentVariableScope::Global => true,
+                    EnvironmentVariableScope::Projects(projects) => projects
+                        .iter()
+                        .any(|project_id| project_id == locator.project_id()),
+                }
+        })
+        .map(|record| (record.name, record.value));
+    let local = session
+        .into_iter()
+        .filter(|variable| variable.kind == EnvironmentVariableKind::Secret)
+        .map(|variable| (variable.name, variable.value));
+    Ok(applicable.chain(local).collect())
 }
 
 /// Projects one stored variable for the manager; a secret value is never sent.
@@ -756,12 +798,15 @@ mod tests {
         assert_eq!(entry_from_record(&plain).value, "secret-value");
     }
 
-    /// Registers stored session and project secrets on the first history read after startup.
-    /// 重启后首次读取历史记录时，登记已存储的会话和项目密钥。
+    /// Registers all stored same-name secrets on the first history read after startup.
+    /// 重启后首次读取历史记录时，登记全部已存储的同名密钥。
     #[tokio::test]
-    async fn historical_job_redaction_registers_cold_session_secrets() {
+    async fn historical_job_redaction_keeps_same_name_secrets_from_all_layers() {
         use crate::tests::test_support::{
-            TestHostRuntimeRoot, test_service_state_with_parent_session,
+            TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
+        };
+        use vulcan_host_tools::shell_job::{
+            SHELL_JOBS_DIRECTORY, ShellJobRuntime, ShellJobSpawn, ShellJobStatus,
         };
 
         use vulcan_workspace_store::{
@@ -812,7 +857,7 @@ mod tests {
         create_environment_variable(
             &controller,
             EnvironmentVariableDraft {
-                name: String::from("VULCAN_ENV_PROJECT_FIXTURE"),
+                name: String::from("VULCAN_ENV_FIXTURE"),
                 value: String::from("synthetic-project-history-value"),
                 kind: EnvironmentVariableKind::Secret,
                 description: String::new(),
@@ -822,24 +867,106 @@ mod tests {
         .await
         .unwrap();
 
-        // Start with no workspace projection or registered session, as during a cold read.
-        // 清除工作区投影并使用空会话注册表，以模拟冷启动读取。
+        create_environment_variable(
+            &controller,
+            EnvironmentVariableDraft {
+                name: String::from("VULCAN_ENV_FIXTURE"),
+                value: String::from("synthetic-global-history-value"),
+                kind: EnvironmentVariableKind::Secret,
+                description: String::new(),
+                scope: EnvironmentVariableScope::Global,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Write a finished job into the indexed session using an isolated runtime.
+        // 使用独立运行时把已完成任务写入已索引会话。
+        let runtime = ShellJobRuntime::new();
+        #[cfg(windows)]
+        let mut child = {
+            let mut command = tokio::process::Command::new("cmd.exe");
+            command.args(["/D", "/C", "echo synthetic-history-value synthetic-project-history-value synthetic-global-history-value"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut child = {
+            let mut command = tokio::process::Command::new("printf");
+            command.args(["%s\n", "synthetic-history-value synthetic-project-history-value synthetic-global-history-value"]);
+            command
+        };
+        child.current_dir(fixture.data_root());
+        let job = runtime
+            .spawn(
+                ShellJobSpawn {
+                    owner_session_id: session_id.to_string(),
+                    origin: None,
+                    command: String::from("fixture command"),
+                    purpose: String::from("fixture job"),
+                    shell_label: String::from("fixture"),
+                    cwd: fixture.data_root().to_owned(),
+                    jobs_dir: locator.session_directory().join(SHELL_JOBS_DIRECTORY),
+                    stdin: None,
+                    background: false,
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                    capture_streams: false,
+                },
+                child,
+            )
+            .unwrap();
+        assert_eq!(job.wait().await.status, ShellJobStatus::Completed);
+
+        // The fresh service knows only the persisted history and its authoritative locator.
+        // 此新服务仅通过存储读取历史记录和权威定位器。
         let mut restarted = test_service_state_with_parent_session(session_id);
         restarted.workspace_snapshot = None;
         restarted.controller_runtime = Some(controller);
-        let restarted = Arc::new(std::sync::Mutex::new(restarted));
-        let runtime = TaskRuntime::new();
-        register_activity_environment_secrets(&restarted, &session_id.to_string(), &runtime)
+        restarted.agent_runtime = Some(test_agent_runtime_bridge());
+        let restarted = Arc::new(Mutex::new(restarted));
+        let page = crate::session_activity_services::service_read_shell_job_output(
+            Arc::clone(&restarted),
+            vulcan_service_api::ShellJobOutputRequest {
+                session_id: session_id.to_string(),
+                job_id: job.id().to_owned(),
+                before_line: None,
+                from_line: None,
+                max_lines: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(
+            page.rows[0].text.trim(),
+            "[redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE]"
+        );
+
+        // The model's host port must supply the same values, independently of the WebUI filter state.
+        // 模型宿主端口须独立于 WebUI 过滤器状态，提供相同的值。
+        let registry = Arc::clone(&restarted.lock().unwrap().session_runtime_registry);
+        let host = KernelEnvironmentHost::new(
+            registry,
+            Arc::new(QuestionRuntime::new()),
+            Arc::downgrade(&restarted),
+        );
+        let model_secrets = host.historical_job_secrets(session_id).await.unwrap();
+        for value in [
+            "synthetic-history-value",
+            "synthetic-project-history-value",
+            "synthetic-global-history-value",
+        ] {
+            assert!(
+                model_secrets
+                    .iter()
+                    .any(|(name, secret)| name == "VULCAN_ENV_FIXTURE" && secret == value)
+            );
+        }
+        let effective = effective_environment_at(&restarted, &locator)
             .await
             .unwrap();
-        assert_eq!(
-            runtime
-                .redact_sensitive_text(
-                    "before synthetic-history-value synthetic-project-history-value after"
-                )
-                .unwrap(),
-            "before [redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_PROJECT_FIXTURE] after",
-        );
+        assert_eq!(effective.len(), 1);
+        assert_eq!(effective[0].layer, EnvironmentVariableLayer::Session);
+        assert_eq!(effective[0].value, "synthetic-history-value");
     }
 
     /// Every layer key round-trips and unknown keys are refused.
