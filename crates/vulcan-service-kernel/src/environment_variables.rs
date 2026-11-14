@@ -647,6 +647,31 @@ async fn session_locator(
     Ok((root, locator))
 }
 
+/// Resolves the environment locator for history without loading a session runtime.
+/// 解析历史记录的环境定位器，无需加载会话运行时。
+/// Returns the indexed session's locator or its declared root's locator.
+/// 返回已索引会话的定位器，子会话则返回其声明的根会话定位器。
+async fn historical_job_environment_locator(
+    state: &SharedServiceBridgeState,
+    raw_session_id: &str,
+) -> Result<vulcan_workspace_store::workspace_store::SessionV1StorageLocator, String> {
+    // Resolve the same exact owner used to open the log, including registered embedded children.
+    // 解析与打开日志相同的精确归属，包含已注册的内嵌子会话。
+    let (_, locator, _) =
+        crate::conversation_events_v1::resolve_exact_locator_and_registry(state, raw_session_id)
+            .await?;
+    let root = locator
+        .read_environment_root_session_id()
+        .map_err(|error| error.to_string())?;
+    if let Some(root) = root {
+        let (_, root_locator, _) =
+            crate::conversation_events_v1::resolve_exact_locator_and_registry(state, &root).await?;
+        Ok(root_locator)
+    } else {
+        Ok(locator)
+    }
+}
+
 /// Registers the environment that applies to an owned job before stored text is projected.
 /// 在投影已存储文本之前，登记适用于该归属任务的环境变量。
 pub(crate) async fn register_activity_environment_secrets(
@@ -654,7 +679,7 @@ pub(crate) async fn register_activity_environment_secrets(
     raw_session_id: &str,
     task_runtime: &TaskRuntime,
 ) -> Result<(), String> {
-    let (_, locator) = session_locator(state, raw_session_id).await?;
+    let locator = historical_job_environment_locator(state, raw_session_id).await?;
     for variable in effective_environment_at(state, &locator).await? {
         if variable.kind == EnvironmentVariableKind::Secret {
             task_runtime.register_environment_secret(&variable.name, &variable.value)?;

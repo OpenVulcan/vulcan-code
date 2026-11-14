@@ -258,6 +258,17 @@ impl SessionV1StorageLocator {
         Ok(metadata)
     }
 
+    /// Reads the environment root recorded in this session's validated metadata.
+    /// 读取此会话已校验元数据中记录的环境归属根会话。
+    /// Returns the declared root ID for an embedded child, or None for a root session.
+    /// 若为内嵌子会话则返回声明的根会话 ID，根会话则返回 None。
+    pub fn read_environment_root_session_id(&self) -> Result<Option<String>, SessionV1StoreError> {
+        Ok(self
+            .read_indexed_metadata()?
+            .child_execution_profile
+            .map(|profile| profile.root_session_id))
+    }
+
     /// Reads validated collaboration state for recovery selection without loading interaction history.
     /// 读取已校验协作状态用于恢复筛选，不加载交互历史。
     /// The exact locator owns the file; callers must serialize this read with lifecycle replacement.

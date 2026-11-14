@@ -2916,6 +2916,79 @@ mod tests {
         fixture.shutdown().await;
     }
 
+    /// Listing historical jobs leaves an in-flight durable API for session recovery.
+    /// 列出历史任务时保留持久化的在途 API，由会话恢复流程处理。
+    #[tokio::test]
+    async fn shell_job_listing_does_not_recover_cold_session() {
+        use crate::tests::test_support::{
+            test_agent_runtime_bridge, test_service_state_with_parent_session,
+        };
+        use vulcan_workspace_store::{
+            data_plane::build_application_schema_script, local_database_runtime::LogicalDatabase,
+            local_sql,
+        };
+
+        // Publish the same in-flight state that a restarted service would see.
+        // 发布重启服务会看到的在途状态。
+        let fixture = LifecycleStorageFixture::start().await;
+        local_sql::execute_script(
+            &fixture.controller.local,
+            LogicalDatabase::AppState,
+            build_application_schema_script(),
+            &[],
+        )
+        .expect("initialize application schema");
+        let session_id = SessionId::new_v4();
+        let create_registry = SessionRuntimeRegistry::default();
+        let handle = create_fixture_session(&fixture, &create_registry, session_id).await;
+        let preparation = handle
+            .read(|document| {
+                lifecycle_test_api_input(
+                    document,
+                    ApiRequestSnapshot::new("provider", "model"),
+                    1_787_788_800_010,
+                )
+            })
+            .expect("read API preparation");
+        handle
+            .prepare_and_start_api_durable(preparation)
+            .expect("persist an in-flight API");
+        let locator = handle.storage_locator().expect("locate fixture");
+        let before = load_session_v1_tail(&locator).expect("read in-flight tail");
+        assert!(before.document.active_api().is_some());
+
+        // Use a fresh service registry and invoke the WebUI listing service.
+        // 使用空服务注册表，并调用 WebUI 任务列表服务。
+        let mut cold = test_service_state_with_parent_session(session_id);
+        cold.controller_runtime = Some(fixture.controller.clone());
+        cold.agent_runtime = Some(test_agent_runtime_bridge());
+        let registry = Arc::clone(&cold.session_runtime_registry);
+        let cold = Arc::new(std::sync::Mutex::new(cold));
+        crate::session_activity_services::service_list_shell_jobs(
+            cold,
+            vulcan_service_api::ShellJobListRequest {
+                session_id: session_id.to_string(),
+                include_cleared: true,
+                finished_limit: None,
+            },
+        )
+        .await
+        .expect("list stored jobs without recovery");
+
+        assert!(
+            crate::conversation_events_v1::optional_registered_handle(&registry, session_id)
+                .unwrap()
+                .is_none()
+        );
+        let after = load_session_v1_tail(&locator).expect("read the unchanged tail");
+        assert_eq!(
+            after.document.durable_revision(),
+            before.document.durable_revision()
+        );
+        assert!(after.document.active_api().is_some());
+        fixture.shutdown().await;
+    }
+
     /// Restart projection interrupts active API facts and publishes them first.
     /// 重启投影会中断活动 API 事实并先完成发布。
     #[tokio::test]
