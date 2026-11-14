@@ -110,6 +110,61 @@ fn execution_failure_boundary_redacts_exact_secret_and_provider_urls() {
     );
 }
 
+/// Verifies that the HTTP error summary and final session error retain only exact public help links.
+/// 验证 HTTP 错误摘要和最终会话错误只保留完全匹配的公开帮助链接。
+#[test]
+fn upstream_error_keeps_public_help_and_redacts_private_addresses() {
+    // Use an opaque test credential so only exact credential redaction can remove its standalone occurrence.
+    // 使用不透明测试凭据，使独立出现的凭据只能通过精确匹配脱敏。
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-opaque-key"))
+        .unwrap()
+        .execution_secret()
+        .unwrap();
+    // Exercise a signed variant of the approved URL, user information, and an unrelated destination together.
+    // 同时覆盖已核验网址的签名变体、带用户信息的网址和不相关的地址。
+    let body = serde_json::json!({
+        "error": {
+            "type": "rate_limit_error",
+            "code": "insufficient_quota",
+            "message": concat!(
+                "Allocated quota exceeded. Public help: <https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit> ",
+                "Signed: <https://www.alibabacloud.com/help/en/model-studio/error-code?signature=private-signature#token-limit> ",
+                "User info: <https://name:private-password@www.alibabacloud.com/help/en/model-studio/error-code#token-limit> ",
+                "Other: <https://example.invalid/help> Credential: fixture-opaque-key."
+            )
+        }
+    })
+    .to_string();
+    // The HTTP capture reads the first summary before the final session failure is screened again.
+    // HTTP 追踪在会话错误再次筛查之前读取首个摘要。
+    let captured = http_failure(429, None, &redact_exact_credential(&body, &secret));
+    let captured_message = captured.error.message.clone();
+    let published = sanitize_provider_execution_failure(captured, &secret);
+    assert_eq!(published.error.category, AiErrorCategory::RateLimited);
+    assert!(published.error.retryable);
+    assert_eq!(published.error.message, captured_message);
+    for message in [
+        captured_message.as_str(),
+        published.error.upstream_message.as_deref().unwrap(),
+    ] {
+        assert_eq!(
+            message
+                .matches("https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit")
+                .count(),
+            1
+        );
+        assert_eq!(message.matches("<redacted-url>").count(), 3);
+        for hidden in [
+            "private-signature",
+            "private-password",
+            "example.invalid",
+            secret.expose_value(),
+        ] {
+            assert!(!message.contains(hidden));
+        }
+    }
+}
+
 /// Verifies a credential straddling the diagnostic length bound leaves no fragment behind.
 /// 验证跨越诊断长度上限的凭据不会留下任何片段。
 #[test]

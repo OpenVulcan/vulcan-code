@@ -905,7 +905,9 @@ pub(crate) fn http_failure(
     let public_field = |value: String| {
         crate::provider_tool_execution::sanitize_provider_diagnostic_text(value.as_str())
     };
-    let public_upstream_message = upstream_message.map(public_field);
+    let public_upstream_message = upstream_message
+        .as_deref()
+        .map(sanitize_upstream_error_message);
     ProviderExecutionFailure {
         host_http_message: None,
         error: Box::new(AiExecutionError {
@@ -1060,12 +1062,32 @@ pub(crate) fn sanitize_ai_execution_error(
     error.upstream_code = error.upstream_code.take().map(sanitize);
     error.upstream_type = error.upstream_type.take().map(sanitize);
     error.upstream_parameter = error.upstream_parameter.take().map(sanitize);
-    error.upstream_message = error.upstream_message.take().map(sanitize);
+    error.upstream_message = error
+        .upstream_message
+        .as_deref()
+        .map(|message| sanitize_upstream_error_message(&redact_exact_credential(message, secret)));
     error.request_id = error.request_id.take().map(sanitize);
     error.provider_id = error.provider_id.take().map(sanitize);
     error.entry_id = error.entry_id.take().map(sanitize);
     error.model_id = error.model_id.take().map(sanitize);
-    error.message = sanitize(std::mem::take(&mut error.message));
+    error.message =
+        sanitize_upstream_error_message(&redact_exact_credential(&error.message, secret));
+}
+
+/// Exact public help links verified for display in upstream error messages.
+/// 已核验、可在上游错误消息中展示的精确公开帮助链接。
+const UPSTREAM_ERROR_PUBLIC_HELP_LINKS: &[&str] =
+    &["https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit"];
+
+/// Returns a credential-screened upstream message while preserving verified public help links.
+/// 返回经凭据筛查的上游消息，并保留已核验的公开帮助链接。
+/// `message` is provider text after the physical request's exact credential is removed.
+/// `message` 是移除了实际请求精确凭据后的供应商文本。
+fn sanitize_upstream_error_message(message: &str) -> String {
+    crate::provider_tool_execution::sanitize_provider_diagnostic_text_with_public_links(
+        message,
+        UPSTREAM_ERROR_PUBLIC_HELP_LINKS,
+    )
 }
 
 #[cfg(test)]

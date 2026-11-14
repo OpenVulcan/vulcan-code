@@ -3871,9 +3871,9 @@ fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
 ///
 /// # Returns
 /// 返回值
-/// The text with each `scheme://...` run, up to whitespace or a quoting delimiter, replaced.
-/// 返回将每段 `scheme://...`（直到空白或引用分隔符）替换后的文本。
-fn redact_provider_diagnostic_urls(value: &str) -> String {
+/// Returns text with all URL runs replaced except exact matches in the trusted `public_links` list.
+/// 返回替换网址后的文本，仅保留与可信 `public_links` 列表精确匹配的网址。
+fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String {
     // is_url_delimiter ends a URL at whitespace or at the quoting characters diagnostics wrap
     // URLs in, so signed query strings never survive.
     // is_url_delimiter 在空白或诊断包裹 URL 的引用字符处结束 URL，确保签名查询串不会保留。
@@ -3902,8 +3902,15 @@ fn redact_provider_diagnostic_urls(value: &str) -> String {
         let url_end = remaining[separator + 3..]
             .find(is_url_delimiter)
             .map_or(remaining.len(), |offset| separator + 3 + offset);
+        // Match the whole URL so a public documentation address with an added signature is still redacted.
+        // 匹配完整网址，使附加签名的公开文档地址仍被脱敏。
+        let url = &remaining[scheme_start..url_end];
         redacted.push_str(&remaining[..scheme_start]);
-        redacted.push_str("<redacted-url>");
+        redacted.push_str(if public_links.contains(&url) {
+            url
+        } else {
+            "<redacted-url>"
+        });
         remaining = &remaining[url_end..];
     }
     redacted.push_str(remaining);
@@ -3924,9 +3931,20 @@ fn redact_provider_diagnostic_urls(value: &str) -> String {
 /// remaining text still carries a credential shape.
 /// 返回 URL 已就地替换的有界值；剩余文本仍带凭据形态时返回稳定脱敏标记。
 pub(crate) fn sanitize_provider_diagnostic_text(value: &str) -> String {
+    sanitize_provider_diagnostic_text_with_public_links(value, &[])
+}
+
+/// Sanitizes a diagnostic while allowing explicitly verified complete public URLs.
+/// 清理诊断文字，同时允许已明确核验的完整公开网址。
+/// `value` is provider text and `public_links` contains only host-owned exact URLs. Returns bounded, credential-screened text.
+/// `value` 是供应商文本，`public_links` 仅包含宿主指定的精确网址。返回经限长和凭据筛查的文本。
+pub(crate) fn sanitize_provider_diagnostic_text_with_public_links(
+    value: &str,
+    public_links: &[&str],
+) -> String {
     // url_safe keeps the diagnostic words around each URL, such as a transport failure reason.
     // url_safe 保留每个 URL 周围的诊断文字，例如传输失败原因。
-    let url_safe = redact_provider_diagnostic_urls(value);
+    let url_safe = redact_provider_diagnostic_urls(value, public_links);
     // lowercase and trimmed expose credential shapes without changing retained safe text.
     // lowercase 与 trimmed 在不改变保留安全文本的前提下暴露凭据形态。
     let lowercase = url_safe.to_ascii_lowercase();
