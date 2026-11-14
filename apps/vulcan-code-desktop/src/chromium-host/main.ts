@@ -214,7 +214,7 @@ class ChromiumHost {
   /** 使用 Core 精确选定的运行时输入构造宿主。 */
   // The projection listens on the same persistent context as automation and user input.
   // DOM 投影监听自动化与用户输入共用的持久浏览器上下文。
-  private domProjection: DomProjection | null = null;
+  private readonly domProjection = new DomProjection();
 
   constructor(private readonly options: Options) {}
 
@@ -278,6 +278,7 @@ class ChromiumHost {
       throw new Error(`Browser host already owns ${MAX_PAGES} pages.`);
     }
     const cdp = await this.context.newCDPSession(page);
+    await this.domProjection.trackPage(page, cdp);
     const target = await cdp.send('Target.getTargetInfo') as { targetInfo: { targetId: string } };
     const targetId = target.targetInfo.targetId;
     const opener = await page.opener();
@@ -321,7 +322,6 @@ class ChromiumHost {
       this.zoomLevels.delete(targetId);
       this.emit('pageDestroyed', { targetId });
     });
-    await cdp.send('Page.enable');
     cdp.on('Page.javascriptDialogClosed', () => this.clearDialog(targetId, 'closed'));
     if (page.url() !== 'about:blank') this.emit('pageNavigated', { targetId, url: page.url() });
     // A popup may report its initial title before registration; publish only its current document.
@@ -483,11 +483,28 @@ class ChromiumHost {
     const page = this.page(targetId);
     if (!page || typeof targetId !== 'string') return this.answer(request, 'Unknown page target.', 'unknown_target');
     const kind = request.params.kind;
-    if (kind === 'textEdit') {
-      if (this.dialogs.has(targetId) || !await applyDomTextEdit(page, request.params)) {
-        return this.answer(request, 'The projected editable field has changed.', 'stale_dom_edit');
+    if (kind === 'textEdit' || kind === 'textCommit') {
+      try {
+        if (this.dialogs.has(targetId) || !await applyDomTextEdit(page, kind, request.params)) {
+          return this.answer(request, 'The projected editable field has changed.', 'stale_dom_edit');
+        }
+      } catch {
+        // A driver error must not include the committed text in the Core response or diagnostics.
+        // 驱动错误不能将已提交的文本带入 Core 响应或诊断。
+        return this.answer(request, 'Chromium could not apply the projected text edit.', 'input_dispatch_failed');
       }
       return this.answer(request, { applied: true, kind });
+    }
+    if (kind === 'pointer' && request.params.type === 'leave') {
+      if (this.pressedPointers.has(targetId)) {
+        return this.answer(request, 'Pointer cannot leave while a button is pressed.', 'capability_unsupported');
+      }
+      const cdp = this.cdpSessions.get(targetId);
+      if (!cdp) return this.answer(request, 'Page CDP session is not available.', 'unknown_target');
+      // Move outside the content viewport so Chromium dispatches its own mouseout and mouseleave.
+      // 将指针移到内容视口之外，让 Chromium 原生触发 mouseout 与 mouseleave。
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: -1, y: -1, buttons: 0 });
+      return this.answer(request, { applied: true, kind, type: 'leave' });
     }
     if (kind === 'key' && typeof request.params.key === 'string'
         && (request.params.type === 'down' || request.params.type === 'up')) {
@@ -741,7 +758,7 @@ class ChromiumHost {
           const targetId = request.params.targetId;
           const page = this.page(targetId);
           const projection = this.domProjection;
-          if (typeof targetId !== 'string' || !page || !projection) {
+          if (typeof targetId !== 'string' || !page) {
             return this.answer(request, 'Unknown page target.', 'unknown_target');
           }
           const epoch = this.navigationEpochs.get(targetId);
@@ -885,7 +902,6 @@ class ChromiumHost {
         channel: 'chromium', headless: true, acceptDownloads: true,
         viewport: this.viewport,
       });
-      this.domProjection = new DomProjection(this.context);
       // Chromium permits a trusted CDP client to navigate directly to file: URLs. Intercept every
       // routable local-file request before a page can read Core-machine files.
       // Chromium 允许受信 CDP 客户端直接导航 file:；在页面读取 Core 本机文件前拦截全部可路由文件请求。

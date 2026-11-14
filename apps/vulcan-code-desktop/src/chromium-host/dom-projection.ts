@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseHtml, serialize, type DefaultTreeAdapterTypes } from 'parse5';
 import { generate, parse as parseCss, walk } from 'css-tree';
-import type { BrowserContext, Page, Request } from 'playwright-core';
+import type { CDPSession, Page } from 'playwright-core';
 
 // Bound response capture, projection memory and each RPC message independently.
 // 分别限制响应捕获、投影内存和每条 RPC 消息的大小。
@@ -19,11 +19,16 @@ const REMOVE_TAGS = new Set(['script', 'noscript', 'iframe', 'frame', 'object', 
 
 // Serialized state uses UTF-16 offsets for editable text fields.
 // 序列化状态使用 UTF-16 偏移量表示可编辑文本域的位置。
-type Edit = { id: string; documentId: string; before: string; start: number; end: number; text: string };
+type EditRange = { before: string; start: number; end: number };
 type Asset = { mimeType: string; body: Buffer; dependencies: string[] };
 type CapturedAsset = { id: string; kind: string; url: string; sequence: number };
-type PageAssets = { requests: Map<string, CapturedAsset>; generation: number; published: Set<string>;
+// Keep assets separated by committed loader and retain recent loader indexes for history restores.
+// 按已提交的加载器隔离资源，并保留近期加载器的索引以支持历史恢复。
+type PageAssets = { requests: Map<string, CapturedAsset>; loader: string; published: Set<string>;
   markup: Map<string, string>; documentId: string | null; blobs: Map<string, string> };
+// A network response belongs to one loader and its redirect aliases.
+// 一个网络响应归属一个加载器及其重定向别名。
+type ResourceRequest = { loader: string; urls: string[]; kind: string; sequence: number; mimeType?: string };
 type SourceNodes = { id: string; ids: WeakMap<Element, string>; next: number };
 
 // Stable element identities survive repeated snapshots of the same document.
@@ -39,25 +44,40 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
   if (!root || !document.body) return null;
   const scope = window as ProjectionWindow;
   const nodes = scope.__vulcanProjectionNodes ??= { id: documentId, ids: new WeakMap(), next: 0 };
-  const copy = root.cloneNode(true) as Element;
-  const originals = [root, ...Array.from(root.querySelectorAll('*'))];
-  const copies = [copy, ...Array.from(copy.querySelectorAll('*'))];
+  const copy = root.cloneNode(false) as Element;
   const scroll: [string, number, number][] = [];
   const blobImages = new Set<string>();
   const known = new Set(knownBlobs.documentId === nodes.id ? knownBlobs.urls : []);
+  const hover = new Set<Element>(Array.from(document.querySelectorAll(':hover')));
+  let focus = document.activeElement;
+  while (focus?.shadowRoot?.activeElement) focus = focus.shadowRoot.activeElement;
   let focused: string | null = null;
-  for (const [index, element] of originals.entries()) {
-    // The deep clone has the same element order as the original tree.
-    // 深度克隆保持原始树的元素顺序。
-    const mirror = copies[index]!;
+
+  // Append constructed styles after regular styles to preserve their cascade order.
+  // 在常规样式后附加构造样式表，以保持层叠顺序。
+  function appendAdopted(source: Document | ShadowRoot, destination: Node): void {
+    for (const sheet of source.adoptedStyleSheets) {
+      if (sheet.disabled) continue;
+      const style = document.createElement('style');
+      style.media = sheet.media.mediaText;
+      style.textContent = Array.from(sheet.cssRules, rule => rule.cssText).join('\n').replace(/<\/style/gi, '\\3c /style');
+      destination.appendChild(style);
+    }
+  }
+
+  // Clone light DOM and open shadow trees with stable element IDs and source interaction state.
+  // 克隆普通 DOM 和开放 Shadow DOM，附上稳定元素标识和源端交互状态。
+  function projectElement(element: Element, mirror: Element): void {
     let id = nodes.ids.get(element);
     if (!id) {
       id = String(++nodes.next);
       nodes.ids.set(element, id);
     }
+    mirror.removeAttribute('data-vulcan-shadow');
+    mirror.toggleAttribute('data-vulcan-hover', hover.has(element));
     mirror.setAttribute('data-vulcan-node', id);
     if (element.scrollLeft || element.scrollTop) scroll.push([id, element.scrollLeft, element.scrollTop]);
-    if (element === document.activeElement) focused = id;
+    if (element === focus) focused = id;
     if (element instanceof HTMLInputElement) {
       if (element.type === 'password' || element.type === 'file') mirror.removeAttribute('value');
       else mirror.setAttribute('value', element.value);
@@ -75,12 +95,41 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
     } else if (element instanceof HTMLStyleElement && element.sheet) {
       // Capture CSSOM edits made after the original style element was inserted.
       // 捕获样式元素插入之后通过 CSSOM 做出的变更。
-      mirror.textContent = Array.from(element.sheet.cssRules, rule => rule.cssText).join('\n');
+      mirror.textContent = Array.from(element.sheet.cssRules, rule => rule.cssText).join('\n').replace(/<\/style/gi, '\\3c /style');
+    }
+    if (!(element instanceof HTMLTextAreaElement) && !(element instanceof HTMLStyleElement && element.sheet)) {
+      projectChildren(element, mirror);
+    }
+    if (element.shadowRoot) {
+      const shadow = element.shadowRoot;
+      const template = document.createElement('template');
+      template.setAttribute('data-vulcan-shadow', shadow.delegatesFocus ? 'delegates-focus' : '');
+      for (const hovered of Array.from(shadow.querySelectorAll(':hover'))) hover.add(hovered);
+      projectChildren(shadow, template.content);
+      appendAdopted(shadow, template.content);
+      mirror.appendChild(template);
     }
   }
+
+  // Populate a detached tree while omitting source templates and active content.
+  // 生成离线树，同时略过源页面模板和可执行内容。
+  function projectChildren(source: Node, destination: Node): void {
+    for (const child of Array.from(source.childNodes)) {
+      if (child instanceof Element) {
+        if (child.matches('script,noscript,template,iframe,object,embed,meta,base')) continue;
+        const mirror = child.cloneNode(false) as Element;
+        projectElement(child, mirror);
+        destination.appendChild(mirror);
+      } else if (child.nodeType === Node.TEXT_NODE) {
+        destination.appendChild(child.cloneNode(false));
+      }
+    }
+  }
+  projectElement(root, copy);
+  const head = copy.querySelector('head');
+  if (head) appendAdopted(document, head);
   // Remove executable and embedded content before sending markup across the Chromium boundary.
   // 在标记跨越 Chromium 边界前移除可执行及嵌入内容。
-  for (const element of Array.from(copy.querySelectorAll('script,noscript,template,iframe,object,embed,meta,base'))) element.remove();
   const html = copy.outerHTML;
   const windowScroll = [scrollX, scrollY];
   const { innerWidth: width, innerHeight: height } = window;
@@ -128,7 +177,7 @@ function resourceUrl(value: string, base?: string): URL | null {
 function rewriteCss(text: string, resolve: (url: string) => string, context = 'stylesheet'): string {
   try {
     const ast = parseCss(text, { context, parseCustomProperty: true });
-    walk(ast, node => {
+    walk(ast, (node, item) => {
       if (node.type === 'Atrule' && node.name.toLowerCase() === 'import' && node.prelude?.type === 'AtrulePrelude') {
         const source = node.prelude.children.first;
         if (source?.type === 'String') source.value = resolve(source.value);
@@ -137,19 +186,24 @@ function rewriteCss(text: string, resolve: (url: string) => string, context = 's
         node.children.forEach(child => { if (child.type === 'String') child.value = resolve(child.value); });
       }
       if (node.type === 'Url') node.value = resolve(node.value);
+      if (node.type === 'PseudoClassSelector' && node.name.toLowerCase() === 'hover') {
+        // Attribute selectors preserve the specificity of :hover.
+        // 属性选择器保留 :hover 的优先级。
+        item.data = { type: 'AttributeSelector', name: { type: 'Identifier', name: 'data-vulcan-hover' },
+          matcher: null, value: null, flags: null };
+      }
     });
     return generate(ast);
   } catch { return ''; }
 }
 
-// Read the top-level owning page of a network request, including early popup requests.
-// 获取网络请求所属的顶层页面，包括弹窗发出的早期请求。
-function requestPage(request: Request): Page | null {
-  try {
-    const frame = request.frame();
-    const page = frame.page();
-    return frame === page.mainFrame() ? page : null;
-  } catch { return null; }
+// Accept only image, font and stylesheet bodies matching the Chromium resource type.
+// 只接受与 Chromium 资源类型匹配的图片、字体和样式表正文。
+function resourceKind(type: string, mimeType: string): string | null {
+  if (type === 'Image' && IMAGE_TYPE.test(mimeType)) return 'image';
+  if (type === 'Font' && FONT_TYPE.test(mimeType)) return 'font';
+  if (type === 'Stylesheet' && mimeType === 'text/css') return 'stylesheet';
+  return null;
 }
 
 // Encode the smallest contiguous markup replacement between two accepted revisions.
@@ -179,56 +233,137 @@ export class DomProjection {
   private readonly pages = new WeakMap<Page, PageAssets>();
   private readonly assets = new Map<string, Asset>();
   private readonly pending = new WeakMap<Page, Promise<Awaited<ReturnType<typeof readDocument>>>>();
-  private readonly requestGenerations = new WeakMap<Request, number>();
   private bytes = 0;
   private sequence = 0;
 
-  // Subscribe before navigation so the first response of each page can be captured.
-  // 在导航之前订阅，以便捕获每个页面的首批响应。
-  constructor(context: BrowserContext) {
-    context.on('request', request => {
-      const page = requestPage(request);
-      if (!page) return;
-      const state = this.pageAssets(page);
-      if (request.isNavigationRequest() && !request.redirectedFrom()) {
-        state.generation++;
-        state.requests.clear();
-        state.published.clear();
+  // Observe one Chromium target using loader IDs. Only a committed top-level document changes the active index.
+  // 使用加载器标识观察一个 Chromium 目标。只有顶层文档提交才切换活动索引。
+  async trackPage(page: Page, cdp: CDPSession): Promise<void> {
+    const state = this.pageAssets(page);
+    const loaders = new Map<string, Map<string, CapturedAsset>>();
+    const pending = new Map<string, ResourceRequest>();
+    let rootFrame = '';
+
+    // Keep the active loader plus a bounded number of provisional or recent loaders.
+    // 保留活动加载器和有限数量的暂存或近期加载器。
+    function resources(loader: string): Map<string, CapturedAsset> {
+      const existing = loaders.get(loader);
+      if (existing) return existing;
+      const index = new Map<string, CapturedAsset>();
+      loaders.set(loader, index);
+      if (loaders.size > REVISION_HISTORY_LIMIT) {
+        for (const key of loaders.keys()) if (key !== state.loader && key !== loader) {
+          loaders.delete(key);
+          break;
+        }
       }
-      this.requestGenerations.set(request, state.generation);
+      return index;
+    }
+
+    // Bind the resource index and invalidate in-flight snapshots when Chromium commits a document.
+    // 在 Chromium 提交文档时绑定资源索引，并使在途快照失效。
+    function commit(frame: { id: string; loaderId: string }) {
+      rootFrame = frame.id;
+      if (state.loader === frame.loaderId) return;
+      state.loader = frame.loaderId;
+      state.requests = resources(frame.loaderId);
+      state.published.clear();
+    }
+
+    cdp.on('Page.frameNavigated', ({ frame }) => {
+      if (!frame.parentId) commit(frame);
     });
-    context.on('response', response => {
-      const request = response.request();
-      const kind = request.resourceType();
-      const mimeType = response.headers()['content-type']?.split(';')[0]?.trim().toLowerCase() ?? '';
-      if (!response.ok() || !(kind === 'image' && IMAGE_TYPE.test(mimeType)
-        || kind === 'font' && FONT_TYPE.test(mimeType) || kind === 'stylesheet' && mimeType === 'text/css')) return;
-      if (Number(response.headers()['content-length']) > ASSET_LIMIT) return;
-      const page = requestPage(request);
-      if (!page) return;
-      const state = this.pageAssets(page);
-      const generation = this.requestGenerations.get(request);
-      const sequence = ++this.sequence;
-      void response.body().then(body => {
-        if (page.isClosed() || generation !== state.generation || !body.length || body.length > ASSET_LIMIT) return;
-        const id = this.put({ mimeType, body, dependencies: [] });
-        for (let current: Request | null = request; current; current = current.redirectedFrom()) {
-          const url = resourceUrl(current.url());
-          if (!url) continue;
-          url.hash = '';
-          const earlier = state.requests.get(url.href);
-          if (earlier && earlier.sequence > sequence) continue;
-          state.requests.delete(url.href);
-          state.requests.set(url.href, { id, kind, url: response.url(), sequence });
-        }
-        while (state.requests.size > ASSET_COUNT_LIMIT) {
-          const oldest = state.requests.keys().next();
-          if (oldest.done) break;
-          state.requests.delete(oldest.value);
-        }
-      }).catch(() => { /* Chromium may discard a response body after navigation.
-                       导航后 Chromium 可能释放响应正文。 */ });
+    cdp.on('Network.requestWillBeSent', event => {
+      if (event.frameId !== rootFrame || !event.loaderId) return;
+      if (event.type !== 'Image' && event.type !== 'Font' && event.type !== 'Stylesheet') return;
+      const previous = pending.get(event.requestId);
+      const urls = previous && event.redirectResponse ? previous.urls : [];
+      if (urls.length >= ASSET_COUNT_LIMIT) return;
+      urls.push(event.request.url);
+      pending.set(event.requestId, { loader: event.loaderId, urls, kind: event.type, sequence: ++this.sequence });
+      if (pending.size > ASSET_COUNT_LIMIT) {
+        const oldest = pending.keys().next();
+        if (!oldest.done) pending.delete(oldest.value);
+      }
     });
+    cdp.on('Network.responseReceived', event => {
+      const request = pending.get(event.requestId);
+      if (!request || request.loader !== event.loaderId
+        || !(event.response.status >= 200 && event.response.status < 300 || event.response.status === 304)) return;
+      const mimeType = event.response.mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+      if (!resourceKind(event.type, mimeType)) return;
+      request.kind = event.type;
+      request.mimeType = mimeType;
+    });
+    cdp.on('Network.loadingFailed', ({ requestId }) => { pending.delete(requestId); });
+    cdp.on('Network.loadingFinished', ({ requestId, encodedDataLength }) => {
+      const request = pending.get(requestId);
+      pending.delete(requestId);
+      if (!request?.mimeType || encodedDataLength > ASSET_LIMIT) return;
+      const mimeType = request.mimeType;
+      const kind = resourceKind(request.kind, mimeType);
+      const index = resources(request.loader);
+      const url = request.urls.at(-1);
+      if (!kind || !url) return;
+      void cdp.send('Network.getResponseBody', { requestId }).then(({ body, base64Encoded }) => {
+        if (!page.isClosed() && loaders.get(request.loader) === index) {
+          this.storeResponse(index, request.urls, url, kind, mimeType, request.sequence,
+            Buffer.from(body, base64Encoded ? 'base64' : 'utf8'));
+        }
+      }).catch(() => { /* Chromium can release an individual response body.
+                       Chromium 可能释放单个响应正文。 */ });
+    });
+    await cdp.send('Page.enable');
+    const { frameTree } = await cdp.send('Page.getFrameTree');
+    if (!rootFrame) commit(frameTree.frame);
+    await cdp.send('Network.enable', { maxTotalBufferSize: STORE_LIMIT, maxResourceBufferSize: ASSET_LIMIT });
+
+    // A popup can complete its initial requests before Playwright exposes the target. Prime from its loaded resources.
+    // 弹窗可能在 Playwright 暴露目标前完成初始请求。从该页面已加载资源中补齐。
+    const initialLoader = state.loader;
+    const tree = await cdp.send('Page.getResourceTree').catch(() => null);
+    if (!tree) return;
+    const loaded = tree.frameTree;
+    if (loaded.frame.loaderId !== initialLoader || state.loader !== initialLoader) return;
+    const index = state.requests;
+    // Read cached bodies in sequence to bound peak CDP response memory on resource-heavy pages.
+    // 依次读取缓存正文，限制资源密集页面的 CDP 响应峰值内存。
+    for (const resource of loaded.resources.slice(0, ASSET_COUNT_LIMIT)) {
+      if (state.loader !== initialLoader || page.isClosed()) break;
+      const kind = resourceKind(resource.type, resource.mimeType);
+      if (!kind || (resource.contentSize !== undefined && resource.contentSize > ASSET_LIMIT)
+        || index.has(resource.url)) continue;
+      try {
+        const data = await cdp.send('Page.getResourceContent', { frameId: loaded.frame.id, url: resource.url });
+        if (state.loader === initialLoader && !page.isClosed()) {
+          this.storeResponse(index, [resource.url], resource.url, kind, resource.mimeType, 0,
+            Buffer.from(data.content, data.base64Encoded ? 'base64' : 'utf8'));
+        }
+      } catch { /* A resource can leave Chromium's cache during the initial scan.
+                 初始化扫描期间，资源可能离开 Chromium 缓存。 */ }
+    }
+  }
+
+  // Index captured bytes by redirect aliases without replacing a newer response.
+  // 按重定向别名登记已捕获字节，保留更新的响应。
+  private storeResponse(index: Map<string, CapturedAsset>, urls: string[], base: string, kind: string,
+    mimeType: string, sequence: number, body: Buffer): void {
+    if (!body.length || body.length > ASSET_LIMIT) return;
+    const id = this.put({ mimeType, body, dependencies: [] });
+    for (const alias of urls) {
+      const url = resourceUrl(alias);
+      if (!url) continue;
+      url.hash = '';
+      const earlier = index.get(url.href);
+      if (earlier && earlier.sequence > sequence) continue;
+      index.delete(url.href);
+      index.set(url.href, { id, kind, url: base, sequence });
+    }
+    while (index.size > ASSET_COUNT_LIMIT) {
+      const oldest = index.keys().next();
+      if (oldest.done) break;
+      index.delete(oldest.value);
+    }
   }
 
   // Get the tab's current resource index, creating it at the first observed event.
@@ -236,7 +371,7 @@ export class DomProjection {
   private pageAssets(page: Page): PageAssets {
     let state = this.pages.get(page);
     if (!state) {
-      state = { requests: new Map(), generation: 0, published: new Set(), markup: new Map(),
+      state = { requests: new Map(), loader: '', published: new Set(), markup: new Map(),
         documentId: null, blobs: new Map() };
       this.pages.set(page, state);
     }
@@ -263,7 +398,7 @@ export class DomProjection {
   // 投影当前 DOM，每个页面最多只有一个等待 Chromium 的渲染器求值。
   async snapshot(page: Page, revision: unknown) {
     const state = this.pageAssets(page);
-    const generation = state.generation;
+    const loader = state.loader;
     let operation = this.pending.get(page);
     if (!operation) {
       for (const [url, id] of state.blobs) if (!this.assets.has(id)) state.blobs.delete(url);
@@ -275,7 +410,7 @@ export class DomProjection {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<null>(resolve => { timeout = setTimeout(resolve, 250, null); });
     const source = await Promise.race([operation, deadline]).finally(() => clearTimeout(timeout));
-    if (!source || state.generation !== generation || page.isClosed()) return null;
+    if (!source || state.loader !== loader || page.isClosed()) return null;
     if (state.documentId !== source.documentId) {
       state.markup.clear();
       state.blobs.clear();
@@ -381,6 +516,10 @@ export class DomProjection {
       parent.childNodes = parent.childNodes.filter(node => {
         if (!('tagName' in node)) return node.nodeName === '#text';
         const tag = node.tagName.toLowerCase();
+        if (tag === 'template' && 'content' in node && node.attrs.some(attr => attr.name === 'data-vulcan-shadow')) {
+          pending.push(node.content as DefaultTreeAdapterTypes.DocumentFragment);
+          return true;
+        }
         if (REMOVE_TAGS.has(tag) || (tag === 'link' && !node.attrs.some(attr =>
           attr.name === 'rel' && attr.value.toLowerCase() === 'stylesheet'))) return false;
         node.attrs = node.attrs.filter(attr => !attr.name.startsWith('on') && !STRIP_ATTRS.has(attr.name));
@@ -412,24 +551,40 @@ export class DomProjection {
   }
 }
 
-// Verify the exact document, focused field and UTF-16 range before replaying one committed edit.
-// 在回放一次已提交的编辑前，验证确切文档、焦点字段和 UTF-16 范围。
-export async function applyDomTextEdit(page: Page, params: Record<string, unknown>): Promise<boolean> {
+// Replay a text edit on the focused projected field, using an explicit range when supplied.
+// 在投影中拥有焦点的字段上回放文本编辑，若请求指定范围则使用该范围。
+export async function applyDomTextEdit(
+  page: Page, kind: 'textEdit' | 'textCommit', params: Record<string, unknown>,
+): Promise<boolean> {
   const { id, documentId, before, start, end, text } = params;
-  if (typeof id !== 'string' || typeof documentId !== 'string' || typeof before !== 'string' || typeof text !== 'string'
-    || typeof start !== 'number' || typeof end !== 'number' || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
-    || start < 0 || end < start || end > before.length) return false;
-  const valid = await page.evaluate(({ id, documentId, before, start, end }: Edit) => {
+  if (typeof id !== 'string' || typeof documentId !== 'string' || typeof text !== 'string') return false;
+  // Password and rich text commits use Chromium's selection without sending any previous content.
+  // 密码和富文本提交使用 Chromium 选区，避免传输已有内容。
+  let range: EditRange | null = null;
+  if (kind === 'textEdit') {
+    if (typeof before !== 'string' || typeof start !== 'number' || typeof end !== 'number'
+      || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+      || start < 0 || end < start || end > before.length) return false;
+    range = { before, start, end };
+  } else if (!text) return false;
+  const valid = await page.evaluate(({ id, documentId, range }) => {
     const nodes = (window as ProjectionWindow).__vulcanProjectionNodes;
-    const field = document.activeElement;
-    if (!nodes || nodes.id !== documentId || !field || nodes.ids.get(field) !== id
-      || !(field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement)
-      || field.selectionStart === null || field.readOnly || field.disabled || field.value !== before) return false;
-    field.setSelectionRange(start, end);
+    let field = document.activeElement;
+    while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement;
+    if (!nodes || nodes.id !== documentId || !field || nodes.ids.get(field) !== id) return false;
+    if (!(field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement)) {
+      return range === null && field instanceof HTMLElement && field.isContentEditable;
+    }
+    if (field.readOnly || field.disabled
+      || (field.selectionStart === null && field.type !== 'email' && field.type !== 'number')) return false;
+    if (range) {
+      if (field.type === 'password' || field.selectionStart === null || field.value !== range.before) return false;
+      field.setSelectionRange(range.start, range.end);
+    }
     return true;
-  }, { id, documentId, before, start, end, text });
+  }, { id, documentId, range });
   if (!valid) return false;
   if (text) await page.keyboard.insertText(text);
-  else if (start < end) await page.keyboard.press('Backspace');
+  else if (range && range.start < range.end) await page.keyboard.press('Backspace');
   return true;
 }

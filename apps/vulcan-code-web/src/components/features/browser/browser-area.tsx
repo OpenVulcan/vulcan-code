@@ -59,6 +59,24 @@ export function coreBrowserAddress(input: string): string {
   return url.href;
 }
 
+// Keep the synchronous input gate and its rendered status in step while Core confirms the projection.
+// 等待 Core 确认投影时，同步更新输入门控与界面等待状态。
+function useProjectionSuspension() {
+  // Input callbacks must see the gate immediately, before React renders the pending status.
+  // 输入回调必须在 React 渲染等待状态之前立即看到门控。
+  const projectionSuspended = React.useRef(false);
+  // The menu renders whether a matching projection is still pending.
+  // 菜单显示是否仍在等待匹配的投影。
+  const [awaitingProjection, setAwaitingProjection] = React.useState(false);
+  // Set both consumers to the same pending state.
+  // 将两个消费者设为相同的等待状态。
+  const suspendProjection = React.useCallback((pending: boolean) => {
+    projectionSuspended.current = pending;
+    setAwaitingProjection(pending);
+  }, []);
+  return { projectionSuspended, awaitingProjection, suspendProjection };
+}
+
 // BrowserArea lets any WebUI client observe and control a Core-owned browser page.
 // BrowserArea 让任意 WebUI 客户端观察和控制 Core 拥有的浏览器页面。
 export function BrowserArea(props: { ownerSessionId: string }) {
@@ -151,9 +169,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // requiredFrame blocks input after a page or viewport mutation until a frame from its new generation arrives.
   // requiredFrame 在页面或视口变化后阻止输入，直至新代次画面到达。
   const requiredFrame = React.useRef<{ pageGeneration: string; viewportGeneration: string } | null>(null);
-  // projectionSuspended also covers the interval before Core returns the new generation.
-  // projectionSuspended 还覆盖 Core 返回新代次之前的时段。
-  const projectionSuspended = React.useRef(false);
+  // The input gate also covers the interval before Core returns the new generation.
+  // 输入门控也覆盖 Core 返回新代次之前的时段。
+  const { projectionSuspended, awaitingProjection, suspendProjection } = useProjectionSuspension();
   // pendingPointerMove retains only the latest not-yet-dispatched drag position.
   // pendingPointerMove 仅保留尚未派发的最新拖拽位置。
   const pendingPointerMove = React.useRef<QueuedBrowserInput | null>(null);
@@ -398,7 +416,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     if (!selectedSessionId || !selectedPageId) {
       return;
     }
-    projectionSuspended.current = resizePending.current.has(selectedSessionId);
+    suspendProjection(resizePending.current.has(selectedSessionId));
     requiredFrame.current = null;
     const sessionId = selectedSessionId;
     const pageId = selectedPageId;
@@ -438,7 +456,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           frameRef.current = viewport;
           revision = next.revision;
           markup = next.html;
-          projectionSuspended.current = false;
+          suspendProjection(false);
           requiredFrame.current = null;
           setDom({ ...next, ...viewport, html });
         } else if (frameRef.current && !projectionSuspended.current) {
@@ -677,7 +695,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       if (!isCurrentPage(selectedSessionId, selectedPageId)) return;
       // Keep the current projection until Core confirms the navigation and supplies a new generation.
       // 保留当前投影，直到 Core 确认导航并提供新代次。
-      projectionSuspended.current = true;
+      suspendProjection(true);
       requiredFrame.current = { pageGeneration: updated.pageGeneration, viewportGeneration: updated.viewportGeneration };
       frameRef.current = null;
       setDom(null);
@@ -788,13 +806,13 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     const held = heldPointer.current;
     if (held) released = queueInput("pointer", { type: "up", button: held.button, x: held.x, y: held.y });
     heldPointer.current = null;
-    projectionSuspended.current = true;
+    suspendProjection(true);
     requiredFrame.current = null;
     try {
       if (released) await released;
       if (!isCurrentSession(sessionId)) return;
       if (leaseRef.current?.leaseSecret !== grant.leaseSecret) {
-        projectionSuspended.current = false;
+        suspendProjection(false);
         return;
       }
       const updated = await requestCoreBrowser<CoreBrowserSession>(props.ownerSessionId, "browser.viewport.set", {
@@ -807,7 +825,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       void refreshSessions().catch(() => {});
     } catch (failure) {
       if (isCurrentSession(sessionId)) {
-        projectionSuspended.current = false;
+        suspendProjection(false);
         setError(String(failure));
       }
     } finally {
@@ -926,7 +944,8 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           </form> : <span className="vk-browser-fill" />}
         {selectedSession ? <BrowserViewportMenu key={`${props.ownerSessionId}:${selectedSession.sessionId}`}
           size={dom && dom.pageId === selectedPageId ? { width: dom.width, height: dom.height } : selectedSession.viewportSize}
-          disabled={!ownsControl || selectedSession.status !== "running" || resizingSelection}
+          disabled={!ownsControl || selectedSession.status !== "running" || resizingSelection || awaitingProjection}
+          pending={resizingSelection || awaitingProjection}
           readPanelSize={readPanelSize} resize={size => void resizeViewport(size)} /> : null}
         <Button type="button" size="icon-xs" variant="ghost" aria-label={t("browser.refreshBrowserList")} title={t("browser.refreshBrowserList")} onClick={() => {
           // The shared observer reports errors only to the current owner/lifetime.
@@ -952,7 +971,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           <div ref={viewportPanel} data-browser-viewport className="vk-browser-stage">
             {hasFrame && dom && selectedPage ? (
               <BrowserDomSurface key={`${selectedSessionId}:${dom.pageId}:${dom.documentId}`} snapshot={dom}
-                title={t("browser.liveCoreBrowserPage")} ownsControl={ownsControl && !resizingSelection}
+                title={t("browser.liveCoreBrowserPage")} ownsControl={ownsControl && !resizingSelection && !awaitingProjection}
                 heldKeys={heldKeys} heldPointer={heldPointer} queueInput={queueInput} queuePointerMove={queuePointerMove} />
             ) : <span className="vk-browser-wait">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : t("browser.waitingForBrowserFrame")}</span>}
           </div>

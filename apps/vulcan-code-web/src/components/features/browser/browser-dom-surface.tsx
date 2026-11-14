@@ -6,6 +6,9 @@ import type { HeldBrowserPointer } from "./use-browser-input-queue";
 // 网站标记保持惰性，所有资源加载均限定为本地生成的资源。
 const FRAME_DOCUMENT = '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src blob: data:; style-src \'unsafe-inline\' blob:; font-src blob: data:; media-src blob: data:; base-uri \'none\'; form-action \'none\'"></head><body></body></html>';
 const NODE_ID = "data-vulcan-node";
+// Templates carry sanitized open shadow trees over the projection wire.
+// 模板在投影协议中携带清理后的开放 Shadow DOM。
+const SHADOW_MARKER = "data-vulcan-shadow";
 
 // The parent supplies the projected revision, current control grant and ordered input queue.
 // 父组件提供投影修订、当前控制授权与有序输入队列。
@@ -21,17 +24,39 @@ type SurfaceProps = {
 
 // Local editor state is retained only while a candidate or committed edit is in flight.
 // 只在候选词或已提交编辑仍在处理时保留本地编辑器状态。
-type Field = HTMLInputElement | HTMLTextAreaElement;
-type Editor = { field: Field; before: string };
+type Field = HTMLElement;
+type Editor = { field: Field; before: string | null };
 
-// A text field must provide native composition and UTF-16 selection in its own frame realm.
-// 文本框必须在所在框架中提供原生输入法组合和 UTF-16 选区。
+// Resolve a native text field or the nearest rich-text editing host from an event target.
+// 从事件目标解析原生文本框或最近的富文本编辑宿主。
 function editable(target: EventTarget | null): Field | null {
   const field = target as Field | null;
-  if (!field || (field.tagName !== "INPUT" && field.tagName !== "TEXTAREA")
-    || field.readOnly || field.disabled || field.selectionStart === null
-    || field.type === "password" || !field.getAttribute(NODE_ID)) return null;
-  return field;
+  if (!field || field.nodeType !== Node.ELEMENT_NODE) return null;
+  if (field.tagName === "INPUT" || field.tagName === "TEXTAREA") {
+    const input = field as HTMLInputElement | HTMLTextAreaElement;
+    if (input.readOnly || input.disabled || !input.hasAttribute(NODE_ID)) return null;
+    return input.selectionStart !== null || input.type === "email" || input.type === "number" ? input : null;
+  }
+  if (!field.isContentEditable) return null;
+  const host = field.closest<HTMLElement>("[contenteditable]");
+  return host?.hasAttribute(NODE_ID) ? host : null;
+}
+
+// Read the local draft for textual controls without serializing password contents into edit commands.
+// 读取文本控件的本地草稿，密码内容不会被序列化进编辑命令。
+function fieldValue(field: Field): string {
+  if (field.tagName === "INPUT" || field.tagName === "TEXTAREA") {
+    return (field as HTMLInputElement | HTMLTextAreaElement).value;
+  }
+  return field.textContent ?? "";
+}
+
+// Determine whether an edit can be replayed using an exact native selection range.
+// 判断编辑是否可使用准确的原生选区回放。
+function supportsRange(field: Field): boolean {
+  if (field.tagName !== "INPUT" && field.tagName !== "TEXTAREA") return false;
+  const input = field as HTMLInputElement | HTMLTextAreaElement;
+  return input.type !== "password" && input.selectionStart !== null;
 }
 
 // Compute the smallest replacement by Unicode code points and report UTF-16 offsets to Chromium.
@@ -75,6 +100,32 @@ function reconcile(target: Node, source: Node, preserve: (element: Element) => b
       element.setAttributeNS(attr.namespaceURI, attr.name, attr.value);
     }
   }
+  // Keep shadow contents in their original style and slot scope.
+  // 将 Shadow DOM 内容保留在原有样式与插槽作用域中。
+  const shadow = Array.from(desired.children).find(child => child.tagName === "TEMPLATE" && child.hasAttribute(SHADOW_MARKER)) as HTMLTemplateElement | undefined;
+  if (shadow) {
+    const root = element.shadowRoot ?? element.attachShadow({
+      mode: "open", delegatesFocus: shadow.getAttribute(SHADOW_MARKER) === "delegates-focus",
+    });
+    reconcileChildren(root, shadow.content, preserve);
+  }
+  reconcileChildren(element, desired, preserve, shadow);
+  if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") {
+    const field = element as HTMLInputElement | HTMLTextAreaElement;
+    const value = (desired as HTMLInputElement | HTMLTextAreaElement).value;
+    if (field.type !== "file" && field.type !== "password" && field.value !== value) field.value = value;
+    if (field.tagName === "INPUT") (field as HTMLInputElement).checked = (desired as HTMLInputElement).checked;
+  } else if (element.tagName === "OPTION") {
+    (element as HTMLOptionElement).selected = (desired as HTMLOptionElement).selected;
+  }
+}
+
+// Patch children in place so hover and style updates preserve interactive element identity.
+// 原位更新子节点，使悬停与样式更新保留交互元素身份。
+function reconcileChildren(
+  element: Element | ShadowRoot, desired: Element | DocumentFragment, preserve: (element: Element) => boolean,
+  shadowTemplate?: HTMLTemplateElement,
+): void {
   const keyed = new Map<string, Node>();
   for (const child of Array.from(element.childNodes)) {
     const id = nodeId(child);
@@ -82,6 +133,7 @@ function reconcile(target: Node, source: Node, preserve: (element: Element) => b
   }
   let cursor = element.firstChild;
   for (const child of Array.from(desired.childNodes)) {
+    if (child === shadowTemplate) continue;
     const id = nodeId(child);
     const match = id ? keyed.get(id) : cursor && !nodeId(cursor) && cursor.nodeName === child.nodeName ? cursor : null;
     if (match && match.nodeName === child.nodeName) {
@@ -89,7 +141,9 @@ function reconcile(target: Node, source: Node, preserve: (element: Element) => b
       reconcile(match, child, preserve);
       cursor = match.nextSibling;
     } else {
-      element.insertBefore(element.ownerDocument.importNode(child, true), cursor);
+      const inserted = element.ownerDocument.importNode(child, false);
+      if (inserted.nodeType === Node.ELEMENT_NODE) reconcile(inserted, child, preserve);
+      element.insertBefore(inserted, cursor);
     }
   }
   while (cursor) {
@@ -97,13 +151,15 @@ function reconcile(target: Node, source: Node, preserve: (element: Element) => b
     cursor.remove();
     cursor = next;
   }
-  if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") {
-    const field = element as Field;
-    const value = (desired as Field).value;
-    if (field.type !== "file" && field.type !== "password" && field.value !== value) field.value = value;
-    if (field.tagName === "INPUT") (field as HTMLInputElement).checked = (desired as HTMLInputElement).checked;
-  } else if (element.tagName === "OPTION") {
-    (element as HTMLOptionElement).selected = (desired as HTMLOptionElement).selected;
+}
+
+// Index projected IDs across open shadow boundaries for source focus and scroll updates.
+// 跨开放 Shadow DOM 边界索引投影标识，以同步源端焦点和滚动。
+function projectedElements(root: Document | ShadowRoot, elements: Map<string, Element>): void {
+  for (const element of root.querySelectorAll("*")) {
+    const id = element.getAttribute(NODE_ID);
+    if (id) elements.set(id, element);
+    if (element.shadowRoot) projectedElements(element.shadowRoot, elements);
   }
 }
 
@@ -152,11 +208,13 @@ export function BrowserDomSurface(props: SurfaceProps) {
       if (!field.isConnected) pending.current.delete(field);
     }
     const scrolled = new Set(snapshot.scroll.map(([id]) => id));
+    const elements = new Map<string, Element>();
+    projectedElements(frameDocument, elements);
     for (const id of previousScroll.current) if (!scrolled.has(id)) {
-      frameDocument.querySelector(`[${NODE_ID}="${CSS.escape(id)}"]`)?.scrollTo(0, 0);
+      elements.get(id)?.scrollTo(0, 0);
     }
     for (const [id, x, y] of snapshot.scroll) {
-      frameDocument.querySelector(`[${NODE_ID}="${CSS.escape(id)}"]`)?.scrollTo(x, y);
+      elements.get(id)?.scrollTo(x, y);
     }
     previousScroll.current = scrolled;
     const viewport = frameDocument.defaultView;
@@ -165,8 +223,10 @@ export function BrowserDomSurface(props: SurfaceProps) {
     }
     if (document.activeElement === iframe.current && snapshot.focused
       && !composition.current && !pending.current.size && !props.heldPointer.current) {
-      const focused = frameDocument.querySelector<HTMLElement>(`[${NODE_ID}="${CSS.escape(snapshot.focused)}"]`);
-      if (focused && focused !== frameDocument.activeElement) focused.focus({ preventScroll: true });
+      const focused = elements.get(snapshot.focused) as HTMLElement | undefined;
+      let currentFocus = frameDocument.activeElement;
+      while (currentFocus?.shadowRoot?.activeElement) currentFocus = currentFocus.shadowRoot.activeElement;
+      if (focused && focused !== currentFocus) focused.focus({ preventScroll: true });
     }
   }, [frameDocument, snapshot, props.heldPointer, refusedEdits]);
 
@@ -181,13 +241,22 @@ export function BrowserDomSurface(props: SurfaceProps) {
 
     // Replay each committed candidate or normal edit once, then resume source reconciliation.
     // 每个已确认候选词或普通编辑仅回放一次，随后恢复源页面协调。
-    function commit({ field, before }: Editor) {
+    function commit({ field, before }: Editor, text: string | null) {
       const current = latest.current;
-      if (!current.ownsControl || before === field.value) return;
+      if (!current.ownsControl) return;
+      // Only fields with an explicit selection range need a copy of the previous value.
+      // 仅支持显式选区的输入框需要复制先前值。
+      const after = before === null ? null : fieldValue(field);
       const id = field.getAttribute(NODE_ID);
-      const operation = current.queueInput("textEdit", {
-        id, documentId: current.snapshot.documentId, before, ...textDelta(before, field.value),
-      });
+      const target = { id, documentId: current.snapshot.documentId };
+      let operation: Promise<boolean>;
+      if (before !== null && after !== null && before !== after) {
+        operation = current.queueInput("textEdit", { ...target, before, ...textDelta(before, after) });
+      } else if (text) {
+        operation = current.queueInput("textCommit", { ...target, text });
+      } else {
+        return;
+      }
       pending.current.set(field, operation);
       void operation.then(applied => {
         if (pending.current.get(field) !== operation) return;
@@ -197,37 +266,41 @@ export function BrowserDomSurface(props: SurfaceProps) {
     }
 
     doc.addEventListener("compositionstart", event => {
-      const field = editable(event.target);
-      if (field && latest.current.ownsControl) composition.current = { field, before: field.value };
+      const field = editable(event.composedPath()[0]);
+      if (field && latest.current.ownsControl) {
+        composition.current = { field, before: supportsRange(field) ? fieldValue(field) : null };
+      }
     }, options);
-    doc.addEventListener("compositionend", () => {
+    doc.addEventListener("compositionend", event => {
       const editor = composition.current;
       composition.current = null;
       if (editor) {
         beforeValues.delete(editor.field);
-        commit(editor);
+        if (event.data) commit(editor, event.data);
       }
     }, options);
     doc.addEventListener("beforeinput", event => {
       if (!latest.current.ownsControl) { event.preventDefault(); return; }
-      const field = editable(event.target);
-      if (field && !composition.current && !event.isComposing) beforeValues.set(field, field.value);
+      const field = editable(event.composedPath()[0]);
+      if (field && supportsRange(field) && !composition.current && !event.isComposing) beforeValues.set(field, fieldValue(field));
     }, options);
     doc.addEventListener("input", event => {
-      const field = editable(event.target);
-      if (!field || composition.current || (event as InputEvent).isComposing) return;
+      const input = event as InputEvent;
+      const field = editable(event.composedPath()[0]);
+      if (!field || composition.current || input.isComposing || input.inputType === "insertCompositionText") return;
       const before = beforeValues.get(field);
       beforeValues.delete(field);
-      if (before !== undefined) commit({ field, before });
+      if (supportsRange(field) && before === undefined) return;
+      commit({ field, before: before ?? null }, input.data ?? input.dataTransfer?.getData("text/plain") ?? null);
     }, options);
 
     doc.addEventListener("pointerdown", event => {
       const current = latest.current;
       if (!current.ownsControl || !event.isPrimary || current.heldPointer.current) return;
-      const element = event.target as Element;
+      const element = event.composedPath()[0] as Element;
       // Only fields need native pointer defaults for focus and selection. Other drags run in Core.
       // 只有表单字段需要原生指针默认行为来获得焦点与选区，其他拖动由 Core 执行。
-      if (!element.closest("input,textarea,select")) event.preventDefault();
+      if (!element.closest("input,textarea,select") && !editable(element)) event.preventDefault();
       const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
       const coordinates = { x: event.clientX, y: event.clientY };
       current.heldPointer.current = { pointerId: event.pointerId, button, ...coordinates };
@@ -241,6 +314,14 @@ export function BrowserDomSurface(props: SurfaceProps) {
       const coordinates = { x: event.clientX, y: event.clientY };
       if (held) current.heldPointer.current = { ...held, ...coordinates };
       current.queuePointerMove({ type: "move", ...coordinates });
+    }, options);
+    doc.addEventListener("pointerout", event => {
+      // Leaving the frame clears the source hover chain. Capture keeps active drags in the frame.
+      // 离开框架时清除源页面的悬停链，主动拖动则依靠指针捕获保持在框架内。
+      const current = latest.current;
+      if (current.ownsControl && !current.heldPointer.current && event.relatedTarget === null) {
+        current.queuePointerMove({ type: "leave" });
+      }
     }, options);
 
     // Release the exact pressed button after the last queued drag position.
@@ -271,13 +352,17 @@ export function BrowserDomSurface(props: SurfaceProps) {
     doc.addEventListener("keydown", event => {
       const current = latest.current;
       if (!current.ownsControl) { event.preventDefault(); return; }
-      if (event.isComposing || event.key === "Process") return;
-      const field = editable(event.target);
-      // Local text edits create input events. Forward only application commands as keys.
-      // 本地文字编辑会产生 input 事件。仅将应用命令作为按键转发。
-      if (field && (event.key.length === 1 || ["Backspace", "Delete", "Home", "End", "ArrowLeft", "ArrowRight"].includes(event.key)
-        || (field.tagName === "TEXTAREA" && event.key === "Enter"))) return;
-      event.preventDefault();
+      if (composition.current || event.isComposing || event.key === "Process") return;
+      const field = editable(event.composedPath()[0]);
+      // Keep native selection commands in both browsers when the commit uses the source selection.
+      // 当提交使用源页面选区时，在两个浏览器中同时执行原生选区命令。
+      const selectAll = (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a";
+      const caretKey = ["Home", "End", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key);
+      const nativeSelection = field && (selectAll || caretKey);
+      if (field && ((!selectAll && event.key.length === 1) || (supportsRange(field)
+        && (nativeSelection || event.key === "Backspace" || event.key === "Delete"
+          || (field.tagName === "TEXTAREA" && event.key === "Enter"))))) return;
+      if (!nativeSelection) event.preventDefault();
       if (event.repeat) return;
       current.heldKeys.current.add(event.key);
       void current.queueInput("key", { type: "down", key: event.key });

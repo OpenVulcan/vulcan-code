@@ -46,13 +46,14 @@ function sizeLabel({ width, height }: BrowserViewportSize): string {
 interface BrowserViewportMenuProps {
   size: BrowserViewportSize | null;
   disabled: boolean;
+  pending: boolean;
   readPanelSize: () => BrowserViewportSize | null;
   resize: (size: BrowserViewportSize) => void;
 }
 
 // Open a single toolbar menu for presets and fitting, with a dialog for explicit custom dimensions.
 // 工具栏通过同一菜单提供预设和适配操作，并通过对话框录入自定义尺寸。
-export function BrowserViewportMenu({ size, disabled, readPanelSize, resize }: BrowserViewportMenuProps) {
+export function BrowserViewportMenu({ size, disabled, pending, readPanelSize, resize }: BrowserViewportMenuProps) {
   const { t } = useI18n();
   // The dialog holds a draft independent of remote viewport changes.
   // 对话框保存独立于远端视口变化的输入草稿。
@@ -95,7 +96,8 @@ export function BrowserViewportMenu({ size, disabled, readPanelSize, resize }: B
           if (openingCustom.current) event.preventDefault();
           openingCustom.current = false;
         }}>
-          {currentSize && <DropdownMenuLabel>{t("browser.pageSize")} {currentSize}</DropdownMenuLabel>}
+          {pending ? <DropdownMenuLabel role="status">{t("browser.connectingView")}</DropdownMenuLabel>
+            : currentSize && <DropdownMenuLabel>{t("browser.pageSize")} {currentSize}</DropdownMenuLabel>}
           <DropdownMenuItem disabled={disabled || !panelSize} onSelect={fitCurrentPanel}>
             <Maximize />{t("browser.fitCurrentViewport")}
             {panelSize && <DropdownMenuShortcut>{sizeLabel(panelSize)}</DropdownMenuShortcut>}

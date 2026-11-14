@@ -111,14 +111,39 @@ const fixture = createServer((request, response) => {
     response.end(`<!doctype html><link rel="stylesheet" href="/projection.css">
       <input id="edit" style="position:fixed;left:0;top:0;width:200px;height:60px">
       <div id="projected" style="position:fixed;left:100px;top:130px;touch-action:none">Drag</div><img id="projected-image" src="/projection.svg">
+      <a id="projected-download" href="/projection-download" style="position:fixed;left:500px;top:100px">Download projection fixture</a>
       <img id="projected-blob">
       <a id="popup" style="position:fixed;left:250px;top:0;width:180px;height:60px" target="_blank" rel="noopener" href="/popup">Open popup</a>
+      <div style="position:fixed;left:90px;top:215px">
+        <projection-widget>Slotted label</projection-widget>
+        <div id="hover-target" style="height:55px">Hover target <span id="hover-menu">Hover menu</span></div>
+        <input type="email" id="projection-email" autocomplete="off">
+        <input type="password" id="projection-password" autocomplete="off">
+        <output id="password-length">0</output>
+      </div>
       <script>
         document.querySelector('#edit').addEventListener('input', e => document.body.dataset.edited = e.target.value);
         document.querySelector('#projected-blob').src = URL.createObjectURL(new Blob(
           ['<svg xmlns="http://www.w3.org/2000/svg" width="31" height="31"><circle cx="15" cy="15" r="14"/></svg>'],
           { type: 'image/svg+xml' }
         ));
+        const layout = new CSSStyleSheet();
+        layout.replaceSync('#hover-menu { visibility:hidden } #hover-target:hover #hover-menu { visibility:visible; color:rgb(23,54,91) }');
+        document.adoptedStyleSheets = [layout];
+        const host = document.querySelector('projection-widget');
+        const root = host.attachShadow({ mode:'open' });
+        root.innerHTML = '<slot></slot><projection-inner></projection-inner>';
+        const inner = root.querySelector('projection-inner').attachShadow({ mode:'open' });
+        inner.innerHTML = '<button id="shadow-button">Shadow action</button><span id="shadow-state">idle</span>'
+          + '<div id="projection-rich" contenteditable="true" style="width:220px;height:32px">rich start</div>';
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync('#shadow-button { color:rgb(16,85,142); background-image:url("/projection.svg") }'
+          + '#shadow-button:hover { color:rgb(35,110,81) }');
+        inner.adoptedStyleSheets = [sheet];
+        inner.querySelector('button').onclick = () => inner.querySelector('#shadow-state').textContent = 'clicked';
+        document.querySelector('#projection-password').addEventListener('input', event => {
+          document.querySelector('#password-length').textContent = event.target.value.length;
+        });
         let dragging = false;
         const item = document.querySelector('#projected');
         item.addEventListener('pointerdown', () => dragging = true);
@@ -127,6 +152,11 @@ const fixture = createServer((request, response) => {
         });
         document.addEventListener('pointerup', () => dragging = false);
       </script>`);
+    return;
+  }
+  if (request.url === '/projection-download') {
+    response.writeHead(200, { 'content-type': 'application/octet-stream',
+      'content-disposition': 'attachment; filename="projection-fixture.txt"' }).end('projection fixture');
     return;
   }
   if (request.url === '/popup') {
@@ -276,19 +306,21 @@ async function verifyDomViewers(discovery, sessionId) {
     const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
     const url = new URL(viewerPath, origin);
     url.searchParams.set('service', origin);
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    context.setDefaultTimeout(5_000);
     // Count viewport writes from both clients to detect duplicate or automatic fits.
     // 统计双客户端的视口写入，检测重复适配或自动适配。
     let viewportWrites = 0;
-    context.on('request', request => {
-      if (request.method() === 'POST' && new URL(request.url()).pathname === '/rpc'
-        && request.postDataJSON().method === 'browser.viewport.set') viewportWrites++;
-    });
     let originRequests = 0;
-    await context.route(`${pageUrl}**`, route => { originRequests++; return route.abort(); });
     const clients = [];
     for (let index = 0; index < 2; index++) {
+      // Separate contexts isolate both clients' caches, storage and browser input.
+      // 使用独立上下文隔离两个客户端的缓存、存储和浏览器输入。
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      context.setDefaultTimeout(5_000);
+      context.on('request', request => {
+        if (request.method() === 'POST' && new URL(request.url()).pathname === '/rpc'
+          && request.postDataJSON().method === 'browser.viewport.set') viewportWrites++;
+      });
+      await context.route(`${pageUrl}**`, route => { originRequests++; return route.abort(); });
       const client = await context.newPage();
       const errors = [];
       client.on('pageerror', error => errors.push(error.message));
@@ -327,16 +359,70 @@ async function verifyDomViewers(discovery, sessionId) {
     console.log('DOM viewers loaded the same image, imported style, and font without source requests.');
     await controller.getByRole('button', { name: 'Take control' }).click({ timeout: 5_000 });
     await controller.getByRole('button', { name: 'Release control' }).waitFor({ timeout: 5_000 });
-    await frame(controller).locator('#edit').click({ timeout: 5_000 });
-    const cdp = await context.newCDPSession(controller);
-    await cdp.send('Input.imeSetComposition', { text: '输入', selectionStart: 2, selectionEnd: 2 });
-    await cdp.send('Input.insertText', { text: '输入法 vulcancode' });
+    await frame(controller).locator('#projected-download').click();
+    await controller.getByRole('button', { name: 'Download list' }).click();
+    await controller.getByRole('button', { name: /projection-fixture\.txt/ }).waitFor();
+    await controller.getByRole('button', { name: 'Download list' }).click();
+    // Reload the passive client to request a fresh snapshot after the attachment.
+    // 附件处理后重新加载观察端，请求新快照。
+    await observer.reload({ waitUntil: 'domcontentloaded' });
+    for (const client of clients) {
+      await until(async () => {
+        assert.equal(await frame(client).locator('#projected-image').evaluate(element => element.naturalWidth), 40);
+        assert.equal(await frame(client).locator('#projected').evaluate(element => getComputedStyle(element).color), 'rgb(13, 42, 96)');
+        return true;
+      }, 15_000);
+    }
+    for (const client of clients) {
+      const button = frame(client).getByRole('button', { name: 'Shadow action' });
+      assert.equal(await button.evaluate(element => getComputedStyle(element).color), 'rgb(16, 85, 142)');
+      assert.match(await button.evaluate(element => getComputedStyle(element).backgroundImage), /^url\("blob:/);
+      assert.equal(await frame(client).locator('slot').evaluate(slot => slot.assignedNodes()[0].textContent), 'Slotted label');
+    }
+    await frame(controller).locator('#hover-target').hover();
+    for (const client of clients) await frame(client).locator('#hover-menu').waitFor({ state: 'visible' });
+    await controller.getByRole('button', { name: 'Resize viewport' }).hover();
+    for (const client of clients) await frame(client).locator('#hover-menu').waitFor({ state: 'hidden' });
+    await frame(controller).getByRole('button', { name: 'Shadow action' }).hover();
+    for (const client of clients) {
+      await frame(client).locator('#hover-menu').waitFor({ state: 'hidden' });
+      await until(async () => {
+        assert.equal(await frame(client).locator('#shadow-button').evaluate(element => getComputedStyle(element).color), 'rgb(35, 110, 81)');
+        return true;
+      }, 10_000);
+    }
+    await frame(controller).getByRole('button', { name: 'Shadow action' }).click();
+    for (const client of clients) await frame(client).getByText('clicked', { exact: true }).waitFor();
+    console.log('Both DOM viewers rendered nested shadow, scoped assets, slots, and authoritative hover.');
+    // Drive Chromium's composition protocol while observing the other authenticated WebUI client.
+    // 通过 Chromium 合成输入协议录入文字，同时观察另一个已鉴权的 WebUI 客户端。
+    const cdp = await controller.context().newCDPSession(controller);
+    for (const [selector, text, replace] of [
+      ['#edit', '输入法 vulcancode', false],
+      ['#edit', '替换文本', true],
+      ['#projection-email', 'ime-test@example.test', false],
+      ['#projection-rich', '富文本', true],
+      ['#projection-password', '测试密码', false],
+      ['#projection-password', '替代', true],
+    ]) {
+      await frame(controller).locator(selector).click();
+      if (replace) await controller.keyboard.press('Control+a');
+      await cdp.send('Input.imeSetComposition', { text: '候选', selectionStart: 2, selectionEnd: 2 });
+      await cdp.send('Input.insertText', { text });
+      await until(async () => {
+        const observed = frame(observer).locator(selector);
+        if (selector === '#projection-rich') assert.equal(await observed.textContent(), text);
+        else if (selector === '#projection-password') {
+          assert.equal(await observed.getAttribute('value'), null);
+          assert.equal(await observed.inputValue(), '');
+          assert.equal(await frame(observer).locator('#password-length').textContent(), String(text.length));
+        } else assert.equal(await observed.getAttribute('value'), text);
+        return true;
+      }, 10_000);
+    }
     await cdp.detach();
-    await until(async () => {
-      assert.equal(await frame(observer).locator('#edit').getAttribute('value'), '输入法 vulcancode');
-      return true;
-    }, 10_000);
-    console.log('A committed IME edit reached the source and the second DOM viewer.');
+    assert.equal(originRequests, 0, 'Neither client may fetch source resources, including inside Shadow DOM.');
+    console.log('Both viewers verified committed IME insertion and replacement, including password redaction.');
     const box = await frame(controller).locator('#projected').boundingBox({ timeout: 5_000 });
     assert.ok(box);
     await controller.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -379,8 +465,27 @@ async function verifyDomViewers(discovery, sessionId) {
       width: panel.clientWidth, height: panel.clientHeight,
     }));
     const viewportMenu = controller.getByRole('button', { name: 'Resize viewport' });
+    // Hold one snapshot response after Core confirms the resize to exercise the original race.
+    // Core 确认调整后阻塞一个快照应答，覆盖原先的竞态。
+    let resumeSnapshots;
+    const snapshotsPaused = new Promise(resolve => { resumeSnapshots = resolve; });
+    await controller.route('**/rpc', async route => {
+      if (viewportWrites === 1 && route.request().postDataJSON().method === 'browser.dom.snapshot') await snapshotsPaused;
+      await route.continue();
+    });
     await viewportMenu.click();
     await controller.getByRole('menuitemradio', { name: /Google Pixel 7.*915×412/ }).click();
+    try {
+      await until(async () => {
+        assert.equal(await frame(observer).locator('body').evaluate(body => body.ownerDocument.defaultView.innerWidth), 915);
+        return true;
+      }, 10_000);
+      await viewportMenu.click();
+      assert.equal(await controller.getByRole('menuitemradio', { name: /Google Pixel 7.*915×412/ }).getAttribute('aria-disabled'), 'true');
+      await controller.keyboard.press('Escape');
+    } finally {
+      resumeSnapshots();
+    }
     await expectViewport({ width: 915, height: 412 });
     await viewportMenu.click();
     await controller.getByRole('menuitem', { name: 'Custom size…' }).click();
@@ -689,7 +794,7 @@ try {
   // download 是由归属 Core 保存且不包含宿主路径的记录。
   const download = await until(async () => {
     const records = await rpc('browser.download.list', { sessionId: session.sessionId });
-    const completed = records.find((record) => record.status === 'completed');
+    const completed = records.find((record) => record.fileName === 'fixture-download.txt' && record.status === 'completed');
     assert.ok(completed, JSON.stringify(records));
     return completed;
   }, 10_000);
@@ -924,10 +1029,11 @@ try {
   // callbackLagMs is an independent upper bound for input reaching the page event handler.
   // callbackLagMs 是输入抵达页面事件处理器的独立延迟上界。
   const callbackLagMs = latencyClickTimes.map((receivedAt, index) => receivedAt - inputStartedAt[index]);
-  // The initial completed download uses one slot; fifteen more succeed and the seventeenth is
-  // reported as failed without leaving a file in Core's private control directory.
-  // 最初的已完成下载占用一个名额；再有十五次成功，第十七次明确失败且不会留下私有控制目录文件。
-  for (let index = 0; index < 16; index += 1) {
+  // Earlier fixtures already consumed slots. Test through the limit and the first rejected download.
+  // 此前的夹具已经占用了名额，继续验证达到上限以及首次拒绝下载。
+  const priorDownloads = await rpc('browser.download.list', { sessionId: session.sessionId });
+  const remainingSlots = 16 - priorDownloads.filter(record => record.status === 'completed').length;
+  for (let index = 0; index <= remainingSlots; index += 1) {
     if (index % 5 === 0) await rpc('browser.lease.heartbeat', { sessionId: session.sessionId, leaseSecret: lease.leaseSecret });
     // The previous IDs distinguish this click from every earlier host download event.
     // 先前的身份集合将本次点击与所有更早的宿主下载事件区分开。
@@ -951,8 +1057,8 @@ try {
       assert.notEqual(added[0].status, 'pending');
       return added[0];
     }, 10_000);
-    assert.equal(newDownload.status, index < 15 ? 'completed' : 'failed');
-    if (index === 15) {
+    assert.equal(newDownload.status, index < remainingSlots ? 'completed' : 'failed');
+    if (index === remainingSlots) {
       // The rejected UUID has no file even though Core retains its path-free failed record.
       // 被拒绝的 UUID 不留下文件，Core 仍保留不含路径的失败记录。
       const rejectedPath = path.join(root, 'browser-profiles', 'control', session.sessionId, 'downloads', newDownload.downloadId);
