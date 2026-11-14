@@ -677,6 +677,9 @@ async fn historical_job_environment_locator(
     if let Some(root) = root {
         let (_, root_locator, _) =
             crate::conversation_events_v1::resolve_exact_locator_and_registry(state, &root).await?;
+        locator
+            .validate_environment_root(&root_locator)
+            .map_err(|error| error.to_string())?;
         Ok(root_locator)
     } else {
         Ok(locator)

@@ -263,10 +263,40 @@ impl SessionV1StorageLocator {
     /// Returns the declared root ID for an embedded child, or None for a root session.
     /// 若为内嵌子会话则返回声明的根会话 ID，根会话则返回 None。
     pub fn read_environment_root_session_id(&self) -> Result<Option<String>, SessionV1StoreError> {
-        Ok(self
-            .read_indexed_metadata()?
-            .child_execution_profile
-            .map(|profile| profile.root_session_id))
+        let metadata = self.read_indexed_metadata()?;
+        let Some(profile) = metadata.child_execution_profile else {
+            return Ok(None);
+        };
+        profile
+            .validate_owner(self.session_id(), metadata.segment_generation)
+            .map_err(|error| {
+                SessionV1StorageError::corrupt(
+                    SessionV1StorageErrorCode::MetadataCorrupt,
+                    self.layout.metadata_path(),
+                    format!("invalid child execution profile: {error}"),
+                )
+            })?;
+        Ok(Some(profile.root_session_id))
+    }
+
+    /// Verifies that this embedded locator belongs to the declared root's physical storage tree.
+    /// 校验此内嵌定位器是否位于所声明根会话的物理存储树中。
+    /// Both locators are already validated; nested task sessions may be more than one level deep.
+    /// 两个定位器均已校验，嵌套任务会话可以有多层。
+    pub fn validate_environment_root(&self, root: &Self) -> Result<(), SessionV1StoreError> {
+        let root_dir = root.session_directory();
+        let embedded_tree = root_dir.join(EMBEDDED_TASK_PARTITION);
+        if root.read_environment_root_session_id()?.is_some()
+            || self.project_id != root.project_id
+            || !self.session_directory().starts_with(embedded_tree)
+        {
+            return Err(SessionIndexV1Error::InvalidLocator {
+                session_id: Some(self.session_id.clone()),
+                detail: String::from("The environment root does not own this embedded session."),
+            }
+            .into());
+        }
+        Ok(())
     }
 
     /// Reads validated collaboration state for recovery selection without loading interaction history.
@@ -2673,6 +2703,106 @@ connection.close()
                 )
                 .is_file()
         );
+    }
+
+    /// Verifies nested task ownership and rejects a different root in the same project.
+    /// 验证嵌套任务归属，并拒绝同一项目的其他根会话。
+    #[test]
+    fn environment_root_requires_owned_nested_task() {
+        // Use the same physical locator derivation used by production nested tasks.
+        // 使用生产嵌套任务的同一物理定位器派生方式。
+        let temporary = tempfile::tempdir().unwrap();
+        let root = create_session_v1_storage_fixture(temporary.path(), "root-session", 1).unwrap();
+        let other =
+            create_session_v1_storage_fixture(temporary.path(), "other-session", 1).unwrap();
+        let parent = embedded_task_locator(&root, "parent-task").unwrap();
+        let nested = embedded_task_locator(&parent, "nested-task").unwrap();
+        assert!(nested.validate_environment_root(&root).is_ok());
+        assert!(nested.validate_environment_root(&other).is_err());
+        assert!(root.validate_environment_root(&root).is_err());
+    }
+
+    /// Rejects a stored child execution profile whose owner differs from its locator.
+    /// 拒绝所有者与定位器不一致的已存储子执行配置。
+    #[test]
+    fn environment_root_validates_child_profile_owner() {
+        use vulcan_session_core::v1::child_execution::{
+            CHILD_EXECUTION_PROFILE_VERSION, ChildExecutionProfile, ChildExecutionPromptContext,
+            ChildExecutionRuntimeIdentity,
+        };
+        use vulcan_session_core::v1::ids::{SubagentTaskId, TurnId};
+        use vulcan_session_core::{
+            ExecutionRuntimePolicy, TaskInvocationConfig, TaskSessionResolvedConfig,
+        };
+
+        // The profile is valid for the nested locator before its owner is changed.
+        // 在变更所有者前，执行配置对嵌套定位器有效。
+        let temporary = tempfile::tempdir().unwrap();
+        let root = create_session_v1_storage_fixture(temporary.path(), "root-session", 1).unwrap();
+        let parent = embedded_task_locator(&root, "parent-task").unwrap();
+        let nested = embedded_task_locator(&parent, "nested-task").unwrap();
+        let mut metadata =
+            MetadataDocument::new(nested.session_id(), root.project_id(), "Fixture", 1);
+        let policy = ExecutionRuntimePolicy::task_session();
+        metadata.child_execution_profile = Some(ChildExecutionProfile {
+            version: CHILD_EXECUTION_PROFILE_VERSION,
+            root_session_id: root.session_id().to_owned(),
+            parent_session_id: parent.session_id().to_owned(),
+            task_id: SubagentTaskId::try_new(nested.session_id()).unwrap(),
+            segment_generation: metadata.segment_generation,
+            business_turn_id: TurnId::try_new(1).unwrap(),
+            business_execution_id: "fixture-execution".into(),
+            invocation_config: TaskInvocationConfig::main("Fixture task"),
+            resolved_config: TaskSessionResolvedConfig {
+                requested_config: Default::default(),
+                effective_config: Default::default(),
+                functional_system_prompt_layers: Vec::new(),
+                runtime_policy: policy,
+            },
+            runtime_identity: ChildExecutionRuntimeIdentity {
+                public_task_id: "fixture-task".into(),
+                display_title: "Fixture title".into(),
+                description: None,
+                subagent: None,
+                depth: 2,
+            },
+            effective_config: Default::default(),
+            runtime_policy: ExecutionRuntimePolicy::task_session(),
+            execution_agent_id: None,
+            connection_id: "fixture-connection".into(),
+            temperature: None,
+            request_overrides: Default::default(),
+            admitted_tools: Default::default(),
+            fixed_agent_prompt: None,
+            prompt_context: ChildExecutionPromptContext {
+                identity: "fixture".into(),
+                delegated_task: "Fixture task".into(),
+                delegation: None,
+                functional_system_prompt: None,
+            },
+        });
+        std::fs::create_dir_all(nested.session_directory()).unwrap();
+        std::fs::write(
+            nested.layout.metadata_path(),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            nested
+                .read_environment_root_session_id()
+                .unwrap()
+                .as_deref(),
+            Some(root.session_id())
+        );
+
+        metadata.child_execution_profile.as_mut().unwrap().task_id =
+            SubagentTaskId::try_new("foreign-task").unwrap();
+        std::fs::write(
+            nested.layout.metadata_path(),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        assert!(nested.read_environment_root_session_id().is_err());
     }
 
     /// An embedded child cannot cross the project boundary fixed by its parent metadata.
