@@ -24,14 +24,16 @@ use vulcan_workspace_store::workspace_store::{
     create_indexed_session_v1, delete_session_v1, list_active_sessions_v1,
     list_archived_sessions_v1, load_session_v1_full, load_session_v1_tail,
     locate_embedded_task_session_v1, locate_optional_session_v1_storage, locate_session_v1_storage,
-    preflight_session_v1_storage, project_resource_directory_v1, project_session_lifecycle_v1,
-    session_v1_format_is_unsupported,
+    preflight_session_v1_storage, prepare_recovery_session_index_retry_v1,
+    project_resource_directory_v1, project_session_lifecycle_v1, session_v1_format_is_unsupported,
 };
 
+use crate::project_conversation_services::begin_project_recovery_publication;
 use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
     SessionRuntimeError, SessionRuntimeRegistry,
 };
+use crate::state::SharedServiceBridgeState;
 
 mod deletion;
 pub(crate) mod guards;
@@ -840,9 +842,12 @@ pub(crate) struct RecoveryDraftSessionV1 {
 
 /// Publishes an idle recovery session or returns the exact result of an earlier attempt.
 /// 发布空闲恢复会话，或返回先前请求的精确结果。
+/// `state` owns project admission, `controller` owns storage, and `registry` owns per-session lifecycle.
+/// `state` 持有项目准入，`controller` 持有存储，`registry` 持有会话级生命周期。
 /// The caller derives `session_id` from the complete operation identity; `build` runs only before initial publication.
 /// 调用方从完整操作身份派生 `session_id`；`build` 只在首次发布前执行。
 pub(crate) async fn create_or_get_recovery_draft_session_v1(
+    state: &SharedServiceBridgeState,
     controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
@@ -868,21 +873,31 @@ pub(crate) async fn create_or_get_recovery_draft_session_v1(
     }
     // A published tree may already own the draft even if its SQLite insert failed.
     // 即使 SQLite 插入失败，已发布目录树也可能已持有草稿。
-    if vulcan_workspace_store::workspace_store::resume_recovery_session_index_v1(
-        controller, session_id,
-    )
-    .await
-    .map_err(|error| error.to_string())?
+    if let Some(prepared) = prepare_recovery_session_index_retry_v1(controller, session_id)
+        .map_err(|error| error.to_string())?
     {
+        // The prepared row still owns the project even if the source session is unavailable.
+        // 即使来源会话已不可用，待发布索引行仍确定所属项目。
+        let _project = begin_project_recovery_publication(state, prepared.project_id())?;
+        prepared
+            .publish(controller)
+            .await
+            .map_err(|error| error.to_string())?;
         return Ok(session_id);
     }
-    publish_recovery_draft_session_v1(controller, registry, session_id, build.await?)
+    // The source determines project ownership before the first durable write.
+    // 首次持久化写入前由来源确定项目归属。
+    let draft = build.await?;
+    // Archive and removal must wait for publication to release the exact project reservation.
+    // 归档和移除需等发布释放精确项目预留后才能取得准入。
+    let _project = begin_project_recovery_publication(state, &draft.project_id)?;
+    publish_recovery_draft_session_v1(controller, registry, session_id, draft)
         .await
         .map_err(|error| error.to_string())
 }
 
-/// Publishes the prepared draft under the lifecycle guard held by its caller.
-/// 在调用方持有生命周期守卫期间发布已准备的草稿。
+/// Publishes the prepared draft under the session and project guards held by its caller.
+/// 在调用方持有会话及项目守卫期间发布已准备的草稿。
 /// Returns the registered session ID without dispatching a request.
 /// 返回已注册的会话标识，不派发请求。
 async fn publish_recovery_draft_session_v1(

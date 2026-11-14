@@ -701,6 +701,9 @@ pub(crate) enum ProjectAdmissionReservationKind {
     /// The project is crossing an archive or removal lifecycle transaction.
     /// 项目正在跨越归档或移除生命周期事务。
     LifecycleTransition,
+    /// A recovery draft is publishing its project membership.
+    /// 恢复草稿正在发布其项目成员关系。
+    RecoveryPublication,
 }
 
 impl ProjectAdmissionReservationKind {
@@ -710,6 +713,7 @@ impl ProjectAdmissionReservationKind {
         match self {
             Self::PromptSubmission => "user prompt submission",
             Self::LifecycleTransition => "archive or removal lifecycle transition",
+            Self::RecoveryPublication => "recovery session publication",
         }
     }
 }

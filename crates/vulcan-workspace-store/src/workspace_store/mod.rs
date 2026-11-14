@@ -104,19 +104,20 @@ pub use session_usage::{load_session_lifetime_usage, save_session_lifetime_usage
 pub use session_v1_store::create_session_v1_storage_fixture;
 pub use session_v1_store::{
     CreateEmbeddedTaskSessionV1Request, CreateSessionV1Request, CreatedSessionV1,
-    DeleteSessionV1Outcome, LoadedSessionV1, SESSION_V1_STORAGE_PARTITION,
-    SessionIndexV1ConflictField, SessionIndexV1Error, SessionV1CollaborationRecoverySnapshot,
-    SessionV1EventRange, SessionV1EventWindowState, SessionV1FlushResult, SessionV1ListEntry,
-    SessionV1LoadReport, SessionV1StorageError, SessionV1StorageErrorCode, SessionV1StorageLocator,
-    SessionV1StoragePreflightOutcome, SessionV1StoreError, SessionV1TurnEventWindow,
-    create_embedded_task_session_v1, create_indexed_recovery_session_v1, create_indexed_session_v1,
-    delete_session_v1, ensure_session_v1_storage_schema, flush_session_v1_candidate,
-    list_active_sessions_v1, list_archived_sessions_v1, load_session_v1_for_runtime,
-    load_session_v1_full, load_session_v1_tail, locate_embedded_task_session_v1,
-    locate_optional_session_v1_storage, locate_session_v1_storage, preflight_session_v1_storage,
-    project_resource_directory_v1, project_session_lifecycle_v1, publish_edit_session_v1,
-    resume_recovery_session_index_v1, session_v1_format_is_unsupported, set_session_assistant_v1,
-    set_session_unread_v1,
+    DeleteSessionV1Outcome, LoadedSessionV1, PreparedRecoverySessionIndexV1,
+    SESSION_V1_STORAGE_PARTITION, SessionIndexV1ConflictField, SessionIndexV1Error,
+    SessionV1CollaborationRecoverySnapshot, SessionV1EventRange, SessionV1EventWindowState,
+    SessionV1FlushResult, SessionV1ListEntry, SessionV1LoadReport, SessionV1StorageError,
+    SessionV1StorageErrorCode, SessionV1StorageLocator, SessionV1StoragePreflightOutcome,
+    SessionV1StoreError, SessionV1TurnEventWindow, create_embedded_task_session_v1,
+    create_indexed_recovery_session_v1, create_indexed_session_v1, delete_session_v1,
+    ensure_session_v1_storage_schema, flush_session_v1_candidate, list_active_sessions_v1,
+    list_archived_sessions_v1, load_session_v1_for_runtime, load_session_v1_full,
+    load_session_v1_tail, locate_embedded_task_session_v1, locate_optional_session_v1_storage,
+    locate_session_v1_storage, preflight_session_v1_storage,
+    prepare_recovery_session_index_retry_v1, project_resource_directory_v1,
+    project_session_lifecycle_v1, publish_edit_session_v1, session_v1_format_is_unsupported,
+    set_session_assistant_v1, set_session_unread_v1,
 };
 pub use session_vmm_v1::{load_session_vmm_state, persist_session_vmm_state};
 

@@ -315,6 +315,45 @@ pub(super) fn begin_project_lifecycle_transition(
     begin_lifecycle_transition(state, session_ids, [project_id.to_string()], action_label)
 }
 
+/// Reserves the exact owning project until recovery finishes publishing its session index.
+/// 预留精确所属项目，直至恢复操作完成会话索引发布。
+/// `state` owns project admission and `project_id` comes from the recovery draft or verified pending row.
+/// `state` 持有项目准入，`project_id` 来自恢复草稿或已校验的待发布索引行。
+/// Returns an owned guard or the conflicting admission error.
+/// 返回持有预留的守卫或准入冲突错误。
+pub(super) fn begin_project_recovery_publication(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+) -> Result<SessionTurnAdmissionGuard, String> {
+    // Use the same exact project scope as archive and removal.
+    // 使用归档和移除共用的精确项目作用域。
+    let project_scopes = BTreeSet::from([ProjectAdmissionScope::Exact(project_id.to_owned())]);
+    // The owner identity prevents stale cleanup from releasing a later reservation.
+    // 所有者标识防止过期清理释放后续预留。
+    let reservation_id = Uuid::new_v4();
+    {
+        // Keep the conflict check and insertion in one lock scope.
+        // 在同一加锁范围内检查冲突和写入预留。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        check_project_admission_conflicts(&guard, &project_scopes, "publish a recovery session")?;
+        guard.project_admission_reservations.insert(
+            ProjectAdmissionScope::Exact(project_id.to_owned()),
+            ProjectAdmissionReservation {
+                reservation_id,
+                kind: ProjectAdmissionReservationKind::RecoveryPublication,
+            },
+        );
+    }
+    Ok(SessionTurnAdmissionGuard {
+        state: state.clone(),
+        reservation_id,
+        session_ids: BTreeSet::new(),
+        project_scopes,
+    })
+}
+
 /// Atomically reserves exact session and project identities for one lifecycle transaction.
 /// 为一次生命周期事务原子预留精确会话与项目标识。
 ///
@@ -399,28 +438,7 @@ fn begin_lifecycle_transition(
             ));
         }
     }
-    if let Some(reservation) = guard
-        .project_admission_reservations
-        .get(&ProjectAdmissionScope::UnresolvedSubmission)
-    {
-        return Err(format!(
-            "Project selection is reserved by {}; cannot {action_label} project lifecycle state",
-            reservation.kind.diagnostic_label()
-        ));
-    }
-    for project_scope in &reserved_project_scopes {
-        if let Some(reservation) = guard.project_admission_reservations.get(project_scope) {
-            // project_id is extracted only from exact lifecycle scopes constructed above.
-            // project_id 仅从上方构造的精确生命周期作用域中提取。
-            let ProjectAdmissionScope::Exact(project_id) = project_scope else {
-                unreachable!("lifecycle project scopes are always exact")
-            };
-            return Err(format!(
-                "Project `{project_id}` is reserved by {}; cannot {action_label}",
-                reservation.kind.diagnostic_label()
-            ));
-        }
-    }
+    check_project_admission_conflicts(&guard, &reserved_project_scopes, action_label)?;
     reserve_session_turn_admission(
         &mut guard,
         &reserved_session_ids,
@@ -451,6 +469,42 @@ fn begin_lifecycle_transition(
         session_ids: reserved_session_ids,
         project_scopes: reserved_project_scopes,
     })
+}
+
+/// Rejects exact project reservations that conflict with a project owner or unresolved submission.
+/// 精确项目预留与已有项目所有者或未解析的提交冲突时予以拒绝。
+/// `state` is locked by the caller, `project_scopes` contains exact targets, and `action_label` describes the attempted operation.
+/// 调用方持有 `state` 锁，`project_scopes` 包含精确目标，`action_label` 描述尝试执行的操作。
+/// Returns success when the project reservations can be inserted under the same lock.
+/// 可在同一锁下写入项目预留时返回成功。
+fn check_project_admission_conflicts(
+    state: &ServiceBridgeState,
+    project_scopes: &BTreeSet<ProjectAdmissionScope>,
+    action_label: &str,
+) -> Result<(), String> {
+    if let Some(reservation) = state
+        .project_admission_reservations
+        .get(&ProjectAdmissionScope::UnresolvedSubmission)
+    {
+        return Err(format!(
+            "Project selection is reserved by {}; cannot {action_label}",
+            reservation.kind.diagnostic_label()
+        ));
+    }
+    for project_scope in project_scopes {
+        if let Some(reservation) = state.project_admission_reservations.get(project_scope) {
+            // The callers construct these scopes from exact project IDs.
+            // 调用方从精确项目 ID 构造这些作用域。
+            let ProjectAdmissionScope::Exact(project_id) = project_scope else {
+                unreachable!("lifecycle project scopes are always exact")
+            };
+            return Err(format!(
+                "Project `{project_id}` is reserved by {}; cannot {action_label}",
+                reservation.kind.diagnostic_label()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Atomically validates and inserts one owned turn-admission reservation across exact sessions.

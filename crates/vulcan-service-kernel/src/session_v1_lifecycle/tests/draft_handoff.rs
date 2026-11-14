@@ -2,6 +2,10 @@
 //! 实际提示词注册把待完成草稿关联到最终私有回执。
 
 use super::*;
+use crate::{
+    create_service_bridge_state, project_conversation_services::begin_project_lifecycle_transition,
+    tests::test_support::test_service_shell_host,
+};
 use vulcan_workspace_store::{
     data_plane::prepare_application_schema_for_test,
     local_database_runtime::LogicalDatabase,
@@ -52,6 +56,9 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
     // 使用真实索引和第二个注册表验证冷加载。
     let fixture = LifecycleStorageFixture::start().await;
     prepare_recovery_project(&fixture).await;
+    // Use the same project admission on the original request and its retry.
+    // 首次请求和重试使用同一个项目准入。
+    let state = create_service_bridge_state(test_service_shell_host());
     let registry = SessionRuntimeRegistry::default();
     let selection = vulcan_provider_adapters::ActiveAiModelSelection {
         provider_id: "deepseek".into(),
@@ -62,6 +69,7 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
     let now_ms = 1_787_788_800_000;
     let requested_session_id = SessionId::new_v4();
     let session_id = create_or_get_recovery_draft_session_v1(
+        &state,
         &fixture.controller,
         &registry,
         requested_session_id,
@@ -80,6 +88,7 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
     // Model a lost reply by repeating creation with a fresh registry and unavailable source input.
     // 用新注册表和不可用的来源输入重复创建，模拟响应丢失。
     let retry = create_or_get_recovery_draft_session_v1(
+        &state,
         &fixture.controller,
         &reload_registry,
         requested_session_id,
@@ -145,6 +154,7 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
 /// 撤销注入失败后返回原会话 ID 和模型选择。
 async fn publish_unindexed_recovery(
     fixture: &LifecycleStorageFixture,
+    state: &SharedServiceBridgeState,
 ) -> (SessionId, vulcan_provider_adapters::ActiveAiModelSelection) {
     let controller = &fixture.controller;
     // Fail the actual SQLite insert, after the store's atomic directory publication.
@@ -166,6 +176,7 @@ async fn publish_unindexed_recovery(
     };
     let first_registry = SessionRuntimeRegistry::default();
     let error = create_or_get_recovery_draft_session_v1(
+        state,
         controller,
         &first_registry,
         session_id,
@@ -205,8 +216,11 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
 
     let fixture = LifecycleStorageFixture::start().await;
     prepare_recovery_project(&fixture).await;
+    // Use real Core admission while recreating the session registry for a cold retry.
+    // 冷重试重建会话注册表，同时使用真实的 Core 准入。
+    let state = create_service_bridge_state(test_service_shell_host());
     let controller = &fixture.controller;
-    let (session_id, selection) = publish_unindexed_recovery(&fixture).await;
+    let (session_id, selection) = publish_unindexed_recovery(&fixture, &state).await;
     // Model a draft left by a build that published its session tree before writing usage.
     // 模拟旧构建先发布会话目录树、尚未写入用量时留下的草稿。
     let project_directory = vulcan_workspace_store::workspace_store::project_resource_directory_v1(
@@ -226,6 +240,7 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
     // The source is deliberately unavailable on retry to prove the first tree is authoritative.
     // 重试时特意让来源不可用，以证明首次目录树是权威。
     let retry = create_or_get_recovery_draft_session_v1(
+        &state,
         controller,
         &reload_registry,
         session_id,
@@ -286,19 +301,56 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
     fixture.shutdown().await;
 }
 
-/// Verifies project removal cancels index publication without writing a locator or list state.
-/// 验证项目移除会拒绝索引发布，不写定位记录或列表状态。
+/// Verifies recovery cannot publish between the final archive check and project deletion, or after deletion.
+/// 验证恢复无法在最后一次归档检查和项目删除之间或删除后发布。
 #[tokio::test]
-async fn reasoning_recovery_rejects_index_retry_after_project_removal() {
+async fn reasoning_recovery_rejects_index_retry_during_and_after_project_removal() {
     let fixture = LifecycleStorageFixture::start().await;
     prepare_recovery_project(&fixture).await;
+    // Share Core admission between the simulated removal and recovery requests.
+    // 模拟移除和恢复请求共用 Core 准入。
+    let state = create_service_bridge_state(test_service_shell_host());
     let controller = &fixture.controller;
-    let (session_id, _) = publish_unindexed_recovery(&fixture).await;
+    let (session_id, _) = publish_unindexed_recovery(&fixture, &state).await;
+    let registry = SessionRuntimeRegistry::default();
+    // Pause the production removal sequence after archiving, while its reservation is still held.
+    // 在生产移除流程完成归档后暂停，此时仍持有项目预留。
+    let removal = begin_project_lifecycle_transition(&state, RECOVERY_PROJECT_ID, [], "remove")
+        .expect("reserve the project for removal");
+    assert!(
+        archive_project_sessions_lifecycle_v1(
+            controller,
+            &registry,
+            RECOVERY_PROJECT_ID,
+            RECOVERY_CREATED_AT_MS + 1,
+        )
+        .await
+        .expect("complete the final archive check")
+        .is_empty()
+    );
+    // While the project row still exists, only project admission can reject the retry.
+    // 此时项目行仍然存在，只有项目准入能够拒绝补写。
+    let conflict = create_or_get_recovery_draft_session_v1(
+        &state,
+        controller,
+        &registry,
+        session_id,
+        std::future::ready(Err("The published draft must not be rebuilt.".into())),
+    )
+    .await
+    .expect_err("reject recovery after the archive check and before project deletion");
+    assert!(
+        conflict.contains(
+            crate::state::ProjectAdmissionReservationKind::LifecycleTransition.diagnostic_label()
+        ),
+        "{conflict}"
+    );
     delete_active_project_row_v1(controller, RECOVERY_PROJECT_ID)
         .await
         .unwrap();
-    let registry = SessionRuntimeRegistry::default();
+    drop(removal);
     let error = create_or_get_recovery_draft_session_v1(
+        &state,
         controller,
         &registry,
         session_id,

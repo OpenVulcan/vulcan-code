@@ -12,8 +12,8 @@ use uuid::Uuid;
 /// 版本化目录仅存放待发布的恢复索引行，按操作 UUID 寻址。
 const RECOVERY_INDEX_DIRECTORY: &str = ".recovery-index-v1";
 
-/// Creates the recovery tree and its index under the caller's per-session lifecycle guard.
-/// 在调用方持有的会话生命周期守卫下创建恢复目录树和索引。
+/// Creates the recovery tree and its index while the caller holds session and project admission.
+/// 在调用方持有会话及项目准入期间创建恢复目录树和索引。
 /// The host owns persistence; the request contains the draft and locator, and session_id binds the operation.
 /// 宿主持有持久化状态；请求包含草稿和定位信息，session_id 绑定该操作。
 /// Returns the indexed session, or leaves the prepared row available when publication fails.
@@ -39,20 +39,53 @@ pub async fn create_indexed_recovery_session_v1(
     Ok(created)
 }
 
-/// Finishes a previously prepared recovery index using the first published tree.
-/// 使用首次发布的目录树完成先前准备的恢复索引。
+/// The verified index and tree for a recovery operation that failed before SQLite publication.
+/// SQLite 发布失败后，恢复操作已校验的索引和目录树。
+pub struct PreparedRecoverySessionIndexV1 {
+    /// The exact index row from the operation's durable preparation.
+    /// 恢复操作待发布记录中的精确索引行。
+    row: SessionIndexV1Row,
+    /// Validated locator for the first published tree.
+    /// 首次发布目录树的已校验定位器。
+    locator: SessionV1StorageLocator,
+    /// The retry record to retire only after index commit.
+    /// 仅在索引提交后清除的重试记录。
+    pending_path: PathBuf,
+}
+
+impl PreparedRecoverySessionIndexV1 {
+    /// Returns the exact owning project ID for the caller's publication admission.
+    /// 返回精确所属项目标识，供调用方取得发布准入。
+    pub fn project_id(&self) -> &str {
+        &self.row.project_id
+    }
+
+    /// Publishes the verified row to the same host while the caller holds session and project admission.
+    /// 在调用方持有会话及项目准入期间，将已校验的索引行发布到同一个宿主。
+    /// Returns success once usage and index are durable, or leaves the preparation available for retry.
+    /// 用量和索引可靠落盘后返回成功，失败则保留待发布记录以供重试。
+    pub async fn publish(
+        self,
+        host_runtime: &HostRuntimeHandle,
+    ) -> Result<(), SessionV1StoreError> {
+        publish_recovery_index(host_runtime, &self.row, &self.locator, &self.pending_path).await
+    }
+}
+
+/// Reads a previously prepared recovery index and verifies the first published tree.
+/// 读取待发布的恢复索引并校验首次发布的目录树。
 /// The host owns the database and files; session_id is derived from the complete recovery operation.
 /// 宿主持有数据库与文件；session_id 从完整恢复操作派生。
-/// Returns true only when the original tree has been validated and its index inserted.
-/// 仅在原目录树通过校验且索引已插入时返回 true。
-pub async fn resume_recovery_session_index_v1(
+/// Returns the verified preparation, or None when no tree was published.
+/// 返回已校验的待发布记录，未发布目录树时返回 None。
+pub fn prepare_recovery_session_index_retry_v1(
     host_runtime: &HostRuntimeHandle,
     session_id: Uuid,
-) -> Result<bool, SessionV1StoreError> {
+) -> Result<Option<PreparedRecoverySessionIndexV1>, SessionV1StoreError> {
     let pending_path = recovery_index_path(host_runtime, session_id);
     let bytes = match fs::read(&pending_path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(SessionV1StorageError::io(&pending_path, error.to_string()).into());
         }
@@ -71,7 +104,7 @@ pub async fn resume_recovery_session_index_v1(
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
         // No complete tree was published. The caller may still prepare the first draft.
         // 完整目录树尚未发布，调用方仍可准备首次草稿。
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Ok(_) => {
             return Err(SessionV1StorageError::io(
                 &session_directory,
@@ -110,8 +143,11 @@ pub async fn resume_recovery_session_index_v1(
         )
         .into());
     }
-    publish_recovery_index(host_runtime, &row, &locator, &pending_path).await?;
-    Ok(true)
+    Ok(Some(PreparedRecoverySessionIndexV1 {
+        row,
+        locator,
+        pending_path,
+    }))
 }
 
 /// Completes usage and index publication for the verified initial recovery tree.

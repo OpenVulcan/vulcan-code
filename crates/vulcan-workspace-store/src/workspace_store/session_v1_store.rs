@@ -52,7 +52,10 @@ mod index_probe;
 mod lifecycle_tree;
 mod recovery_creation;
 pub(super) use index_probe::inspect as inspect_workspace_session_rows;
-pub use recovery_creation::{create_indexed_recovery_session_v1, resume_recovery_session_index_v1};
+pub use recovery_creation::{
+    PreparedRecoverySessionIndexV1, create_indexed_recovery_session_v1,
+    prepare_recovery_session_index_retry_v1,
+};
 
 /// Fixed parent-owned directory containing every embedded task-session V1 tree.
 /// 保存全部内嵌任务会话 V1 目录树的固定父级目录。

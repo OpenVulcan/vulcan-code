@@ -547,46 +547,55 @@ pub(crate) async fn service_create_reasoning_recovery_session(
             std::sync::Arc::clone(&guard.session_runtime_registry),
         )
     };
-    // Keep target validation and initial publication atomic with respect to AI configuration changes.
-    // 将目标校验和首次发布与 AI 配置变更串行化。
-    let transaction = begin_public_ai_configuration_transaction().await;
-    let session_id = crate::session_v1_lifecycle::create_or_get_recovery_draft_session_v1(
-        &controller,
-        &registry,
-        session_id,
-        async {
-            // Retrying after publication needs neither the original history nor a still-enabled target.
-            // 发布后的重试无需重新读取来源历史或要求目标仍然启用。
-            let source = crate::session_goal_lifecycle::session_v1_handle_from_state(
-                &state,
-                request.conversation_id,
-            )
-            .await?;
-            let draft = tokio::task::spawn_blocking(move || recovery_conversation_text(&source))
-                .await
-                .map_err(|error| error.to_string())??;
-            let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
-            let route = runtime.resolve_connection_model_selection(
-                &configuration,
-                &request.connection_id,
-                &request.provider_id,
-                &request.model_id,
-            )?;
-            Ok(crate::session_v1_lifecycle::RecoveryDraftSessionV1 {
-                project_id: draft.project_id,
-                title: draft.title,
-                text: draft.text,
-                selection: ActiveAiModelSelection {
-                    provider_id: route.route.provider.id.clone(),
-                    model_id: route.model.id,
-                    connection_id: route.route.connection.id.clone(),
-                },
-                now_ms: crate::session_goal_lifecycle::current_v1_goal_unix_millis()?,
-            })
-        },
-    )
-    .await?;
-    drop(transaction);
+    // The publication task keeps project admission until SQLite finishes even if the client disconnects.
+    // 即使客户端断开，发布任务也会持有项目准入直至 SQLite 执行完成。
+    let publication_state = state.clone();
+    tokio::spawn(async move {
+        // Keep target validation and publication atomic with respect to AI configuration changes.
+        // 将目标校验和发布与 AI 配置变更串行化。
+        let _transaction = begin_public_ai_configuration_transaction().await;
+        crate::session_v1_lifecycle::create_or_get_recovery_draft_session_v1(
+            &publication_state,
+            &controller,
+            &registry,
+            session_id,
+            async {
+                // Retrying after publication needs neither the original history nor a still-enabled target.
+                // 发布后的重试无需重新读取来源历史或要求目标仍然启用。
+                let source = crate::session_goal_lifecycle::session_v1_handle_from_state(
+                    &publication_state,
+                    request.conversation_id,
+                )
+                .await?;
+                let draft =
+                    tokio::task::spawn_blocking(move || recovery_conversation_text(&source))
+                        .await
+                        .map_err(|error| error.to_string())??;
+                let (runtime, configuration) =
+                    public_ai_runtime_and_configuration(&publication_state)?;
+                let route = runtime.resolve_connection_model_selection(
+                    &configuration,
+                    &request.connection_id,
+                    &request.provider_id,
+                    &request.model_id,
+                )?;
+                Ok(crate::session_v1_lifecycle::RecoveryDraftSessionV1 {
+                    project_id: draft.project_id,
+                    title: draft.title,
+                    text: draft.text,
+                    selection: ActiveAiModelSelection {
+                        provider_id: route.route.provider.id.clone(),
+                        model_id: route.model.id,
+                        connection_id: route.route.connection.id.clone(),
+                    },
+                    now_ms: crate::session_goal_lifecycle::current_v1_goal_unix_millis()?,
+                })
+            },
+        )
+        .await
+    })
+    .await
+    .map_err(|error| format!("Recovery session publication task failed: {error}"))??;
     crate::workbench_refresh::refresh_workbench_snapshot_for_selected_session(state, session_id)
         .await?;
     Ok(session_id.to_string())
