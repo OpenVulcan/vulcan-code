@@ -14,12 +14,12 @@ use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use vulcan_agent_runtime::tooling::native::{
-    canonical_shell_job_session_id, shell_job_recent_lines,
+    canonical_shell_job_session_id, shell_job_recent_lines_with_redaction,
 };
 use vulcan_host_tools::shell_job::{
     SHELL_JOB_READ_DEFAULT_LINES, SHELL_JOB_READ_MAX_LINES, SHELL_JOBS_DIRECTORY,
     SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobEventKind, ShellJobLineRow, ShellJobLogReader,
-    ShellJobOrigin, ShellJobRowKind, ShellJobRuntime, ShellJobSummary,
+    ShellJobLogRedaction, ShellJobOrigin, ShellJobRowKind, ShellJobRuntime, ShellJobSummary,
 };
 use vulcan_service_api::{
     ClearSessionActivityRequest, SessionActivityRequest, SessionActivityScope,
@@ -39,7 +39,7 @@ const SHELL_JOB_ACTIVITY_RECENT_LINES: usize = 3;
 
 /// Byte budget of one output page read by the activity panel.
 /// 活动面板读取的一页输出的字节预算。
-const SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES: usize = 4 * SHELL_OUTPUT_TAIL_BUDGET_BYTES;
+pub(crate) const SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES: usize = 4 * SHELL_OUTPUT_TAIL_BUDGET_BYTES;
 
 /// Latest tool calls shown for each subagent.
 /// 每个子代理显示的最近工具调用数。
@@ -95,8 +95,27 @@ impl ShellJobSessionContext {
     fn redact(&self, text: &str) -> Result<String, String> {
         match &self.task_runtime {
             Some(task_runtime) => task_runtime.redact_sensitive_text(text),
-            None => Ok(text.to_string()),
+            None => Err(String::from("Shell job output redaction is not ready.")),
         }
+    }
+
+    /// Loads the owning environment before projecting persisted job text.
+    /// 在投影持久化任务文本前，加载任务归属会话的环境。
+    async fn prepare_redaction(
+        &self,
+        state: &SharedServiceBridgeState,
+    ) -> Result<ShellJobLogRedaction, String> {
+        let task_runtime = self
+            .task_runtime
+            .as_deref()
+            .ok_or_else(|| String::from("Shell job output redaction is not ready."))?;
+        crate::environment_variables::register_activity_environment_secrets(
+            state,
+            &self.owner,
+            task_runtime,
+        )
+        .await?;
+        task_runtime.shell_job_log_redaction()
     }
 }
 
@@ -146,6 +165,7 @@ pub(crate) async fn service_list_shell_jobs(
     request: ShellJobListRequest,
 ) -> Result<ShellJobList, String> {
     let context = shell_job_session_context(&state, &request.session_id).await?;
+    let redaction = context.prepare_redaction(&state).await?;
     let marks = load_session_activity_marks(&context.host_runtime, &context.owner).await?;
     let runtime = ShellJobRuntime::global();
     let summaries = runtime
@@ -175,10 +195,12 @@ pub(crate) async fn service_list_shell_jobs(
     let mut jobs = Vec::with_capacity(running.len() + finished.len());
     for summary in running {
         let recent_lines = match runtime.job(&context.owner, &summary.job_id) {
-            Some(job) => shell_job_recent_lines(&job, SHELL_JOB_ACTIVITY_RECENT_LINES)
-                .iter()
-                .map(|line| context.redact(line))
-                .collect::<Result<Vec<_>, _>>()?,
+            Some(job) => shell_job_recent_lines_with_redaction(
+                &job,
+                SHELL_JOB_ACTIVITY_RECENT_LINES,
+                &redaction,
+            )
+            .map_err(|error| format!("Failed to read the shell job output: {error}"))?,
             None => Vec::new(),
         };
         jobs.push(shell_job_view(&context, summary, recent_lines, false)?);
@@ -274,6 +296,7 @@ pub(crate) async fn service_read_shell_job_output(
     request: ShellJobOutputRequest,
 ) -> Result<ShellJobOutputPage, String> {
     let context = shell_job_session_context(&state, &request.session_id).await?;
+    let redaction = context.prepare_redaction(&state).await?;
     let runtime = ShellJobRuntime::global();
     let reader = runtime
         .open_log(&context.owner, &context.jobs_dir, &request.job_id)
@@ -299,22 +322,23 @@ pub(crate) async fn service_read_shell_job_output(
             ));
         }
         (Some(before_line), None) => (
-            read_rows_before(&reader, before_line, max_lines)?,
+            read_rows_before(&reader, before_line, max_lines, &redaction)?,
             Some(before_line).filter(|line| *line <= total_lines),
         ),
         (None, Some(from_line)) => {
             let range = reader
-                .read_lines(
+                .read_lines_with_redaction(
                     from_line.max(1),
                     max_lines,
                     SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES,
+                    &redaction,
                 )
                 .map_err(|error| format!("Failed to read the shell job output: {error}"))?;
             (range.rows, range.next_line)
         }
         (None, None) => (
             reader
-                .tail_rows(max_lines, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES)
+                .tail_rows_with_redaction(max_lines, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES, &redaction)
                 .map_err(|error| format!("Failed to read the shell job output: {error}"))?,
             None,
         ),
@@ -325,8 +349,8 @@ pub(crate) async fn service_read_shell_job_output(
     let rows = rows
         .into_iter()
         .filter(|row| row.kind != ShellJobRowKind::Separator)
-        .map(|row| shell_job_output_row(&context, row))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(shell_job_output_row)
+        .collect();
     Ok(ShellJobOutputPage {
         job_id: request.job_id,
         rows,
@@ -347,6 +371,7 @@ fn read_rows_before(
     reader: &ShellJobLogReader,
     before_line: u64,
     max_lines: usize,
+    redaction: &ShellJobLogRedaction,
 ) -> Result<Vec<ShellJobLineRow>, String> {
     if before_line <= 1 {
         return Ok(Vec::new());
@@ -355,7 +380,7 @@ fn read_rows_before(
     loop {
         let wanted = usize::try_from(before_line - first).unwrap_or(max_lines);
         let range = reader
-            .read_lines(first, wanted, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES)
+            .read_lines_with_redaction(first, wanted, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES, redaction)
             .map_err(|error| format!("Failed to read the shell job output: {error}"))?;
         let reached = range.next_line.is_none_or(|next| next >= before_line);
         if reached || first + 1 >= before_line {
@@ -365,21 +390,18 @@ fn read_rows_before(
     }
 }
 
-/// Converts one display row for the client, redacting its text.
-/// 为客户端转换一个显示行，并遮蔽其文本。
-fn shell_job_output_row(
-    context: &ShellJobSessionContext,
-    row: ShellJobLineRow,
-) -> Result<ShellJobOutputRow, String> {
-    Ok(ShellJobOutputRow {
+/// Projects one already filtered display row for the client.
+/// 将已过滤的显示行投影给客户端。
+fn shell_job_output_row(row: ShellJobLineRow) -> ShellJobOutputRow {
+    ShellJobOutputRow {
         line: row.line,
         kind: match row.kind {
             ShellJobRowKind::Gap => String::from("gap"),
             _ => String::from("text"),
         },
         continuation: row.continuation,
-        text: context.redact(&row.text)?,
-    })
+        text: row.text,
+    }
 }
 
 /// Stops one running job of a session.

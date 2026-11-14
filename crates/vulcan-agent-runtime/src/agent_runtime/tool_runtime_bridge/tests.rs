@@ -70,6 +70,427 @@ fn host_credential_is_redacted_from_tool_model_and_host_results() {
     );
 }
 
+/// Supplies a synthetic historical secret through the same host port as production.
+/// 通过与生产相同的宿主端口提供合成历史密钥。
+#[derive(Debug)]
+struct HistoryRedactionHost;
+
+#[async_trait]
+impl crate::tooling::native::NativeEnvironmentHost for HistoryRedactionHost {
+    async fn effective_environment(
+        &self,
+        _session_id: Uuid,
+    ) -> Result<Vec<crate::tooling::native::EffectiveEnvironmentVariable>, String> {
+        panic!("history must use its own secret scope")
+    }
+
+    async fn historical_job_secrets(
+        &self,
+        _session_id: Uuid,
+    ) -> Result<Vec<(String, String)>, String> {
+        Ok(vec![
+            ("FIXTURE".into(), "fixture-head-fixture-tail".into()),
+            (
+                "TAIL".into(),
+                format!("tail-head{}", "fixture-tail-fragment".repeat(128)),
+            ),
+            (
+                "MULTILINE".into(),
+                "synthetic-first-fragment\r\nsynthetic-second-fragment".into(),
+            ),
+        ])
+    }
+
+    async fn set_session_variable(
+        &self,
+        _session_id: Uuid,
+        _name: String,
+        _value: Option<String>,
+        _description: String,
+    ) -> Result<(), String> {
+        panic!("history must not write environment variables")
+    }
+
+    async fn request_values(
+        &self,
+        _session_id: Uuid,
+        _context: vulcan_tools_manager::VulcanToolInvocationContext,
+        _tool_name: String,
+        _arguments: serde_json::Value,
+        _prompt: crate::tooling::native::EnvironmentValuesPrompt,
+    ) -> Result<crate::tooling::native::EnvironmentValuesAnswer, String> {
+        panic!("history must not request environment variables")
+    }
+}
+
+/// Executes shell_job through the tool bridge and checks the exact filtered model result.
+/// 通过工具桥执行 shell_job，并检查精确的脱敏模型结果。
+#[tokio::test]
+async fn shell_job_filters_log_before_numbering_final_model_result() {
+    use vulcan_host_tools::shell_job::{
+        SHELL_OUTPUT_LINE_WRAP_BYTES, ShellJobRuntime, ShellJobSpawn, ShellJobStatus,
+    };
+
+    // Keep the entire job and its log in an isolated runtime.
+    // 将完整任务及其日志限定在隔离运行时内。
+    let session_id = Uuid::new_v4();
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(ShellJobRuntime::new());
+    let prefix = "x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES - "fixture-head".len());
+    let line = format!(
+        "{prefix}fixture-head-fixture-tail\nleft synthetic-first-fragment\r\nsynthetic-second-fragment right\n"
+    );
+    std::fs::write(directory.path().join("fixture.log"), line).unwrap();
+    #[cfg(windows)]
+    let mut child = {
+        let mut command = tokio::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", "type fixture.log"]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut child = {
+        let mut command = tokio::process::Command::new("cat");
+        command.arg("fixture.log");
+        command
+    };
+    child.current_dir(directory.path());
+    let job = runtime
+        .spawn(
+            ShellJobSpawn {
+                owner_session_id: session_id.to_string(),
+                origin: None,
+                command: "fixture".into(),
+                purpose: "fixture".into(),
+                shell_label: "fixture".into(),
+                cwd: directory.path().to_owned(),
+                jobs_dir: directory.path().join("jobs"),
+                stdin: None,
+                background: false,
+                timeout: Some(std::time::Duration::from_secs(10)),
+                capture_streams: false,
+            },
+            child,
+        )
+        .unwrap();
+    assert_eq!(job.wait().await.status, ShellJobStatus::Completed);
+
+    // The candidate supplies test storage while reusing the native action and the production tool bridge.
+    // 候选工具提供测试存储，并复用原生动作与生产工具桥。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let bridge = shell_job_model_bridge(session_id, runtime, &task_runtime);
+    for (index, (arguments, expected_line)) in [
+        (
+            json!({"action": "read", "job_id": job.id()}),
+            "3|[redacted:MULTILINE] right",
+        ),
+        (
+            json!({"action": "read", "job_id": job.id(), "start_line": 1}),
+            "2|left [redacted:MULTILINE]",
+        ),
+        (
+            json!({"action": "search", "job_id": job.id(), "pattern": "xxx"}),
+            "2|left [redacted:MULTILINE]",
+        ),
+        (
+            json!({"action": "read", "job_id": job.id(), "start_line": 3, "max_lines": 1}),
+            "3|[redacted:MULTILINE] right",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = ToolInvocationRequest {
+            request_stream_id: format!("job-history-stream-{index}"),
+            tool_call_id: format!("job-history-call-{index}"),
+            tool_name: "shell_job".into(),
+            arguments,
+            argument_parse_error: None,
+            raw_arguments: Default::default(),
+            user_request: Default::default(),
+        };
+        install_test_invocation_identity(
+            &bridge,
+            &request,
+            101,
+            102 + index as u64,
+            105 + index as u64,
+        );
+        let result = bridge.execute_tool(&request).await.unwrap();
+        assert!(!result.is_error);
+        assert!(!result.model_output.contains("fixture-head"));
+        assert!(!result.model_output.contains("fixture-tail"));
+        assert!(!result.model_output.contains("synthetic-first-fragment"));
+        assert!(!result.model_output.contains("synthetic-second-fragment"));
+        assert!(
+            result
+                .model_output
+                .lines()
+                .any(|line| line == expected_line)
+        );
+        // Remove display numbering before checking the full replacement across wrapped rows.
+        // 去掉显示行号后，检查跨折行保留的完整替换文本。
+        let output: String = result
+            .model_output
+            .lines()
+            .filter_map(|line| line.split_once('|'))
+            .filter(|(marker, _)| marker.starts_with('1'))
+            .map(|(_, text)| text)
+            .collect();
+        if request
+            .arguments
+            .get("start_line")
+            .and_then(serde_json::Value::as_u64)
+            != Some(3)
+        {
+            assert_eq!(output.trim(), format!("{prefix}[redacted:FIXTURE]"));
+        }
+    }
+}
+
+/// Redacts a value whose beginning falls just outside the model's raw tail window.
+/// 密钥起点刚好落在模型原始尾部窗口之外时，仍遮蔽该值。
+#[tokio::test]
+async fn shell_job_redacts_tail_byte_boundary_in_final_model_result() {
+    use vulcan_host_tools::shell_job::{
+        SHELL_OUTPUT_LINE_WRAP_BYTES, SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobRuntime,
+        ShellJobSpawn, ShellJobStatus,
+    };
+
+    let session_id = Uuid::new_v4();
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(ShellJobRuntime::new());
+    // The synthetic fragment spans several display rows, including rows that survive the tail budget.
+    // 合成片段横跨多个显示行，包括尾部预算内保留下来的行。
+    let suffix = "fixture-tail-fragment".repeat(128);
+    let marker = "[redacted:TAIL]";
+    let filler = "x".repeat(SHELL_OUTPUT_TAIL_BUDGET_BYTES - suffix.len());
+    let line = format!("tail-head{suffix}{filler}");
+    std::fs::write(directory.path().join("fixture.log"), line).unwrap();
+    #[cfg(windows)]
+    let mut process = {
+        let mut command = tokio::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", "type fixture.log"]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut process = {
+        let mut command = tokio::process::Command::new("cat");
+        command.arg("fixture.log");
+        command
+    };
+    process.current_dir(directory.path());
+    let job = runtime
+        .spawn(
+            ShellJobSpawn {
+                owner_session_id: session_id.to_string(),
+                origin: None,
+                command: "fixture".into(),
+                purpose: "fixture".into(),
+                shell_label: "fixture".into(),
+                cwd: directory.path().to_owned(),
+                jobs_dir: directory.path().join("jobs"),
+                stdin: None,
+                background: false,
+                timeout: Some(std::time::Duration::from_secs(10)),
+                capture_streams: false,
+            },
+            process,
+        )
+        .unwrap();
+    assert_eq!(job.wait().await.status, ShellJobStatus::Completed);
+
+    // The same bounded projection is exercised directly and through the model formatter.
+    // 直接验证有界投影，并通过模型格式化链路验证同一路径。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let bridge = shell_job_model_bridge(session_id, runtime, &task_runtime);
+    let request = ToolInvocationRequest {
+        request_stream_id: "job-byte-boundary-stream".into(),
+        tool_call_id: "job-byte-boundary-call".into(),
+        tool_name: "shell_job".into(),
+        arguments: json!({"action": "read", "job_id": job.id()}),
+        argument_parse_error: None,
+        raw_arguments: Default::default(),
+        user_request: Default::default(),
+    };
+    install_test_invocation_identity(&bridge, &request, 101, 102, 105);
+    let result = bridge.execute_tool(&request).await.unwrap();
+    assert!(!result.is_error);
+    assert!(!result.model_output.contains("tail-head"));
+    assert!(!result.model_output.contains("fixture-tail-fragment"));
+    assert!(result.model_output.contains(marker));
+    assert!(
+        result
+            .model_output
+            .contains(&"x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES))
+    );
+
+    // A page that reaches a full match still shows its label.
+    // 分页读取完整匹配时仍显示其遮蔽标签。
+    let range = job
+        .log_reader()
+        .unwrap()
+        .read_lines_with_redaction(
+            1,
+            1,
+            usize::MAX,
+            &task_runtime.shell_job_log_redaction().unwrap(),
+        )
+        .unwrap();
+    assert!(range.rows.iter().any(|row| row.text.contains(marker)));
+}
+
+/// Returns the same model-facing terminal receipt after a stop, a retry, and a cold reload.
+/// 注册表不可用时，首次停止、重试和冷启动均向模型返回相同终态回执。
+#[tokio::test]
+async fn shell_job_stop_receipt_survives_poisoned_registry_and_disk_recovery() {
+    use vulcan_host_tools::shell_job::{ShellJobRuntime, ShellJobSpawn, ShellJobStatus};
+
+    let session_id = Uuid::new_v4();
+    let directory = tempfile::tempdir().unwrap();
+    let jobs_dir = directory.path().join("jobs");
+    let runtime = Arc::new(ShellJobRuntime::new());
+    #[cfg(windows)]
+    let mut process = {
+        let mut command = tokio::process::Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut process = {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("30");
+        command
+    };
+    process.current_dir(directory.path());
+    let job = runtime
+        .spawn(
+            ShellJobSpawn {
+                owner_session_id: session_id.to_string(),
+                origin: None,
+                command: "synthetic-command".into(),
+                purpose: "synthetic-purpose".into(),
+                shell_label: "fixture".into(),
+                cwd: directory.path().to_owned(),
+                jobs_dir: jobs_dir.clone(),
+                stdin: None,
+                background: true,
+                timeout: Some(std::time::Duration::from_secs(30)),
+                capture_streams: false,
+            },
+            process,
+        )
+        .unwrap();
+
+    // Both the history host and final bridge share the same poisoned registry.
+    // 历史宿主与最终工具桥共享同一个损坏的注册表。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let registry = task_runtime.sensitive_tool_output_values();
+    let poisoned = std::panic::catch_unwind(|| {
+        let _guard = registry.write().unwrap();
+        panic!("poison the isolated redaction registry");
+    });
+    assert!(poisoned.is_err());
+    let live_bridge = shell_job_model_bridge(session_id, runtime, &task_runtime);
+
+    // A new runtime has no resident job and must read the terminal record from disk.
+    // 新运行时没有驻留任务，必须从磁盘读取终态记录。
+    let recovered = Arc::new(ShellJobRuntime::new());
+    assert!(recovered.job(&session_id.to_string(), job.id()).is_none());
+    recovered.set_directory_resolver(Arc::new(move |owner| {
+        (owner == session_id.to_string()).then(|| jobs_dir.clone())
+    }));
+    let recovered_bridge = shell_job_model_bridge(session_id, recovered, &task_runtime);
+
+    let mut first_model_output = None;
+    for (index, bridge) in [&live_bridge, &live_bridge, &recovered_bridge]
+        .into_iter()
+        .enumerate()
+    {
+        let request = ToolInvocationRequest {
+            request_stream_id: format!("job-stop-stream-{index}"),
+            tool_call_id: format!("job-stop-call-{index}"),
+            tool_name: "shell_job".into(),
+            arguments: json!({"action": "stop", "job_id": job.id()}),
+            argument_parse_error: None,
+            raw_arguments: Default::default(),
+            user_request: Default::default(),
+        };
+        install_test_invocation_identity(
+            bridge,
+            &request,
+            101,
+            102 + index as u64,
+            105 + index as u64,
+        );
+        let result = bridge.execute_tool(&request).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(
+            result.host_result.unwrap(),
+            json!({
+                "kind": "shell_job",
+                "payload": {"action": "stop", "job_id": job.id(), "running": false, "status": "stopped"},
+            })
+        );
+        assert!(
+            result
+                .model_output
+                .contains(ShellJobStatus::Stopped.as_str())
+        );
+        assert!(!result.model_output.contains("synthetic-command"));
+        assert!(!result.model_output.contains("synthetic-purpose"));
+        let expected = first_model_output.get_or_insert_with(|| result.model_output.clone());
+        assert_eq!(&result.model_output, expected);
+    }
+    assert_eq!(job.outcome().unwrap().status, ShellJobStatus::Stopped);
+}
+
+/// Wires a native shell job candidate to the model-facing bridge with isolated runtime storage.
+/// 将原生 shell 任务候选工具接到面向模型的桥，并使用隔离的运行时存储。
+fn shell_job_model_bridge(
+    session_id: Uuid,
+    runtime: Arc<vulcan_host_tools::shell_job::ShellJobRuntime>,
+    task_runtime: &Arc<TaskRuntime>,
+) -> VulcanManagedToolRuntimeBridge {
+    use crate::tooling::native::{NativeEnvironmentAccess, shell_job, tests::test_native_request};
+
+    let environment =
+        NativeEnvironmentAccess::new(Arc::new(HistoryRedactionHost), Arc::downgrade(task_runtime));
+    let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor::new(
+            "shell_job",
+            "shell_job",
+            "Read fixture job",
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "test", "shell_job"),
+        ),
+        parameters_schema: json!({"type": "object"}),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
+        invoke: Arc::new(move |arguments, context| {
+            let runtime = Arc::clone(&runtime);
+            let environment = environment.clone();
+            Box::pin(async move {
+                let mut request = test_native_request(arguments);
+                request.session_id = Some(session_id);
+                request.invocation_context = Some(context);
+                request.environment = Some(environment);
+                shell_job::execute_shell_job_tool(request, &runtime)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+        }),
+    }]);
+    let definitions = manager.resolve_for_execution_mode("Build").definitions;
+    VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, session_id, "Build")
+        .with_sensitive_tool_output_values(task_runtime.sensitive_tool_output_values())
+}
+
 /// Installs one exact durable local identity before a bridge test dispatches the tool body.
 /// 在桥接测试分派工具主体前安装一条精确的持久化本地身份。
 fn install_test_invocation_identity(

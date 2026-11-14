@@ -234,8 +234,8 @@ fn pty_screen_frame_state_follows_a_cleared_screen() {
 
 /// Best-effort live snapshots should expose the latest shared state to synchronous WebUI callers without crossing ownership boundaries.
 /// 尽力而为的实时快照应在不跨越归属边界的前提下，把最新共享状态暴露给同步 WebUI 调用方。
-#[test]
-fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
+#[tokio::test]
+async fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
     let runtime = CommandSessionRuntime::new();
     let command_session_id = SessionId::from_u128(0xCA11);
     let owner_session_id = SessionId::from_u128(0x0A11);
@@ -273,7 +273,7 @@ fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
                 backend: CommandSessionBackend::Pty,
                 environment_fingerprint: String::new(),
                 control_sender,
-                shared_state,
+                shared_state: shared_state.clone(),
             }),
         );
 
@@ -289,6 +289,23 @@ fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
     assert_eq!(snapshot.stderr_bytes, 16);
     assert_eq!(snapshot.last_seq, 5);
     assert!(snapshot.pending_stdin_line);
+
+    // Keep the state locked until the send-path snapshot has actually yielded.
+    // 保持状态锁，直到发送路径的快照实际挂起。
+    let state = shared_state.mutable_state.lock().await;
+    let snapshot = runtime.snapshot_owned_session(owner_session_id, command_session_id);
+    tokio::pin!(snapshot);
+    assert!(
+        std::future::poll_fn(|context| {
+            std::task::Poll::Ready(
+                std::future::Future::poll(snapshot.as_mut(), context).is_pending(),
+            )
+        })
+        .await
+    );
+    drop(state);
+    assert_eq!(snapshot.await.unwrap().last_seq, 5);
+
     assert!(
         runtime
             .try_snapshot_owned_session(SessionId::from_u128(0x0A12), command_session_id)

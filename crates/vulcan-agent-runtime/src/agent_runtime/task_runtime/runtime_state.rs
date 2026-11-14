@@ -124,6 +124,22 @@ impl TaskRuntime {
             .collect())
     }
 
+    /// Freezes the exact replacements for one raw shell job log projection.
+    /// 为一次原始 shell 任务日志投影固定精确替换表。
+    pub fn shell_job_log_redaction(
+        &self,
+    ) -> Result<vulcan_host_tools::shell_job::ShellJobLogRedaction, String> {
+        let values = self
+            .sensitive_tool_output_values
+            .read()
+            .map_err(|_| String::from("Sensitive tool-output registry is unavailable."))?;
+        Ok(vulcan_host_tools::shell_job::ShellJobLogRedaction::new(
+            values
+                .iter()
+                .map(|entry| (entry.value.clone(), entry.replacement.clone())),
+        ))
+    }
+
     /// Shares the live redaction registry with the host tool bridge for this runtime generation.
     /// 与当前运行世代的宿主工具桥共享实时遮蔽注册表。
     pub(crate) fn sensitive_tool_output_values(&self) -> SensitiveToolOutputValues {

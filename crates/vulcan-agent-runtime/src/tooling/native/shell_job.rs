@@ -10,8 +10,8 @@ use super::*;
 use vulcan_host_tools::shell_job::{
     SHELL_JOB_READ_DEFAULT_LINES, SHELL_JOB_READ_MAX_LINES, SHELL_JOB_SEARCH_MAX_CONTEXT_LINES,
     SHELL_JOB_SEARCH_MAX_MATCHES, SHELL_JOB_WAIT_DEFAULT_MS, SHELL_JOB_WAIT_MAX_MS,
-    SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobLogReader, ShellJobRuntime, ShellJobSummary,
-    ShellJobWaitOutcome, render_numbered_rows, snapshot_process_tree,
+    SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobLogReader, ShellJobLogRedaction, ShellJobRuntime,
+    ShellJobSummary, ShellJobWaitOutcome, render_numbered_rows, snapshot_process_tree,
 };
 
 /// Stable identifier of the shell job tool.
@@ -45,7 +45,9 @@ pub(crate) fn build_shell_job_tool() -> Arc<NativeToolDefinition> {
         descriptor,
         shell_job_args_schema(),
         move |request: NativeToolExecutionRequest| {
-            Box::pin(async move { execute_shell_job_tool(request).await })
+            Box::pin(
+                async move { execute_shell_job_tool(request, ShellJobRuntime::global()).await },
+            )
         },
     )
 }
@@ -57,7 +59,7 @@ fn shell_job_tool_description() -> String {
         "Inspect and control the shell jobs of this session. Every `shell_command` call is a job; its output (stdout and stderr together, in arrival order) is kept in a rolling log, so long output can be read here even after the command returned only its end.\n\
 - `list`: running jobs first, then the {SHELL_JOB_LIST_FINISHED_LIMIT} most recent finished ones, each with its title.\n\
 - `status`: one job's state, run time, output size, time of the latest output and, while it runs, its live processes with CPU time; use it to tell a stuck command from a busy one.\n\
-- `read`: output rows with line numbers. Omit `start_line` for the end of the output; give it to page from that line. `N|` starts line N, `N+|` continues a long line split into rows.\n\
+- `read`: output rows with line numbers. Omit `start_line` for the end of the output; give it to page from that line. `N|` starts line N, `N+|` continues a long line split into rows. A capped line may end with [N more bytes not shown].\n\
 - `search`: regular-expression search over the whole log, with `context_lines` around each match (`N>|` marks matching rows).\n\
 - `wait`: wait up to `timeout_ms` (default {SHELL_JOB_WAIT_DEFAULT_MS}, at most {SHELL_JOB_WAIT_MAX_MS}) for a running job to finish; returns early when the user sends a message.\n\
 - `stop`: terminate a running job's process tree.\n\
@@ -150,18 +152,104 @@ struct ShellJobToolArgs {
     timeout_ms: Option<u64>,
 }
 
-/// Runs one `shell_job` call.
-/// 执行一次 `shell_job` 调用。
-async fn execute_shell_job_tool(
+/// Parses shell-job arguments and enforces the advertised bounds before touching any job.
+/// 解析 shell 任务参数，并在访问任务前执行已声明的参数边界。
+fn parse_shell_job_arguments(arguments: Value) -> Result<ShellJobToolArgs, NativeToolError> {
+    let args: ShellJobToolArgs = serde_json::from_value(arguments).map_err(|error| {
+        NativeToolError::new(format!("Failed to parse shell_job arguments: {error}"))
+    })?;
+    if args.start_line == Some(0) {
+        return Err(NativeToolError::new(
+            "The shell_job start_line must be at least 1.",
+        ));
+    }
+    if args
+        .max_lines
+        .is_some_and(|value| !(1..=SHELL_JOB_READ_MAX_LINES).contains(&value))
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job max_lines must be between 1 and {SHELL_JOB_READ_MAX_LINES}."
+        )));
+    }
+    if args
+        .max_matches
+        .is_some_and(|value| !(1..=SHELL_JOB_SEARCH_MAX_MATCHES).contains(&value))
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job max_matches must be between 1 and {SHELL_JOB_SEARCH_MAX_MATCHES}."
+        )));
+    }
+    if args
+        .context_lines
+        .is_some_and(|value| value > SHELL_JOB_SEARCH_MAX_CONTEXT_LINES)
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job context_lines must be at most {SHELL_JOB_SEARCH_MAX_CONTEXT_LINES}."
+        )));
+    }
+    if args
+        .timeout_ms
+        .is_some_and(|value| !(1..=SHELL_JOB_WAIT_MAX_MS).contains(&value))
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job timeout_ms must be between 1 and {SHELL_JOB_WAIT_MAX_MS}."
+        )));
+    }
+    Ok(args)
+}
+
+/// Prepares redaction before exposing a scoped job's stored text.
+/// 在返回有作用域任务的存储文本前准备脱敏。
+/// The identity comes from the invocation and the host registers the owning environment.
+/// 调用提供归属身份，宿主登记归属环境。
+async fn prepare_shell_job_redaction(
+    session_id: Option<SessionId>,
+    environment: Option<&NativeEnvironmentAccess>,
+) -> Result<ShellJobLogRedaction, NativeToolError> {
+    let Some(session_id) = session_id else {
+        return Ok(ShellJobLogRedaction::default());
+    };
+    let environment = environment
+        .ok_or_else(|| NativeToolError::new("Shell job output redaction is not ready."))?;
+    environment
+        .prepare_historical_job_redaction(session_id)
+        .await
+        .and_then(|runtime| runtime.shell_job_log_redaction())
+        .map_err(NativeToolError::new)
+}
+
+/// Runs one `shell_job` call against the runtime that owns the jobs.
+/// 在持有任务的运行时上处理一次 `shell_job` 调用。
+/// Returns the action result or a validation, storage, or redaction error.
+/// 返回动作结果，或参数校验、存储、脱敏错误。
+pub(crate) async fn execute_shell_job_tool(
     request: NativeToolExecutionRequest,
+    runtime: &ShellJobRuntime,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let owner = ShellCommandJobContext::of_request(&request)
         .owner_session_id()
         .to_string();
-    let args: ShellJobToolArgs = serde_json::from_value(request.arguments).map_err(|error| {
-        NativeToolError::new(format!("Failed to parse shell_job arguments: {error}"))
-    })?;
-    let runtime = ShellJobRuntime::global();
+    // Validate ownership before any operation, including a stop without log details.
+    // 执行任何操作前先校验归属，包括不附带日志详情的停止操作。
+    if request.invocation_context.is_some() && request.session_id.is_none()
+        || request
+            .session_id
+            .is_some_and(|session_id| session_id.to_string() != owner)
+    {
+        return Err(NativeToolError::new(
+            "Shell job requires a valid owning session identity.",
+        ));
+    }
+    let args = parse_shell_job_arguments(request.arguments)?;
+    let prepare_redaction =
+        || prepare_shell_job_redaction(request.session_id, request.environment.as_ref());
+    // Stop prepares its filter only after termination; all read actions prepare it up front.
+    // 停止操作结束进程后准备过滤器，所有读取操作提前准备。
+    let redaction = if args.action == "stop" {
+        ShellJobLogRedaction::default()
+    } else {
+        prepare_redaction().await?
+    };
     let jobs_dir = runtime.jobs_directory(&owner);
     let job_id = || {
         args.job_id
@@ -216,14 +304,11 @@ async fn execute_shell_job_tool(
         "read" => {
             let job_id = job_id()?;
             let reader = open_reader(runtime, &owner, &jobs_dir, job_id)?;
-            let max_lines = args
-                .max_lines
-                .unwrap_or(SHELL_JOB_READ_DEFAULT_LINES)
-                .clamp(1, SHELL_JOB_READ_MAX_LINES);
+            let max_lines = args.max_lines.unwrap_or(SHELL_JOB_READ_DEFAULT_LINES);
             let text = match args.start_line {
                 None => {
                     let tail = reader
-                        .tail(SHELL_OUTPUT_TAIL_BUDGET_BYTES)
+                        .tail_with_redaction(SHELL_OUTPUT_TAIL_BUDGET_BYTES, &redaction)
                         .map_err(io_error)?;
                     let mut rows = tail.rows;
                     let lines_of_rows =
@@ -246,7 +331,12 @@ async fn execute_shell_job_tool(
                 }
                 Some(start_line) => {
                     let range = reader
-                        .read_lines(start_line, max_lines, SHELL_OUTPUT_TAIL_BUDGET_BYTES)
+                        .read_lines_with_redaction(
+                            start_line,
+                            max_lines,
+                            SHELL_OUTPUT_TAIL_BUDGET_BYTES,
+                            &redaction,
+                        )
                         .map_err(io_error)?;
                     let mut text = format!(
                         "Job {job_id}: {} lines in total.\n{}",
@@ -278,15 +368,13 @@ async fn execute_shell_job_tool(
             })?;
             let reader = open_reader(runtime, &owner, &jobs_dir, job_id)?;
             let found = reader
-                .search(
+                .search_with_redaction(
                     &regex,
                     args.context_lines
-                        .unwrap_or(SHELL_JOB_SEARCH_DEFAULT_CONTEXT_LINES)
-                        .min(SHELL_JOB_SEARCH_MAX_CONTEXT_LINES),
-                    args.max_matches
-                        .unwrap_or(SHELL_JOB_SEARCH_MAX_MATCHES)
-                        .clamp(1, SHELL_JOB_SEARCH_MAX_MATCHES),
+                        .unwrap_or(SHELL_JOB_SEARCH_DEFAULT_CONTEXT_LINES),
+                    args.max_matches.unwrap_or(SHELL_JOB_SEARCH_MAX_MATCHES),
                     SHELL_OUTPUT_TAIL_BUDGET_BYTES,
+                    &redaction,
                 )
                 .map_err(io_error)?;
             let mut text = format!("Job {job_id}: {} matching lines.", found.match_count);
@@ -311,10 +399,7 @@ async fn execute_shell_job_tool(
                     json!({ "action": "wait", "job_id": job_id, "running": false, "purpose": summary.purpose }),
                 ));
             };
-            let budget = args
-                .timeout_ms
-                .unwrap_or(SHELL_JOB_WAIT_DEFAULT_MS)
-                .clamp(1, SHELL_JOB_WAIT_MAX_MS);
+            let budget = args.timeout_ms.unwrap_or(SHELL_JOB_WAIT_DEFAULT_MS);
             let mut interjection = runtime.subscribe_interjection(&owner);
             let waited = job
                 .wait_interruptible(Some(Duration::from_millis(budget)), &mut interjection)
@@ -335,7 +420,7 @@ async fn execute_shell_job_tool(
                 }
             };
             let mut text = format!("{note}\n{}", render_job_status(&job.summary()));
-            append_tail(&mut text, job.log_reader());
+            append_tail(&mut text, job.log_reader(), &redaction);
             (
                 text,
                 json!({
@@ -352,23 +437,41 @@ async fn execute_shell_job_tool(
                 .filter(|job| job.outcome().is_none())
             else {
                 let summary = find_summary(runtime, &owner, &jobs_dir, job_id)?;
+                if let Err(error) = prepare_redaction().await {
+                    return summary
+                        .outcome
+                        .as_ref()
+                        .map(|outcome| shell_job_stop_state(job_id, outcome.status))
+                        .ok_or(error);
+                }
+                let mut payload = json!({
+                    "action": "stop", "job_id": job_id, "running": false, "purpose": summary.purpose,
+                });
+                if let Some(outcome) = summary.outcome.as_ref() {
+                    payload["status"] = json!(outcome.status);
+                }
                 return Ok(shell_job_result(
                     format!("The job is not running.\n{}", render_job_status(&summary)),
-                    json!({ "action": "stop", "job_id": job_id, "running": false, "purpose": summary.purpose }),
+                    payload,
                 ));
             };
             job.request_stop("Stopped with shell_job.");
             let outcome = job.wait().await;
             runtime.discard_notice(&owner, job_id);
+            // Returning stop state is safe even when the stored text cannot be redacted.
+            // 即使存储文本无法脱敏，也可以安全返回停止状态。
+            let Ok(redaction) = prepare_redaction().await else {
+                return Ok(shell_job_stop_state(job_id, outcome.status));
+            };
             let mut text = format!(
                 "The job ended with status {}.\n{}",
                 outcome.status.as_str(),
                 render_job_status(&job.summary())
             );
-            append_tail(&mut text, job.log_reader());
+            append_tail(&mut text, job.log_reader(), &redaction);
             (
                 text,
-                json!({ "action": "stop", "job_id": job_id, "running": false }),
+                json!({ "action": "stop", "job_id": job_id, "running": false, "status": outcome.status }),
             )
         }
         other => {
@@ -386,6 +489,21 @@ async fn execute_shell_job_tool(
         payload["purpose"] = Value::String(summary.purpose);
     }
     Ok(shell_job_result(text, payload))
+}
+
+/// Reports a verified terminal state without stored command or output details.
+/// 返回已确认的终态，不附带存储的命令或输出详情。
+pub(crate) fn shell_job_stop_state(
+    job_id: &str,
+    status: vulcan_host_tools::shell_job::ShellJobStatus,
+) -> VulcanToolInvocationResult {
+    shell_job_result(
+        format!(
+            "The job ended with status {}. Job details are unavailable.",
+            status.as_str()
+        ),
+        json!({"action": "stop", "job_id": job_id, "running": false, "status": status.as_str()}),
+    )
 }
 
 /// Wraps text and a host payload into a tool result.
@@ -448,9 +566,16 @@ fn unknown_job(job_id: &str) -> NativeToolError {
 
 /// Appends the output tail of a job, when it has any.
 /// 追加任务的输出尾部（如有）。
-fn append_tail(text: &mut String, reader: Option<ShellJobLogReader>) {
-    let Some(tail) = reader.and_then(|reader| reader.tail(SHELL_OUTPUT_TAIL_BUDGET_BYTES).ok())
-    else {
+fn append_tail(
+    text: &mut String,
+    reader: Option<ShellJobLogReader>,
+    redaction: &ShellJobLogRedaction,
+) {
+    let Some(tail) = reader.and_then(|reader| {
+        reader
+            .tail_with_redaction(SHELL_OUTPUT_TAIL_BUDGET_BYTES, redaction)
+            .ok()
+    }) else {
         return;
     };
     if tail.rows.is_empty() {
@@ -579,4 +704,110 @@ fn render_job_status(job: &ShellJobSummary) -> String {
         lines.push(String::from("Latest output: none yet"));
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stops a live task when the redaction host is unavailable and returns only terminal state.
+    /// 脱敏宿主不可用时仍停止运行中的任务，并且只返回终态。
+    #[tokio::test]
+    async fn stops_live_shell_job_without_redaction_host() {
+        // The test owns the process runtime, log directory and session.
+        // 测试独占进程运行时、日志目录及会话。
+        let runtime = ShellJobRuntime::new();
+        let dir = tempfile::tempdir().expect("allocate isolated job directory");
+        let session_id = SessionId::new_v4();
+        #[cfg(windows)]
+        let mut child = {
+            let mut command = tokio::process::Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut child = {
+            let mut command = tokio::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        child.current_dir(dir.path());
+        let job = runtime
+            .spawn(
+                vulcan_host_tools::shell_job::ShellJobSpawn {
+                    owner_session_id: session_id.to_string(),
+                    origin: None,
+                    command: String::from("synthetic-command"),
+                    purpose: String::from("synthetic-purpose"),
+                    shell_label: String::from("test"),
+                    cwd: dir.path().to_owned(),
+                    jobs_dir: dir.path().join("jobs"),
+                    stdin: None,
+                    background: true,
+                    timeout: Some(Duration::from_secs(30)),
+                    capture_streams: false,
+                },
+                child,
+            )
+            .expect("start isolated sleeping process");
+
+        let mut request = super::super::tests::test_native_request(json!({
+            "action": "stop", "job_id": job.id(),
+        }));
+        request.session_id = Some(session_id);
+        let result = execute_shell_job_tool(request.clone(), &runtime)
+            .await
+            .expect("stop without loading details");
+        let retried = execute_shell_job_tool(request, &runtime)
+            .await
+            .expect("return the same safe state after a stop retry");
+        assert_eq!(retried.model_output, result.model_output);
+        assert_eq!(
+            retried.host_result.unwrap().payload,
+            result.host_result.as_ref().unwrap().payload,
+        );
+        let outcome = job.outcome().expect("job actually stopped");
+        assert_eq!(
+            outcome.status,
+            vulcan_host_tools::shell_job::ShellJobStatus::Stopped
+        );
+        let payload = result.host_result.expect("shell job host result").payload;
+        assert_eq!(payload["running"], false);
+        assert_eq!(payload["status"], outcome.status.as_str());
+        assert!(payload.get("purpose").is_none());
+        let text = result.model_output.as_str().expect("text result");
+        assert!(!text.contains("synthetic-command"));
+        assert!(!text.contains("synthetic-purpose"));
+    }
+
+    /// Checks that execution enforces the ranges advertised for job reads, searches, and waits.
+    /// 验证执行入口遵循任务读取、搜索和等待所声明的参数范围。
+    #[test]
+    fn shell_job_enforces_advertised_ranges() {
+        for arguments in [
+            json!({"action": "read", "start_line": 1, "max_lines": SHELL_JOB_READ_MAX_LINES}),
+            json!({"action": "search", "context_lines": 0, "max_matches": SHELL_JOB_SEARCH_MAX_MATCHES}),
+            json!({"action": "search", "context_lines": SHELL_JOB_SEARCH_MAX_CONTEXT_LINES}),
+            json!({"action": "wait", "timeout_ms": SHELL_JOB_WAIT_MAX_MS}),
+        ] {
+            assert!(parse_shell_job_arguments(arguments).is_ok());
+        }
+
+        for arguments in [
+            json!({"action": "read", "start_line": 0}),
+            json!({"action": "read", "max_lines": 0}),
+            json!({"action": "read", "max_lines": SHELL_JOB_READ_MAX_LINES + 1}),
+            json!({"action": "search", "context_lines": SHELL_JOB_SEARCH_MAX_CONTEXT_LINES + 1}),
+            json!({"action": "search", "max_matches": SHELL_JOB_SEARCH_MAX_MATCHES + 1}),
+            json!({"action": "wait", "timeout_ms": 0}),
+            json!({"action": "wait", "timeout_ms": SHELL_JOB_WAIT_MAX_MS + 1}),
+        ] {
+            assert!(parse_shell_job_arguments(arguments).is_err());
+        }
+    }
 }

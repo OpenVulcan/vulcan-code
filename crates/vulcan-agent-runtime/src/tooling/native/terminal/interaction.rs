@@ -147,12 +147,9 @@ pub(crate) async fn execute_terminal_session_send_action(
     let terminal_session_id =
         parse_terminal_session_id(parsed_args.terminal_session_id.as_deref())?;
     let before_snapshot = command_session_runtime
-        .try_snapshot_owned_session(owner_session_id, terminal_session_id)
-        .ok_or_else(|| {
-            NativeToolError::new(format!(
-                "Terminal session `{terminal_session_id}` was not found."
-            ))
-        })?;
+        .snapshot_owned_session(owner_session_id, terminal_session_id)
+        .await
+        .map_err(NativeToolError::new)?;
     let session_name = terminal_session_name_for_snapshot(&before_snapshot);
     let inputs = parsed_args.inputs.clone().ok_or_else(|| {
         NativeToolError::new("The `send` action for terminal_session requires `inputs`.")

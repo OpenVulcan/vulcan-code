@@ -241,6 +241,9 @@ pub enum ShellJobSpawnError {
     /// The job log could not be created.
     /// 无法创建任务日志。
     Log(io::Error),
+    /// The requested timeout lies outside the host clock's supported range.
+    /// 请求的超时超出宿主时钟支持范围。
+    TimeoutOutOfRange,
     /// The process could not be started.
     /// 无法启动进程。
     Spawn(io::Error),
@@ -254,6 +257,9 @@ impl std::fmt::Display for ShellJobSpawnError {
                 "This session already runs {limit} background jobs, the most allowed. Wait for one or stop one with shell_job before starting another in the background."
             ),
             Self::Log(error) => write!(formatter, "Failed to create the job output log: {error}"),
+            Self::TimeoutOutOfRange => formatter.write_str(
+                "The command timeout exceeds the host clock's supported range; use a shorter timeout or omit it.",
+            ),
             Self::Spawn(error) => write!(formatter, "Failed to start the command: {error}"),
         }
     }
@@ -922,6 +928,16 @@ impl ShellJobRuntime {
                 limit: MAX_RUNNING_BACKGROUND_SHELL_JOBS,
             });
         }
+        // A rejected timeout must leave both the process and its job log untouched.
+        // 超时参数被拒绝时，不能启动进程或创建任务日志。
+        let deadline = request
+            .timeout
+            .map(|timeout| {
+                tokio::time::Instant::now()
+                    .checked_add(timeout)
+                    .ok_or(ShellJobSpawnError::TimeoutOutOfRange)
+            })
+            .transpose()?;
         let job_id = new_job_id();
         let writer = ShellJobLogWriter::create(&request.jobs_dir.join(&job_id))
             .map_err(ShellJobSpawnError::Log)?;
@@ -936,9 +952,6 @@ impl ShellJobRuntime {
         isolate_child_process_tree(&mut command);
         let started_at = Instant::now();
         let child = command.spawn().map_err(ShellJobSpawnError::Spawn)?;
-        let deadline = request
-            .timeout
-            .map(|timeout| tokio::time::Instant::now() + timeout);
         let job = Arc::new(ShellJob {
             id: job_id,
             owner_session_id: request.owner_session_id,
@@ -1539,7 +1552,7 @@ fn new_job_id() -> String {
 
 /// True for identities this runtime could have issued; guards paths built from model input.
 /// 对本运行时可能签发的身份返回 true；保护由模型输入构建的路径。
-pub(crate) fn valid_job_id(job_id: &str) -> bool {
+pub fn valid_job_id(job_id: &str) -> bool {
     job_id
         .strip_prefix("job_")
         .is_some_and(|rest| rest.len() == 12 && rest.bytes().all(|byte| byte.is_ascii_hexdigit()))

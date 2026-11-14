@@ -10,7 +10,8 @@
 use std::sync::Arc;
 
 use vulcan_host_tools::shell_job::{
-    SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJob, ShellJobOrigin, ShellJobRowKind, ShellJobRuntime,
+    SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJob, ShellJobLogRedaction, ShellJobOrigin,
+    ShellJobRowKind, ShellJobRuntime,
 };
 
 /// Number of most recent lines a live tail shows.
@@ -88,16 +89,29 @@ impl ShellCommandLiveRun {
 /// Returns the most recent display lines of one job's output as they show on screen, oldest first.
 /// 返回一个任务输出中最近的若干显示行（按屏幕上的显示效果），从旧到新。
 pub fn shell_job_recent_lines(job: &ShellJob, max_lines: usize) -> Vec<String> {
+    shell_job_recent_lines_with_redaction(job, max_lines, &ShellJobLogRedaction::default())
+        .unwrap_or_default()
+}
+
+/// Redacts raw log bytes before rendering the live tail.
+/// 渲染实时尾部前对原始日志字节脱敏。
+/// The caller supplies the job, row limit, and redaction snapshot.
+/// 调用方提供任务、行数上限与脱敏快照。
+pub fn shell_job_recent_lines_with_redaction(
+    job: &ShellJob,
+    max_lines: usize,
+    redaction: &ShellJobLogRedaction,
+) -> std::io::Result<Vec<String>> {
     let Some(reader) = job.log_reader() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let rows = reader
-        .tail_rows(max_lines, SHELL_OUTPUT_TAIL_BUDGET_BYTES)
-        .unwrap_or_default();
-    rows.iter()
+    let rows =
+        reader.tail_rows_with_redaction(max_lines, SHELL_OUTPUT_TAIL_BUDGET_BYTES, redaction)?;
+    Ok(rows
+        .iter()
         .filter(|row| row.kind != ShellJobRowKind::Separator)
         .map(|row| screen_text(&row.text))
-        .collect()
+        .collect())
 }
 
 /// Text left on screen by a line: a carriage return redraws the line (progress bars), so only its last

@@ -12,6 +12,7 @@
 mod diagnostics;
 mod index;
 mod log;
+mod redaction;
 mod runtime;
 mod text;
 
@@ -21,11 +22,12 @@ mod tests;
 pub use diagnostics::{ShellJobProcess, snapshot_process_tree};
 pub use index::{ShellJobIndexError, ShellJobRecord, read_session_job_records};
 pub use log::{ShellJobLineRange, ShellJobLogReader, ShellJobLogStats, ShellJobSearchMatch};
+pub use redaction::ShellJobLogRedaction;
 pub use runtime::{
     ShellJob, ShellJobCapturedStreams, ShellJobDirectoryResolver, ShellJobEvent, ShellJobEventKind,
     ShellJobFinal, ShellJobForeground, ShellJobNotice, ShellJobOrigin, ShellJobRuntime,
     ShellJobSpawn, ShellJobSpawnError, ShellJobState, ShellJobStatus, ShellJobSummary,
-    ShellJobWaitOutcome,
+    ShellJobWaitOutcome, valid_job_id,
 };
 pub use text::{
     ShellJobLineRow, ShellJobRowKind, ShellJobTail, render_numbered_rows, render_plain_rows,

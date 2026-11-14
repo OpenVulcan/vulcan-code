@@ -825,10 +825,13 @@ fn missing_segment_is_dedicated_error() {
     let (root, layout) = fresh_layout("missing");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut metadata = read_metadata(&layout.metadata_path()).unwrap();
-    metadata.split_list[0].segment_number = 7;
-    metadata.split_list[0].file_name = SessionV1Layout::segment_file_name(7);
-    write_json_document(&layout.metadata_path(), &metadata, "metadata").unwrap();
+    // Remove the file behind a valid split entry so this still tests the storage error.
+    // 删除有效分片条目指向的文件，使本测试继续覆盖存储错误。
+    let first = document.metadata.split_list.first().unwrap();
+    std::fs::remove_file(
+        layout.segment_entry_path(document.metadata.segment_generation, &first.file_name),
+    )
+    .unwrap();
     let result = load_session(&layout);
     assert!(matches!(
         result,
@@ -838,6 +841,68 @@ fn missing_segment_is_dedicated_error() {
         })
     ));
     drop(root);
+}
+
+/// Checks every reader rejects a split map whose first entry is not anchored.
+/// 确认每个读取入口都拒绝起点错误的分片映射。
+#[test]
+fn split_map_readers_reject_an_unanchored_first_entry() {
+    for (segment_number, seq) in [(1, 2), (7, 1)] {
+        let (_root, layout) = fresh_layout("unanchored");
+        let document = filled_document(&layout.session_id, 0);
+        let mut metadata = publish_initial(&layout, &document);
+        let first = metadata.split_list.first_mut().unwrap();
+        first.segment_number = segment_number;
+        first.file_name = SessionV1Layout::segment_file_name(segment_number);
+        first.start_seq = Seq::try_new(seq).unwrap();
+        write_json_document(&layout.metadata_path(), &metadata, "metadata").unwrap();
+
+        assert_eq!(
+            load_session(&layout).err().unwrap().code,
+            ErrorCode::MetadataCorrupt
+        );
+        assert_eq!(
+            load_session_tail_only(&layout).err().unwrap().code,
+            ErrorCode::MetadataCorrupt
+        );
+        assert_eq!(
+            super::event_window::load_recent_turn_window(&layout, 1)
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::MetadataCorrupt
+        );
+    }
+}
+
+/// Refuses a mismatched first event before staging or replacing the tail.
+/// 在暂存或替换尾段前拒绝起点不一致的首条事件。
+#[test]
+fn tail_flush_rejects_mismatched_first_event() {
+    let (_root, layout) = fresh_layout("tail-start");
+    let document = filled_document(&layout.session_id, 2);
+    let metadata = publish_initial(&layout, &document);
+    let entry = metadata.split_list.last().unwrap();
+    let candidate = layout.segment_entry_path(
+        metadata.segment_generation,
+        &SessionV1Layout::alternate_segment_file_name(entry.segment_number, &entry.file_name)
+            .unwrap(),
+    );
+    let request = FlushRequest {
+        dirty: &BTreeSet::from([DirtyFile::ActiveTail]),
+        metadata: &metadata,
+        runtime_lock: &document.runtime_lock,
+        runtime_updated_at_ms: 1,
+        compactions: &document.compactions,
+        events: &document.events()[1..],
+        tail_start: Some(entry.start_seq),
+    };
+    assert!(flush_session(&layout, &request).is_err());
+    assert!(!candidate.exists());
+    assert_eq!(
+        load_session(&layout).unwrap().document.events(),
+        document.events()
+    );
 }
 
 /// A flush with an empty dirty set writes nothing.

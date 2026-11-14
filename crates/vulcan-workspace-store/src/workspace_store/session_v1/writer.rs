@@ -449,6 +449,54 @@ pub fn flush_session_with_limits(
     limits: &FlushLimits,
 ) -> Result<FlushOutcome, SessionV1Error> {
     ensure_request_generations_are_current(layout, request.metadata)?;
+    let active_tail = if request.dirty.contains(&DirtyFile::ActiveTail) {
+        let (tail_start, tail_entry) = active_tail_entry(request.metadata)?;
+        let start_index = (tail_start - 1) as usize;
+        let tail_events = match request.tail_start {
+            None => {
+                if request.events.len() < start_index {
+                    return Err(SessionV1Error::discontinuity(
+                        layout.session_dir(),
+                        "active tail",
+                        tail_start,
+                        request.events.len() as u64 + 1,
+                    ));
+                }
+                &request.events[start_index..]
+            }
+            Some(provided) => {
+                if provided.value() != tail_start {
+                    return Err(SessionV1Error::discontinuity(
+                        layout.session_dir(),
+                        "active tail start",
+                        tail_start,
+                        provided.value(),
+                    ));
+                }
+                request.events
+            }
+        };
+        // The serializer checks adjacency but does not own the expected first sequence.
+        // 序列化器校验条目相邻关系，预期首序号由尾段写入方负责。
+        if let Some(first) = tail_events.first()
+            && first.seq().value() != tail_start
+        {
+            return Err(SessionV1Error::discontinuity(
+                layout.session_dir(),
+                "active tail first event",
+                tail_start,
+                first.seq().value(),
+            ));
+        }
+        Some((
+            tail_start,
+            tail_entry,
+            tail_events,
+            serialize_segment(tail_events)?,
+        ))
+    } else {
+        None
+    };
     let mut outcome = FlushOutcome::default();
     let mut metadata_candidate = request.metadata.clone();
     let mut obsolete_segment_paths = Vec::new();
@@ -491,34 +539,7 @@ pub fn flush_session_with_limits(
         outcome.written_files.push(WrittenFile::Compactions);
         outcome.written_files.push(WrittenFile::Runtime);
     }
-    if request.dirty.contains(&DirtyFile::ActiveTail) {
-        let (tail_start, tail_entry) = active_tail_entry(request.metadata)?;
-        let start_index = (tail_start - 1) as usize;
-        let tail_events = match request.tail_start {
-            None => {
-                if request.events.len() < start_index {
-                    return Err(SessionV1Error::discontinuity(
-                        layout.session_dir(),
-                        "active tail",
-                        tail_start,
-                        request.events.len() as u64 + 1,
-                    ));
-                }
-                &request.events[start_index..]
-            }
-            Some(provided) => {
-                if provided.value() != tail_start {
-                    return Err(SessionV1Error::discontinuity(
-                        layout.session_dir(),
-                        "active tail start",
-                        tail_start,
-                        provided.value(),
-                    ));
-                }
-                request.events
-            }
-        };
-        let tail_bytes = serialize_segment(tail_events)?;
+    if let Some((tail_start, tail_entry, tail_events, tail_bytes)) = active_tail {
         let published_tail_path =
             layout.segment_entry_path(request.metadata.segment_generation, &tail_entry.file_name);
         let candidate_file_name = SessionV1Layout::alternate_segment_file_name(

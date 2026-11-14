@@ -27,6 +27,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 ## 二、`shell_command`
 
 - `timeout_ms` 省略表示无限等待，直到进程自然退出；显式传入时必须 ≥ 1，传 `0` 返回参数错误。
+  当前平台无法表示截止时间时，在创建任务日志和启动子进程前返回错误。
 - 省略 `stdin` 表示空输入（立即 EOF），不继承服务进程的标准输入；提供时以 UTF-8 字节一次写入后关闭。
   Windows 上的 PowerShell 默认按控制台代码页（如 936）解码 `[Console]::In`，并按 `$OutputEncoding`
   编码管道给原生程序的文本，非 ASCII 内容会乱码。因此提供 `stdin` 且 Shell 为 `pwsh`/`powershell` 时，
@@ -128,7 +129,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   （`service_background_shell_command`）。工具调用被取消时仍终止前台任务的整棵进程树。
 - `shell_job` 的 `list`、`status`、`read`、`search`、`wait`、`stop` 只作用于本会话的任务，权限分类为
   `Ungoverned`，不经判定模型与复核 LLM。`read` 默认与上限行数、`wait` 默认与上限时长、`search` 的匹配与上下文
-  上限只在 `shell_job.rs` 定义。
+  上限只在 `shell_job.rs` 定义。运行中的任务可在脱敏服务不可用时停止，此时工具仅返回结束状态和任务标识。
 - 后台任务结束时生成通知，只保存在进程内，不持久化：回合进行中在下一次 API 请求前作为宿主消息追加。
   根会话空闲（无开放回合、无活动运行或内核回合、无排队输入、未归档、未被用户停止、无待决计划）时，
   `shell_job_continuation`（Core 侧 `shell_job_continuation.rs`）开启一个宿主发起的唤醒回合

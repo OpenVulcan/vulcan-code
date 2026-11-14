@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde::Serialize;
 
+use super::redaction::{LogRedactionSpan, ShellJobLogRedaction, project_log_line};
 use super::text::{
     ShellJobLineRow, ShellJobTail, decode_log_slice, keep_newest_rows_within, wrap_line,
 };
@@ -25,7 +26,7 @@ use super::{SHELL_JOB_LOG_HEAD_BYTES, SHELL_JOB_LOG_LIMIT_BYTES, SHELL_JOB_LOG_S
 
 /// Longest part of one line read for display or matching; the rest is skipped and reported.
 /// 为显示或匹配读取的单行最长部分；其余部分跳过并报告。
-const LOG_LINE_READ_CAP_BYTES: usize = 64 * 1024;
+pub(super) const LOG_LINE_READ_CAP_BYTES: usize = 64 * 1024;
 
 /// File extension of one log segment.
 /// 单个日志分段的文件扩展名。
@@ -204,8 +205,8 @@ impl ShellJobLogWriter {
         self.drop_oldest_body_segments()
     }
 
-    /// Drops the oldest body segments while the retained body exceeds the log limit.
-    /// 当保留的正文超出日志上限时丢弃最早的正文分段。
+    /// Drops the oldest sealed body segments while the body exceeds the limit, preserving the head and open segment.
+    /// 正文超限时丢弃最早的已封口正文分段，保留头段及正在写入的分段。
     fn drop_oldest_body_segments(&mut self) -> io::Result<()> {
         let body_limit = self.limits.limit.saturating_sub(self.limits.head);
         let mut retained_body: u64 = self.segments[1..].iter().map(|segment| segment.len).sum();
@@ -280,6 +281,20 @@ pub struct ShellJobSearchMatch {
     /// True when more matches exist than were returned, or the byte budget cut the rows.
     /// 存在未返回的更多匹配，或字节预算截断了显示行时为 true。
     pub truncated: bool,
+}
+
+/// One bounded, scanned raw window and its log offset.
+/// 一段有界且已扫描的原始窗口及其日志偏移。
+struct RedactionWindow<'a> {
+    /// Absolute offset of the first byte.
+    /// 第一个字节的绝对偏移。
+    start: u64,
+    /// Raw log bytes.
+    /// 原始日志字节。
+    raw: Vec<u8>,
+    /// Protected spans relative to the window.
+    /// 相对于窗口的受保护范围。
+    spans: Vec<LogRedactionSpan<'a>>,
 }
 
 /// One line item while walking the log.
@@ -437,13 +452,24 @@ impl ShellJobLogReader {
     /// Returns the newest rows fitting `budget` bytes; shorter output returns in full.
     /// 返回在 `budget` 字节内的最新显示行；更短的输出完整返回。
     pub fn tail(&self, budget: usize) -> io::Result<ShellJobTail> {
+        self.tail_with_redaction(budget, &ShellJobLogRedaction::default())
+    }
+
+    /// Redacts the raw tail before wrapping or trimming its display rows.
+    /// 对原始尾部脱敏后才折行或裁剪显示行。
+    pub fn tail_with_redaction(
+        &self,
+        budget: usize,
+        redaction: &ShellJobLogRedaction,
+    ) -> io::Result<ShellJobTail> {
         let mut tail = ShellJobTail {
             rows: Vec::new(),
             total_lines: self.total_lines(),
             total_bytes: self.total_bytes,
             truncated: false,
         };
-        if self.total_bytes == 0 {
+        if self.total_bytes == 0 || budget == 0 {
+            tail.truncated = self.total_bytes > 0;
             return Ok(tail);
         }
         // run_start is where the last contiguous run of retained output begins.
@@ -454,7 +480,11 @@ impl ShellJobLogReader {
             .total_bytes
             .saturating_sub(budget as u64)
             .max(run_start);
-        let bytes = self.read_range(start, self.total_bytes)?;
+        let window_start = start.saturating_sub(redaction.overlap()).max(run_start);
+        let raw = self.read_range(window_start, self.total_bytes)?;
+        let start_in_window = (start - window_start) as usize;
+        let bytes = &raw[start_in_window..];
+        let spans = redaction.find(&raw, run_start > 0 && window_start == run_start, false)?;
         // starts_at_line is true when the first byte begins a line.
         // starts_at_line 在第一个字节是行首时为 true。
         let starts_at_line = start == 0 || (start == run_start && run_index == 0);
@@ -475,8 +505,12 @@ impl ShellJobLogReader {
         let last_line = self.total_lines();
         let first_line = last_line + 1 - pieces.len() as u64;
         let mut rows = Vec::new();
+        let kept_bytes = pieces.iter().map(|piece| piece.len()).sum::<usize>() + pieces.len() - 1;
+        let mut offset = start_in_window + body.len() - kept_bytes;
         for (index, piece) in pieces.iter().enumerate() {
-            let text = decode_log_slice(piece);
+            let end = offset + piece.len();
+            let text = project_log_line(&raw, offset..end, &spans);
+            offset = end + 1;
             rows.extend(wrap_line(
                 first_line + index as u64,
                 &text,
@@ -493,7 +527,18 @@ impl ShellJobLogReader {
     /// Returns at most `max_rows` of the newest rows, for compact live views.
     /// 返回至多 `max_rows` 个最新显示行，用于紧凑的实时视图。
     pub fn tail_rows(&self, max_rows: usize, budget: usize) -> io::Result<Vec<ShellJobLineRow>> {
-        let mut rows = self.tail(budget)?.rows;
+        self.tail_rows_with_redaction(max_rows, budget, &ShellJobLogRedaction::default())
+    }
+
+    /// Keeps at most the given number of newest rows after redaction.
+    /// 脱敏后只保留给定数量的最新显示行。
+    pub fn tail_rows_with_redaction(
+        &self,
+        max_rows: usize,
+        budget: usize,
+        redaction: &ShellJobLogRedaction,
+    ) -> io::Result<Vec<ShellJobLineRow>> {
+        let mut rows = self.tail_with_redaction(budget, redaction)?.rows;
         if rows.len() > max_rows {
             rows.drain(..rows.len() - max_rows);
         }
@@ -508,29 +553,48 @@ impl ShellJobLogReader {
         max_lines: usize,
         budget: usize,
     ) -> io::Result<ShellJobLineRange> {
+        self.read_lines_with_redaction(
+            first_line,
+            max_lines,
+            budget,
+            &ShellJobLogRedaction::default(),
+        )
+    }
+
+    /// Redacts retained bytes before wrapping and applying the page budget.
+    /// 折行并应用单页预算之前对保留的字节脱敏。
+    /// The returned cursor still refers to the original log line numbers.
+    /// 返回的游标仍指向原始日志行号。
+    pub fn read_lines_with_redaction(
+        &self,
+        first_line: u64,
+        max_lines: usize,
+        budget: usize,
+        redaction: &ShellJobLogRedaction,
+    ) -> io::Result<ShellJobLineRange> {
         let mut rows: Vec<ShellJobLineRow> = Vec::new();
         let mut used = 0;
         let mut lines = 0;
         let mut next_line = None;
-        self.walk_lines(first_line.saturating_sub(1), |item| {
+        self.walk_lines(first_line.saturating_sub(1), redaction, |item| {
             if lines >= max_lines {
                 next_line = Some(item_line(&item) + 1);
-                return ControlFlow::Break(());
+                return Ok(ControlFlow::Break(()));
             }
             let item_rows = item_rows(&item, false);
             let size: usize = item_rows.iter().map(ShellJobLineRow::rendered_len).sum();
             if used + size > budget && !rows.is_empty() {
                 next_line = Some(item_line(&item) + 1);
-                return ControlFlow::Break(());
+                return Ok(ControlFlow::Break(()));
             }
             used += size;
             lines += 1;
             rows.extend(item_rows);
             if used >= budget {
                 next_line = Some(item_line(&item) + 2);
-                return ControlFlow::Break(());
+                return Ok(ControlFlow::Break(()));
             }
-            ControlFlow::Continue(())
+            Ok(ControlFlow::Continue(()))
         })?;
         let total_lines = self.total_lines();
         Ok(ShellJobLineRange {
@@ -548,6 +612,25 @@ impl ShellJobLogReader {
         context: usize,
         max_matches: usize,
         budget: usize,
+    ) -> io::Result<ShellJobSearchMatch> {
+        self.search_with_redaction(
+            pattern,
+            context,
+            max_matches,
+            budget,
+            &ShellJobLogRedaction::default(),
+        )
+    }
+
+    /// Searches filtered logical lines and wraps only the displayable matches and context.
+    /// 搜索过滤后的逻辑行，只折行可展示的匹配结果和上下文。
+    pub fn search_with_redaction(
+        &self,
+        pattern: &Regex,
+        context: usize,
+        max_matches: usize,
+        budget: usize,
+        redaction: &ShellJobLogRedaction,
     ) -> io::Result<ShellJobSearchMatch> {
         let mut result = ShellJobSearchMatch {
             rows: Vec::new(),
@@ -582,15 +665,15 @@ impl ShellJobLogReader {
             *last_emitted = Some(line);
             true
         };
-        self.walk_lines(0, |item| {
+        self.walk_lines(0, redaction, |item| {
             let LogLineItem::Text { line, text, .. } = item else {
                 recent.clear();
-                return ControlFlow::Continue(());
+                return Ok(ControlFlow::Continue(()));
             };
             if pattern.is_match(&text) {
                 if result.match_count >= max_matches {
                     result.truncated = true;
-                    return ControlFlow::Break(());
+                    return Ok(ControlFlow::Break(()));
                 }
                 for (before_line, before_text) in recent.drain(..) {
                     if last_emitted.is_some_and(|last| before_line <= last) {
@@ -604,11 +687,11 @@ impl ShellJobLogReader {
                         &before_text,
                         false,
                     ) {
-                        return ControlFlow::Break(());
+                        return Ok(ControlFlow::Break(()));
                     }
                 }
                 if !push_rows(&mut result, &mut used, &mut last_emitted, line, &text, true) {
-                    return ControlFlow::Break(());
+                    return Ok(ControlFlow::Break(()));
                 }
                 result.match_count += 1;
                 after_remaining = context;
@@ -622,7 +705,7 @@ impl ShellJobLogReader {
                     &text,
                     false,
                 ) {
-                    return ControlFlow::Break(());
+                    return Ok(ControlFlow::Break(()));
                 }
             } else if context > 0 {
                 recent.push_back((line, text));
@@ -630,7 +713,7 @@ impl ShellJobLogReader {
                     recent.pop_front();
                 }
             }
-            ControlFlow::Continue(())
+            Ok(ControlFlow::Continue(()))
         })?;
         Ok(result)
     }
@@ -640,7 +723,8 @@ impl ShellJobLogReader {
     fn walk_lines(
         &self,
         from: u64,
-        mut visit: impl FnMut(LogLineItem) -> ControlFlow<()>,
+        redaction: &ShellJobLogRedaction,
+        mut visit: impl FnMut(LogLineItem) -> io::Result<ControlFlow<()>>,
     ) -> io::Result<()> {
         let mut line = from;
         loop {
@@ -648,7 +732,7 @@ impl ShellJobLogReader {
                 LineLocation::PastEnd => return Ok(()),
                 LineLocation::InGap => {
                     let (bytes, resume) = self.gap_after_head();
-                    if visit(LogLineItem::Gap { line, bytes }).is_break() {
+                    if visit(LogLineItem::Gap { line, bytes })?.is_break() {
                         return Ok(());
                     }
                     line = resume.max(line + 1);
@@ -656,16 +740,51 @@ impl ShellJobLogReader {
                 LineLocation::Start { segment, offset } => {
                     let run = RunReader::new(self, segment, offset);
                     let run_end = run.run_end();
+                    let run_start = self.run_start_index(segment);
+                    let run_start = self.segments[run_start].start;
                     let mut reader = BufReader::new(run);
+                    let mut offset = offset;
+                    let mut window = None;
                     while let Some((bytes, newline, skipped)) =
                         read_capped_line(&mut reader, LOG_LINE_READ_CAP_BYTES)?
                     {
+                        let visible_end = offset + bytes.len() as u64;
+                        let text = if redaction.is_empty() {
+                            decode_log_slice(&bytes)
+                        } else {
+                            let first = offset.saturating_sub(redaction.overlap()).max(run_start);
+                            let last = visible_end.saturating_add(redaction.overlap()).min(run_end);
+                            if window.as_ref().is_none_or(|window: &RedactionWindow<'_>| {
+                                first < window.start
+                                    || last > window.start + window.raw.len() as u64
+                            }) {
+                                // Reuse the scanned window for subsequent short lines in this run.
+                                // 此连续段内后续的短行复用已扫描的窗口。
+                                let end = (last + LOG_LINE_READ_CAP_BYTES as u64).min(run_end);
+                                let raw = self.read_range(first, end)?;
+                                let spans = redaction.find(
+                                    &raw,
+                                    run_start > 0 && first == run_start,
+                                    run_end < self.total_bytes && end == run_end,
+                                )?;
+                                window = Some(RedactionWindow {
+                                    start: first,
+                                    raw,
+                                    spans,
+                                });
+                            }
+                            let window = window.as_ref().expect("loaded above");
+                            let visible = (offset - window.start) as usize
+                                ..(visible_end - window.start) as usize;
+                            project_log_line(&window.raw, visible, &window.spans)
+                        };
                         let item = LogLineItem::Text {
                             line,
-                            text: decode_log_slice(&bytes),
+                            text,
                             skipped_bytes: skipped,
                         };
-                        if visit(item).is_break() {
+                        offset = visible_end + skipped + u64::from(newline);
+                        if visit(item)?.is_break() {
                             return Ok(());
                         }
                         line += 1;
@@ -679,7 +798,7 @@ impl ShellJobLogReader {
                     // The run stopped at the gap after the head; the next line is reported as dropped.
                     // 连续段止于开头之后的缺口；下一行作为被丢弃输出报告。
                     let (bytes, resume) = self.gap_after_head();
-                    if visit(LogLineItem::Gap { line, bytes }).is_break() {
+                    if visit(LogLineItem::Gap { line, bytes })?.is_break() {
                         return Ok(());
                     }
                     line = resume.max(line);
@@ -766,7 +885,12 @@ impl ShellJobLogReader {
     /// Index of the segment where the last contiguous run of retained output starts.
     /// 最后一段连续保留输出开始所在分段的索引。
     fn last_run_start_index(&self) -> usize {
-        let mut index = self.segments.len() - 1;
+        self.run_start_index(self.segments.len() - 1)
+    }
+
+    /// Returns the first segment of the contiguous run containing `index`.
+    /// 返回包含 `index` 的连续段中的第一个分段。
+    fn run_start_index(&self, mut index: usize) -> usize {
         while index > 0 && self.segments[index - 1].end() == self.segments[index].start {
             index -= 1;
         }

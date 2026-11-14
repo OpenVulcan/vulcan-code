@@ -701,6 +701,18 @@ pub(super) fn validate_split_chain(
     layout: &SessionV1Layout,
 ) -> Result<(), SessionV1Error> {
     let first = metadata.split_list.first().expect("validated: non-empty");
+    // Partial readers do not open the first segment, so they must share its metadata anchor.
+    // 局部读取器不会打开首段，因此必须共用首段的元数据起点校验。
+    if first.start_seq.value() != vulcan_session_core::v1::ids::LOCAL_ID_MIN
+        || first.segment_number != 1
+    {
+        return Err(SessionV1Error::corrupt(
+            ErrorCode::MetadataCorrupt,
+            layout.metadata_path(),
+            "split_list must start at sequence 1 in segment 1",
+        )
+        .with_context(&metadata.session_id, layout.metadata_path()));
+    }
     if first.next_event_local_id == 0 {
         return Err(SessionV1Error::corrupt(
             ErrorCode::MetadataCorrupt,
@@ -731,7 +743,7 @@ pub(super) fn validate_split_chain(
                 next.start_seq.value(),
             ));
         }
-        if next.segment_number != previous.segment_number + 1 {
+        if previous.segment_number.checked_add(1) != Some(next.segment_number) {
             return Err(SessionV1Error::corrupt(
                 ErrorCode::MetadataCorrupt,
                 layout.metadata_path(),

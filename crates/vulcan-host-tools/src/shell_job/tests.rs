@@ -162,6 +162,86 @@ fn dropped_body_segments_leave_the_head_and_one_gap() {
     );
 }
 
+/// Redacts both sides of a detected value even when the line read cap splits it.
+/// 即使单行读取上限截断了已知值，也遮蔽其在可见范围内的所有片段。
+#[test]
+fn line_read_cap_keeps_redaction_lookahead() {
+    let temporary = tempfile::tempdir().unwrap();
+    let prefix = "x".repeat(super::log::LOG_LINE_READ_CAP_BYTES - "synthetic-".len());
+    let text = format!("{prefix}synthetic-line-cap-secret\npublic tail\n");
+    let reader = log_with(temporary.path(), LogLimits::PRODUCT, &[&text]);
+    let redaction = ShellJobLogRedaction::new([(
+        "synthetic-line-cap-secret".into(),
+        "[redacted:FIXTURE]".into(),
+    )]);
+    let range = reader
+        .read_lines_with_redaction(1, 2, usize::MAX, &redaction)
+        .unwrap();
+    let output = render_numbered_rows(&range.rows);
+    assert!(!output.contains("synthetic-"));
+    let first_line: String = range
+        .rows
+        .iter()
+        .filter(|row| row.line == 1)
+        .map(|row| row.text.as_str())
+        .collect();
+    assert!(first_line.contains("[redacted:FIXTURE]"));
+    assert!(output.contains("public tail"));
+    assert!(output.contains("more bytes of this line"));
+    let search = reader
+        .search_with_redaction(
+            &Regex::new("synthetic-").unwrap(),
+            0,
+            1,
+            usize::MAX,
+            &redaction,
+        )
+        .unwrap();
+    assert_eq!(search.match_count, 0);
+}
+
+/// Conceals the retained margins where the rolling log discarded the rest of a match.
+/// 滚动日志丢弃匹配的其余部分时，遮蔽仍保留的缺口边缘。
+#[test]
+fn rolling_gap_conceals_retained_secret_fragments() {
+    let temporary = tempfile::tempdir().unwrap();
+    let limits = LogLimits {
+        head: 32,
+        segment: 64,
+        limit: 96,
+    };
+    let head_fragment = "gap-prefix";
+    let head = format!(
+        "{}{head_fragment}",
+        "h".repeat(limits.head as usize - head_fragment.len())
+    );
+    let middle = format!(
+        "{}discarded-prefix",
+        "x".repeat(limits.segment as usize - "discarded-prefix".len())
+    );
+    let tail = "retained-fragment\npublic line\n";
+    let reader = log_with(temporary.path(), limits, &[&head, &middle, tail]);
+    assert_eq!(reader.stats().dropped_bytes, limits.segment);
+    let redaction = ShellJobLogRedaction::new([
+        ("gap-prefixxxx".into(), "[redacted:A]".into()),
+        (
+            "discarded-prefixretained-fragment".into(),
+            "[redacted:B]".into(),
+        ),
+    ]);
+    let page = reader
+        .read_lines_with_redaction(1, 10, usize::MAX, &redaction)
+        .unwrap();
+    let output = render_numbered_rows(&page.rows);
+    assert!(!output.contains(head_fragment));
+    assert!(!output.contains("retained-fragment"));
+    assert!(page.rows.iter().any(|row| row.kind == ShellJobRowKind::Gap));
+    let tail = reader.tail_with_redaction(usize::MAX, &redaction).unwrap();
+    let output = render_numbered_rows(&tail.rows);
+    assert!(!output.contains("retained-fragment"));
+    assert!(output.contains("[redacted]"));
+}
+
 /// Search returns matches with context, separating non-adjacent groups.
 /// 搜索返回带上下文的匹配，并分隔不相邻的结果组。
 #[test]
@@ -404,6 +484,25 @@ async fn detached_job_outlives_the_foreground_timeout_and_leaves_a_notice() {
     assert_eq!(notices[0].job_id, job.id());
     let records = read_session_job_records(temp.path()).expect("records");
     assert!(records[0].background);
+}
+
+/// Rejects an unrepresentable deadline before creating a job directory.
+/// 拒绝不可表示的截止时间，且不创建任务目录。
+#[tokio::test]
+async fn invalid_deadline_leaves_job_directory_uncreated() {
+    // Use an absent directory so the assertion observes the logging side effect directly.
+    // 使用不存在的目录，直接观察写入日志的副作用。
+    let temp = tempfile::tempdir().expect("temp dir");
+    let jobs = temp.path().join("jobs");
+    let runtime = ShellJobRuntime::new();
+    assert!(matches!(
+        runtime.spawn(
+            request(&jobs, "s1", false, Some(Duration::MAX)),
+            shell("exit 0"),
+        ),
+        Err(ShellJobSpawnError::TimeoutOutOfRange)
+    ));
+    assert!(!jobs.exists());
 }
 
 /// A job started in the background keeps its timeout; stop ends another job.

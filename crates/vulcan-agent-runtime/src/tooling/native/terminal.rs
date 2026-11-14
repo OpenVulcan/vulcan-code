@@ -429,7 +429,7 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
             },
             "wait_policy": {
                 "type": "object",
-                "description": "Optional bounded wait behavior for send/read. Use until_pattern for a caller-chosen visible completion or readiness marker, until_prompt for best-effort prompt detection, until_quiet for bounded output settling, screen_stable for TUI frames, or return_immediately for asynchronous work.",
+                "description": "Optional bounded wait behavior for send/read. Use until_pattern for a caller-chosen visible completion or readiness marker, until_prompt for a bounded wait (defaults to 3 seconds), until_quiet for bounded output settling, screen_stable for TUI frames, or return_immediately for asynchronous work.",
                 "properties": {
                     "mode": {
                         "type": "string",
@@ -444,11 +444,11 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
             },
             "after_seq": {
                 "type": "integer",
-                "description": "Optional output cursor override. When omitted, read/send uses the terminal_session AI cursor."
+                "description": "Optional output cursor override for read. When omitted, read uses the terminal_session AI cursor unless read_from_start is true. Send starts at the output cursor captured before sending input."
             },
             "read_from_start": {
                 "type": "boolean",
-                "description": "When true, read starts from sequence 0 instead of the AI cursor. Use only for explicit history review."
+                "description": "When true, read starts from sequence 0 instead of the AI cursor unless after_seq is supplied. Use only for explicit history review."
             },
             "max_chunks": {
                 "type": "integer",

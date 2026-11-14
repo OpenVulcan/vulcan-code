@@ -1245,6 +1245,44 @@ pub fn test_tool_rejection_invocation_result(
     build_tool_rejection_invocation_result(request, message)
 }
 
+/// Rebuilds a native stop receipt from the verified job ID and terminal status only.
+/// 仅使用已校验的任务 ID 与终态重建原生停止回执。
+///
+/// The projected receipt contains no stored output and can be returned if the registry fails.
+/// 此投影回执不含存储输出，可在注册表故障时返回。
+fn project_shell_job_stop_receipt(
+    definition: &ResolvedToolDefinition,
+    request: &CoreToolInvocationRequest,
+    result: &VulcanToolInvocationResult,
+) -> Option<CoreToolInvocationResult> {
+    use crate::tooling::native::shell_job::{SHELL_JOB_TOOL_ID, shell_job_stop_state};
+    use vulcan_host_tools::shell_job::{ShellJobStatus, valid_job_id};
+    use vulcan_tools_manager::VulcanToolSourceKind;
+
+    if definition.descriptor.id != SHELL_JOB_TOOL_ID
+        || definition.descriptor.source != VulcanToolSourceKind::Native
+        || request.arguments.get("action")?.as_str()? != "stop"
+    {
+        return None;
+    }
+    let host = result.host_result.as_ref()?;
+    let job_id = host.payload.get("job_id")?.as_str()?;
+    if host.kind != SHELL_JOB_TOOL_ID
+        || host.payload.get("action")?.as_str()? != "stop"
+        || host.payload.get("running")?.as_bool()?
+        || request.arguments.get("job_id")?.as_str()?.trim() != job_id
+        || !valid_job_id(job_id)
+    {
+        return None;
+    }
+    let status =
+        serde_json::from_value::<ShellJobStatus>(host.payload.get("status")?.clone()).ok()?;
+    Some(canonicalize_tool_invocation_result(
+        request,
+        shell_job_stop_state(job_id, status),
+    ))
+}
+
 #[async_trait::async_trait]
 impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
     /// Executes one controller-owned tool request through the shared host-managed tool bridge.
@@ -1338,7 +1376,13 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             }
         }
 
-        self.redact_sensitive_tool_result(canonicalize_tool_invocation_result(request, result))
+        let stop_receipt = project_shell_job_stop_receipt(definition, request, &result);
+        match self
+            .redact_sensitive_tool_result(canonicalize_tool_invocation_result(request, result))
+        {
+            Err(_) if let Some(receipt) = stop_receipt => Ok(receipt),
+            result => result,
+        }
     }
 }
 

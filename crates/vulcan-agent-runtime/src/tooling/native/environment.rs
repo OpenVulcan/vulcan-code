@@ -85,6 +85,15 @@ pub trait NativeEnvironmentHost: fmt::Debug + Send + Sync {
         session_id: SessionId,
     ) -> Result<Vec<EffectiveEnvironmentVariable>, String>;
 
+    /// Returns the stored secret name/value pairs for every applicable layer of this session.
+    /// 返回此会话各适用层中存储的密钥名称和值。
+    /// Used only for historical job redaction; same-name entries from different layers are retained.
+    /// 仅用于历史任务脱敏，保留不同层的同名条目。
+    async fn historical_job_secrets(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<(String, String)>, String>;
+
     /// Sets or, with `value` absent, removes one plain variable of the session (the root session
     /// for a child). Secret session variables belong to the user and are refused.
     /// 设置会话（子会话则为其根会话）的一个普通变量；`value` 缺省时删除。会话密钥变量属于用户，一律拒绝。
@@ -159,6 +168,23 @@ impl NativeEnvironmentAccess {
             }
         }
         Ok(variables)
+    }
+
+    /// Registers every applicable stored secret before returning historical job text.
+    /// 返回历史任务文本之前登记所有适用的已存储密钥。
+    pub(crate) async fn prepare_historical_job_redaction(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Arc<TaskRuntime>, String> {
+        let secrets = self.host.historical_job_secrets(session_id).await?;
+        let task_runtime = self
+            .task_runtime
+            .upgrade()
+            .ok_or_else(|| String::from("The task runtime is shutting down."))?;
+        for (name, value) in secrets {
+            task_runtime.register_environment_secret(&name, &value)?;
+        }
+        Ok(task_runtime)
     }
 
     /// The host itself.
