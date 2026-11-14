@@ -25,6 +25,10 @@ mod chat_sse;
 /// 单个供应商诊断字段允许保留的最大 Unicode 字符数。
 const PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS: usize = 2_048;
 
+/// Marks an exact credential removed before a provider diagnostic is scanned for URLs.
+/// 标记在扫描供应商诊断 URL 之前移除的精确凭据。
+pub(crate) const REDACTED_PROVIDER_CREDENTIAL: &str = "<redacted>";
+
 /// Maximum Unicode characters retained in one complete provider diagnostic.
 /// 一条完整供应商诊断允许保留的最大 Unicode 字符数。
 const PROVIDER_TOOL_DIAGNOSTIC_MAX_CHARACTERS: usize = 8_192;
@@ -3874,16 +3878,10 @@ fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
 /// Returns text with all URL runs replaced except exact matches in the trusted `public_links` list.
 /// 返回替换网址后的文本，仅保留与可信 `public_links` 列表精确匹配的网址。
 fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String {
-    // is_url_delimiter ends a URL at whitespace or at the quoting characters diagnostics wrap
-    // URLs in, so signed query strings never survive.
-    // is_url_delimiter 在空白或诊断包裹 URL 的引用字符处结束 URL，确保签名查询串不会保留。
-    let is_url_delimiter = |character: char| {
-        character.is_whitespace()
-            || matches!(
-                character,
-                '`' | '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}'
-            )
-    };
+    // is_url_delimiter excludes parentheses, brackets and apostrophes because they can occur inside URLs.
+    // is_url_delimiter 排除圆括号、方括号和单引号，因为它们可以出现在 URL 内部。
+    let is_url_delimiter =
+        |character: char| character.is_whitespace() || matches!(character, '`' | '"' | '<' | '>');
     let mut redacted = String::with_capacity(value.len());
     let mut remaining = value;
     while let Some(separator) = remaining.find("://") {
@@ -3897,20 +3895,50 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
             })
             .last()
             .map_or(separator, |(index, _)| index);
-        // url_end is the first delimiter after the separator, or the end of the text.
-        // url_end 是分隔符之后的第一个分隔字符，或文本末尾。
-        let url_end = remaining[separator + 3..]
-            .find(is_url_delimiter)
-            .map_or(remaining.len(), |offset| separator + 3 + offset);
-        // Match the whole URL so a public documentation address with an added signature is still redacted.
-        // 匹配完整网址，使附加签名的公开文档地址仍被脱敏。
-        let url = &remaining[scheme_start..url_end];
-        redacted.push_str(&remaining[..scheme_start]);
+        // url_end skips embedded credential markers because they may split an otherwise contiguous URL.
+        // url_end 跳过嵌入的凭据标记，因为这些标记可能分隔原本连续的 URL。
+        let url_end = {
+            // scan starts immediately after the URL scheme separator.
+            // scan 从 URL 协议分隔符之后开始扫描。
+            let mut scan = separator + 3;
+            loop {
+                // offset locates the next delimiter relative to the current scan position.
+                // offset 定位相对于当前扫描起点的下一个分隔符。
+                let Some(offset) = remaining[scan..].find(is_url_delimiter) else {
+                    break remaining.len();
+                };
+                scan += offset;
+                if !remaining[scan..].starts_with(REDACTED_PROVIDER_CREDENTIAL) {
+                    break scan;
+                }
+                scan += REDACTED_PROVIDER_CREDENTIAL.len();
+            }
+        };
+        // prefix can end in an opening wrapper adjacent to the URL.
+        // prefix 可能以紧挨 URL 的包裹开符号结尾。
+        let prefix = &remaining[..scheme_start];
+        // token includes the complete URL and any trailing sentence punctuation or matching wrapper.
+        // token 包含完整的 URL 以及可能紧随其后的句末标点或配对包裹字符。
+        let token = &remaining[scheme_start..url_end];
+        // Strip sentence periods only after scanning the full token, so a suffix cannot expose credentials.
+        // 扫描完整片段后才剥离句号，避免后缀暴露凭据。
+        let url = token.trim_end_matches(['.', '。']);
+        // A closing wrapper is prose only when that wrapper opens directly before the URL.
+        // 只有开符号紧挨 URL 之前，配对的闭符号才视为诊断文字的一部分。
+        let url = match prefix.chars().next_back() {
+            Some('(') => url.strip_suffix(')').unwrap_or(url),
+            Some('[') => url.strip_suffix(']').unwrap_or(url),
+            Some('{') => url.strip_suffix('}').unwrap_or(url),
+            Some('\'') => url.strip_suffix('\'').unwrap_or(url),
+            _ => url,
+        };
+        redacted.push_str(prefix);
         redacted.push_str(if public_links.contains(&url) {
             url
         } else {
             "<redacted-url>"
         });
+        redacted.push_str(&token[url.len()..]);
         remaining = &remaining[url_end..];
     }
     redacted.push_str(remaining);

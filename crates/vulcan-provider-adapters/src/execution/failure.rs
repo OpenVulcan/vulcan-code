@@ -1034,7 +1034,10 @@ pub(crate) fn redact_exact_credential(value: &str, secret: &CredentialExecutionS
     if sensitive_value.is_empty() {
         value.to_string()
     } else {
-        value.replace(sensitive_value, "<redacted>")
+        value.replace(
+            sensitive_value,
+            crate::provider_tool_execution::REDACTED_PROVIDER_CREDENTIAL,
+        )
     }
 }
 

@@ -165,6 +165,88 @@ fn upstream_error_keeps_public_help_and_redacts_private_addresses() {
     }
 }
 
+/// Exercises complete URL redaction and help-link punctuation in both published HTTP error fields.
+/// 验证发布的两个 HTTP 错误字段都能完整脱敏 URL，并保留帮助链接旁的句号。
+#[test]
+fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
+    // help_link is the public URL approved for this upstream error.
+    // help_link 是此上游错误获准展示的公开网址。
+    let help_link = UPSTREAM_ERROR_PUBLIC_HELP_LINKS[0];
+    // secret can appear inside a URL before the HTTP body undergoes URL redaction.
+    // secret 可能出现在 URL 内部，且会先于 HTTP 正文的 URL 脱敏处理被替换。
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-request-key"))
+        .unwrap()
+        .execution_secret()
+        .unwrap();
+    // cases pair each upstream URL token with the text permitted through the diagnostic boundary.
+    // cases 为每个上游 URL 片段指定允许通过诊断边界的文本。
+    let cases = [
+        (format!("{help_link}."), format!("{help_link}.")),
+        (format!("{help_link}。"), format!("{help_link}。")),
+        (format!("({help_link})."), format!("({help_link}).")),
+        (format!("'{help_link}'"), format!("'{help_link}'")),
+        (
+            String::from("<https://blob.example.invalid/report(1).pdf?sig=fixture-sas-value>"),
+            String::from("<<redacted-url>>"),
+        ),
+        (
+            String::from("(https://[2001:db8::1]/report.pdf?sig=fixture-sas-value)"),
+            String::from("(<redacted-url>)"),
+        ),
+        (
+            String::from("https://owner:part(1)'fixture-password@blob.example.invalid/object"),
+            String::from("<redacted-url>"),
+        ),
+        (
+            String::from(
+                "https://owner:fixture-request-key@blob.example.invalid/object?sig=fixture-sas-value.",
+            ),
+            String::from("<redacted-url>."),
+        ),
+        (
+            format!("{help_link}(fixture-fragment-suffix)。"),
+            String::from("<redacted-url>。"),
+        ),
+        (
+            String::from(
+                "https://www.alibabacloud.com/help/en/model-studio/error-code?sig=fixture-sas-value#token-limit.",
+            ),
+            String::from("<redacted-url>."),
+        ),
+    ];
+    // Each diagnostic contains surrounding text so the assertions also detect accidental over-redaction.
+    // 每条诊断都带有前后文本，便于同时检出误删诊断内容的问题。
+    for (index, (input, expected)) in cases.iter().enumerate() {
+        // body models the upstream response before the HTTP boundary captures the failure summary.
+        // body 模拟 HTTP 边界记录失败摘要前的上游响应。
+        let body = serde_json::json!({ "error": { "message": format!("before {input} after") } });
+        // expected_message keeps only the allowed URL text or the stable redaction marker.
+        // expected_message 仅保留允许展示的网址文本或稳定的脱敏标记。
+        let expected_message = format!("before {expected} after");
+        // captured and published exercise the trace summary and the later session boundary.
+        // captured 与 published 分别覆盖追踪摘要和后续会话边界。
+        let captured = http_failure(
+            429,
+            None,
+            &redact_exact_credential(&body.to_string(), &secret),
+        );
+        assert_eq!(
+            captured.error.message, expected_message,
+            "trace case {index}"
+        );
+        let published = sanitize_provider_execution_failure(captured, &secret);
+        assert_eq!(
+            published.error.message, expected_message,
+            "session case {index}"
+        );
+        assert_eq!(
+            published.error.upstream_message.as_deref(),
+            Some(expected_message.as_str()),
+            "upstream case {index}"
+        );
+    }
+}
+
 /// Verifies a credential straddling the diagnostic length bound leaves no fragment behind.
 /// 验证跨越诊断长度上限的凭据不会留下任何片段。
 #[test]
