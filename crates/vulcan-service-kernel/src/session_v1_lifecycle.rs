@@ -939,7 +939,9 @@ async fn publish_recovery_draft_session_v1(
     document.apply_published_storage_metadata(&created.metadata)?;
     document.advance_durable(candidate.revision)?;
     let handle = SessionHandle::new(session_id, created.locator, document);
-    handle.initialize_root_usage(true, now_ms);
+    // Recovery publication already initialized usage before exposing the index.
+    // 恢复发布已在公开索引前初始化用量。
+    handle.initialize_root_usage(false, 0);
     reservation.publish(handle)?;
     Ok(session_id)
 }

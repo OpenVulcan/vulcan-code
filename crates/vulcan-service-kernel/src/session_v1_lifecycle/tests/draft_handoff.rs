@@ -2,6 +2,47 @@
 //! 实际提示词注册把待完成草稿关联到最终私有回执。
 
 use super::*;
+use vulcan_workspace_store::{
+    data_plane::prepare_application_schema_for_test,
+    local_database_runtime::LogicalDatabase,
+    local_sql::{execute_script_async, query_json_async},
+    workspace_store::{delete_active_project_row_v1, ensure_session_v1_storage_schema},
+};
+
+/// The exact project inserted into each isolated recovery database.
+/// 写入每个隔离恢复数据库的精确项目。
+const RECOVERY_PROJECT_ID: &str = "project-explicit";
+
+/// The draft and original timestamp that must survive a recovery retry.
+/// 恢复重试必须保留的草稿和原创建时间。
+const RECOVERY_TRANSCRIPT: &str = "User:\nOriginal question\n\nAssistant:\nOriginal answer";
+/// First publication time for the draft and its usage aggregate.
+/// 草稿及其累计用量的首次发布时间。
+const RECOVERY_CREATED_AT_MS: i64 = 1_787_788_800_000;
+
+/// Initializes the application schema and adds the exact recovery project's owner row.
+/// 初始化应用结构并写入恢复项目的精确归属记录。
+/// Returns after the fixture controller can resolve both the project and session index.
+/// 夹具控制器能够解析项目和会话索引后返回。
+async fn prepare_recovery_project(fixture: &LifecycleStorageFixture) {
+    prepare_application_schema_for_test(&fixture.controller)
+        .await
+        .unwrap();
+    ensure_session_v1_storage_schema(&fixture.controller)
+        .await
+        .unwrap();
+    execute_script_async(
+        &fixture.controller.local,
+        LogicalDatabase::AppState,
+        format!(
+            "INSERT INTO projects (id, name, root_path, created_at, updated_at)
+             VALUES ('{RECOVERY_PROJECT_ID}', 'Recovery project', 'recovery-fixture', '1', '1');"
+        ),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+}
 
 /// Verifies that recovery publishes an unsent, text-only draft with the chosen first-request route.
 /// 验证恢复操作发布带有指定首次请求路由且尚未发送的纯文本草稿。
@@ -10,6 +51,7 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
     // Use the real index and a second registry to exercise cold load.
     // 使用真实索引和第二个注册表验证冷加载。
     let fixture = LifecycleStorageFixture::start().await;
+    prepare_recovery_project(&fixture).await;
     let registry = SessionRuntimeRegistry::default();
     let selection = vulcan_provider_adapters::ActiveAiModelSelection {
         provider_id: "deepseek".into(),
@@ -24,7 +66,7 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
         &registry,
         requested_session_id,
         std::future::ready(Ok(RecoveryDraftSessionV1 {
-            project_id: "project-explicit".into(),
+            project_id: RECOVERY_PROJECT_ID.into(),
             title: "Recovered conversation".into(),
             text: transcript.into(),
             selection: selection.clone(),
@@ -47,7 +89,7 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
     .unwrap();
     assert_eq!(retry, session_id);
     assert_eq!(
-        list_active_sessions_v1(&fixture.controller, "project-explicit")
+        list_active_sessions_v1(&fixture.controller, RECOVERY_PROJECT_ID)
             .await
             .unwrap()
             .len(),
@@ -97,18 +139,14 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
     fixture.shutdown().await;
 }
 
-/// Verifies that an index retry across a cold load publishes the exact first recovery draft.
-/// 验证冷加载后的索引重试发布精确的首次恢复草稿。
-#[tokio::test]
-async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() {
-    use vulcan_workspace_store::{
-        local_database_runtime::LogicalDatabase, local_sql::execute_script_async,
-        workspace_store::ensure_session_v1_storage_schema,
-    };
-
-    let fixture = LifecycleStorageFixture::start().await;
+/// Leaves one published draft without a locator by failing the real SQLite insert.
+/// 通过拒绝实际 SQLite 插入保留一份已发布但缺少定位记录的草稿。
+/// Returns the original session id and model selection after removing the injected failure.
+/// 撤销注入失败后返回原会话 ID 和模型选择。
+async fn publish_unindexed_recovery(
+    fixture: &LifecycleStorageFixture,
+) -> (SessionId, vulcan_provider_adapters::ActiveAiModelSelection) {
     let controller = &fixture.controller;
-    ensure_session_v1_storage_schema(controller).await.unwrap();
     // Fail the actual SQLite insert, after the store's atomic directory publication.
     // 让实际 SQLite 插入在存储层原子发布目录后失败。
     execute_script_async(
@@ -121,9 +159,6 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
     .await
     .unwrap();
     let session_id = SessionId::new_v4();
-    let project_id = "recovery-index-project";
-    let transcript = "User:\nOriginal question\n\nAssistant:\nOriginal answer";
-    let created_at_ms = 1_787_788_800_000;
     let selection = vulcan_provider_adapters::ActiveAiModelSelection {
         provider_id: "deepseek".into(),
         model_id: "deepseek-flash".into(),
@@ -135,11 +170,11 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
         &first_registry,
         session_id,
         std::future::ready(Ok(RecoveryDraftSessionV1 {
-            project_id: project_id.into(),
+            project_id: RECOVERY_PROJECT_ID.into(),
             title: "First recovery".into(),
-            text: transcript.into(),
+            text: RECOVERY_TRANSCRIPT.into(),
             selection: selection.clone(),
-            now_ms: created_at_ms,
+            now_ms: RECOVERY_CREATED_AT_MS,
         })),
     )
     .await
@@ -159,7 +194,34 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
     )
     .await
     .unwrap();
-    drop(first_registry);
+    (session_id, selection)
+}
+
+/// Verifies a cold retry restores the original draft and can persist new usage.
+/// 验证冷重试恢复原草稿且能持久化新增用量。
+#[tokio::test]
+async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() {
+    use vulcan_session_core::v1::lifetime_usage::SessionUsageBucket;
+
+    let fixture = LifecycleStorageFixture::start().await;
+    prepare_recovery_project(&fixture).await;
+    let controller = &fixture.controller;
+    let (session_id, selection) = publish_unindexed_recovery(&fixture).await;
+    // Model a draft left by a build that published its session tree before writing usage.
+    // 模拟旧构建先发布会话目录树、尚未写入用量时留下的草稿。
+    let project_directory = vulcan_workspace_store::workspace_store::project_resource_directory_v1(
+        &controller.data_root,
+        SESSION_V1_STORAGE_PARTITION,
+        RECOVERY_PROJECT_ID,
+    )
+    .unwrap();
+    let bucket = session_v1_date_bucket(RECOVERY_CREATED_AT_MS).unwrap();
+    std::fs::remove_file(
+        project_directory
+            .join(format!("{bucket}-{session_id}"))
+            .join("usage.json"),
+    )
+    .unwrap();
     let reload_registry = SessionRuntimeRegistry::default();
     // The source is deliberately unavailable on retry to prove the first tree is authoritative.
     // 重试时特意让来源不可用，以证明首次目录树是权威。
@@ -175,7 +237,7 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
     .unwrap();
     assert_eq!(retry, session_id);
     assert_eq!(
-        list_active_sessions_v1(controller, project_id)
+        list_active_sessions_v1(controller, RECOVERY_PROJECT_ID)
             .await
             .unwrap()
             .len(),
@@ -186,8 +248,11 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
         .unwrap();
     session
         .read(|document| {
-            assert_eq!(document.metadata.created_at_ms, created_at_ms);
-            assert_eq!(document.metadata.input_state.draft.text, transcript);
+            assert_eq!(document.metadata.created_at_ms, RECOVERY_CREATED_AT_MS);
+            assert_eq!(
+                document.metadata.input_state.draft.text,
+                RECOVERY_TRANSCRIPT
+            );
             assert!(document.events().is_empty());
         })
         .unwrap();
@@ -196,6 +261,76 @@ async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() 
         route.connection_id.as_deref(),
         Some(selection.connection_id.as_str())
     );
+    // Record an actual request increment through the same owner used by provider terminal settlement.
+    // 通过供应商终态结算使用的同一所有者记录一次请求增量。
+    let usage = session.lifetime_usage_snapshot().unwrap();
+    assert_eq!(usage.updated_at_ms, RECOVERY_CREATED_AT_MS);
+    assert_eq!(usage.main.request_count, 0);
+    session.record_lifetime_usage(
+        &SessionUsageBucket {
+            request_count: 1,
+            ..SessionUsageBucket::default()
+        },
+        RECOVERY_CREATED_AT_MS + 1,
+    );
+    // Hydrate a fresh registry to prove that the count was persisted, not merely cached.
+    // 水合新的注册表，证明计数已经持久化。
+    let later_registry = SessionRuntimeRegistry::default();
+    let later = get_or_load_session_v1(controller, &later_registry, retry)
+        .await
+        .unwrap();
+    assert_eq!(
+        later.lifetime_usage_snapshot().unwrap().main.request_count,
+        1
+    );
+    fixture.shutdown().await;
+}
+
+/// Verifies project removal cancels index publication without writing a locator or list state.
+/// 验证项目移除会拒绝索引发布，不写定位记录或列表状态。
+#[tokio::test]
+async fn reasoning_recovery_rejects_index_retry_after_project_removal() {
+    let fixture = LifecycleStorageFixture::start().await;
+    prepare_recovery_project(&fixture).await;
+    let controller = &fixture.controller;
+    let (session_id, _) = publish_unindexed_recovery(&fixture).await;
+    delete_active_project_row_v1(controller, RECOVERY_PROJECT_ID)
+        .await
+        .unwrap();
+    let registry = SessionRuntimeRegistry::default();
+    let error = create_or_get_recovery_draft_session_v1(
+        controller,
+        &registry,
+        session_id,
+        std::future::ready(Err("The published draft must not be rebuilt.".into())),
+    )
+    .await
+    .unwrap_err();
+    // Assert the typed store error as rendered at the lifecycle boundary.
+    // 断言类型化存储错误在生命周期边界的渲染结果。
+    assert_eq!(
+        error,
+        vulcan_workspace_store::workspace_store::SessionIndexV1Error::RecoveryProjectMissing {
+            session_id: session_id.to_string(),
+            project_id: RECOVERY_PROJECT_ID.into(),
+        }
+        .to_string(),
+    );
+    assert!(
+        locate_optional_session_v1_storage(controller, &session_id.to_string())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let list_state = query_json_async(
+        &controller.local,
+        LogicalDatabase::AppState,
+        "SELECT session_id FROM session_list_state_v1;",
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_state.row_count, 0);
     fixture.shutdown().await;
 }
 use vulcan_agent_runtime::{

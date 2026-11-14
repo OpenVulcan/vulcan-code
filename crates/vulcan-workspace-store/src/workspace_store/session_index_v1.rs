@@ -88,6 +88,16 @@ pub enum SessionIndexV1Error {
         /// 缺失的会话 ID。
         session_id: String,
     },
+    /// A recovery draft cannot be indexed because its project was removed.
+    /// 所属项目已移除，无法为恢复草稿写入索引。
+    RecoveryProjectMissing {
+        /// Recovery session whose index was rejected.
+        /// 索引写入被拒绝的恢复会话。
+        session_id: String,
+        /// Removed project that owned the draft.
+        /// 原来持有草稿的已移除项目。
+        project_id: String,
+    },
     /// A strict unique index rejected the insertion.
     /// 严格唯一索引拒绝了插入。
     Conflict {
@@ -137,6 +147,13 @@ impl std::fmt::Display for SessionIndexV1Error {
                     "session_index_v1 row is missing for {session_id}"
                 )
             }
+            Self::RecoveryProjectMissing {
+                session_id,
+                project_id,
+            } => write!(
+                formatter,
+                "Cannot publish recovery session {session_id}: project {project_id} no longer exists."
+            ),
             Self::Conflict {
                 field,
                 value,
@@ -399,7 +416,13 @@ pub async fn insert_session_index_v1(
         &host_runtime.local,
         LogicalDatabase::AppState,
         move |connection| {
-            insert_session_index_v1_rows(connection, &inserted, dedicated)
+            // Ordinary session creation keeps its existing index publication boundary.
+            // 普通会话创建沿用已有的索引发布边界。
+            let transaction = connection
+                .transaction()
+                .map_err(|error| error.to_string())?;
+            insert_session_index_v1_rows(&transaction, &inserted, dedicated)
+                .and_then(|()| transaction.commit())
                 .map_err(|error| error.to_string())
         },
     )
@@ -412,14 +435,65 @@ pub async fn insert_session_index_v1(
     }
 }
 
-/// Writes the locator row and optional dedicated marker atomically on one connection.
-/// 在同一连接上原子写入定位记录与可选的专职标记。
+/// Publishes the exact recovery row and list state only while the owning project exists.
+/// 仅在所属项目仍存在时发布精确恢复索引行和列表状态。
+/// The host owns the APP database and row describes a verified unindexed recovery tree.
+/// 宿主持有 APP 数据库，row 描述已校验的未索引恢复目录树。
+/// Returns a project-missing error or the existing index failure for an unsuccessful publication.
+/// 发布失败时返回项目缺失错误或既有索引错误。
+pub(super) async fn insert_recovery_session_index_v1(
+    host_runtime: &HostRuntimeHandle,
+    row: &SessionIndexV1Row,
+) -> Result<(), SessionIndexV1Error> {
+    // Keep the exact prepared row across the blocking database boundary.
+    // 在阻塞数据库边界保留精确的待发布索引行。
+    let inserted = row.clone();
+    let execution = local_sql::with_connection_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        move |connection| {
+            // Take the write reservation before reading so project removal cannot race the insert.
+            // 读取前获取写入预留，使项目移除不能与插入竞争。
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|error| error.to_string())?;
+            let project_exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM projects WHERE id = ?1);",
+                    [inserted.project_id.as_str()],
+                    |result| result.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if !project_exists {
+                return Ok(Err(SessionIndexV1Error::RecoveryProjectMissing {
+                    session_id: inserted.session_id,
+                    project_id: inserted.project_id,
+                }));
+            }
+            insert_session_index_v1_rows(&transaction, &inserted, false)
+                .and_then(|()| transaction.commit())
+                .map_err(|error| error.to_string())?;
+            Ok(Ok(()))
+        },
+    )
+    .await;
+    match execution {
+        Ok(result) => result,
+        Err(detail) => {
+            Err(classify_failed_session_index_v1_insert(host_runtime, row, detail).await)
+        }
+    }
+}
+
+/// Adds the locator, list state, and optional dedicated marker to the caller's transaction.
+/// 向调用方事务添加定位记录、列表状态及可选的专职标记。
+/// The row describes the session; dedicated selects its marker; any write failure aborts publication.
+/// row 描述会话；dedicated 指定是否写入专职标记；任意写入失败均中止发布。
 fn insert_session_index_v1_rows(
-    connection: &mut rusqlite::Connection,
+    transaction: &rusqlite::Transaction<'_>,
     row: &SessionIndexV1Row,
     dedicated: bool,
 ) -> rusqlite::Result<()> {
-    let transaction = connection.transaction()?;
     let inserted = transaction.execute(
         STRICT_INSERT_SESSION_INDEX_V1_SQL,
         rusqlite::params![
@@ -454,7 +528,7 @@ fn insert_session_index_v1_rows(
             return Err(rusqlite::Error::StatementChangedRows(marked));
         }
     }
-    transaction.commit()
+    Ok(())
 }
 
 /// Sets or clears the floating-assistant projection of one dedicated session.

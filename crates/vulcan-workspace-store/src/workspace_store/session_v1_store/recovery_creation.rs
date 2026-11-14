@@ -2,6 +2,10 @@
 //! 续接一次显式重试的恢复会话索引发布。
 
 use super::*;
+use crate::workspace_store::{
+    session_index_v1::insert_recovery_session_index_v1,
+    session_usage::ensure_recovery_session_lifetime_usage,
+};
 use uuid::Uuid;
 
 /// The versioned directory holds only pending recovery index rows, addressed by operation UUID.
@@ -30,8 +34,8 @@ pub async fn create_indexed_recovery_session_v1(
         &row,
         "recovery index preparation",
     )?;
-    let created = publish_indexed_session_creation(host_runtime, request, row).await?;
-    retire_recovery_index_preparation(&pending_path);
+    let created = create_session_v1_tree(&host_runtime.data_root, request, &row)?;
+    publish_recovery_index(host_runtime, &row, &created.locator, &pending_path).await?;
     Ok(created)
 }
 
@@ -106,9 +110,29 @@ pub async fn resume_recovery_session_index_v1(
         )
         .into());
     }
-    insert_session_index_v1(host_runtime, &row, false).await?;
-    retire_recovery_index_preparation(&pending_path);
+    publish_recovery_index(host_runtime, &row, &locator, &pending_path).await?;
     Ok(true)
+}
+
+/// Completes usage and index publication for the verified initial recovery tree.
+/// 为已校验的初始恢复目录树完成用量和索引发布。
+/// The host owns SQLite, row and locator identify the tree, and pending_path is its retry record.
+/// 宿主持有 SQLite，索引行和定位器标识目录树，pending_path 是其重试记录。
+/// Returns success only after usage and the project-checked index are durable.
+/// 仅在用量和通过项目校验的索引均可靠落盘后返回成功。
+async fn publish_recovery_index(
+    host_runtime: &HostRuntimeHandle,
+    row: &SessionIndexV1Row,
+    locator: &SessionV1StorageLocator,
+    pending_path: &Path,
+) -> Result<(), SessionV1StoreError> {
+    // An index observer can cold-load immediately after commit, so usage must be ready first.
+    // 索引观察者可在提交后立即冷加载，因此必须先准备好用量。
+    ensure_recovery_session_lifetime_usage(locator, row.created_at_ms)
+        .map_err(|error| SessionV1StorageError::io(locator.session_directory(), error))?;
+    insert_recovery_session_index_v1(host_runtime, row).await?;
+    retire_recovery_index_preparation(pending_path);
+    Ok(())
 }
 
 /// Returns the pending row path for session_id under the host's session root.

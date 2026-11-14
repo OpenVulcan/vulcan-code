@@ -1526,6 +1526,22 @@ where
     F: FnOnce(SessionIndexV1Row) -> Fut,
     Fut: Future<Output = Result<(), SessionIndexV1Error>>,
 {
+    let created = create_session_v1_tree(data_root, request, &row)?;
+    insert(row).await?;
+    Ok(created)
+}
+
+/// Publishes or verifies the exact initial tree shared by both creation paths.
+/// 发布或校验两条创建路径共用的精确初始目录树。
+/// The root and row address the files, and request owns their expected initial content.
+/// 根目录和索引行定位文件，request 持有预期的初始内容。
+/// Returns the verified locator and metadata before any index publication.
+/// 在发布索引之前返回已校验的定位器和元数据。
+fn create_session_v1_tree(
+    data_root: &Path,
+    request: &CreateSessionV1Request<'_>,
+    row: &SessionIndexV1Row,
+) -> Result<CreatedSessionV1, SessionV1StoreError> {
     let locator = storage_locator_from_row(data_root, row.clone())?;
     let verify_existing = || {
         verify_existing_session_creation(
@@ -1554,7 +1570,6 @@ where
             Err(error) => return Err(error.into()),
         }
     };
-    insert(row).await?;
     Ok(CreatedSessionV1 { locator, metadata })
 }
 
