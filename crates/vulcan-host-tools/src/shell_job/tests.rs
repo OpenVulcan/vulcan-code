@@ -406,6 +406,25 @@ async fn detached_job_outlives_the_foreground_timeout_and_leaves_a_notice() {
     assert!(records[0].background);
 }
 
+/// Rejects an unrepresentable deadline before creating a job directory.
+/// 拒绝不可表示的截止时间，且不创建任务目录。
+#[tokio::test]
+async fn invalid_deadline_leaves_job_directory_uncreated() {
+    // Use an absent directory so the assertion observes the logging side effect directly.
+    // 使用不存在的目录，直接观察写入日志的副作用。
+    let temp = tempfile::tempdir().expect("temp dir");
+    let jobs = temp.path().join("jobs");
+    let runtime = ShellJobRuntime::new();
+    assert!(matches!(
+        runtime.spawn(
+            request(&jobs, "s1", false, Some(Duration::MAX)),
+            shell("exit 0"),
+        ),
+        Err(ShellJobSpawnError::TimeoutOutOfRange)
+    ));
+    assert!(!jobs.exists());
+}
+
 /// A job started in the background keeps its timeout; stop ends another job.
 /// 以后台方式启动的任务保留其超时；停止请求结束另一个任务。
 #[tokio::test]

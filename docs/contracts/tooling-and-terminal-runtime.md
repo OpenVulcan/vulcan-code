@@ -27,6 +27,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 ## 二、`shell_command`
 
 - `timeout_ms` 省略表示无限等待，直到进程自然退出；显式传入时必须 ≥ 1，传 `0` 返回参数错误。
+  当前平台无法表示截止时间时，在创建任务日志和启动子进程前返回错误。
 - 省略 `stdin` 表示空输入（立即 EOF），不继承服务进程的标准输入；提供时以 UTF-8 字节一次写入后关闭。
   Windows 上的 PowerShell 默认按控制台代码页（如 936）解码 `[Console]::In`，并按 `$OutputEncoding`
   编码管道给原生程序的文本，非 ASCII 内容会乱码。因此提供 `stdin` 且 Shell 为 `pwsh`/`powershell` 时，
