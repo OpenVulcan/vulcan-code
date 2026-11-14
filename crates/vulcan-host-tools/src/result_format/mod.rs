@@ -177,8 +177,8 @@ struct OverflowChunk {
 ///
 /// # Returns
 /// # 返回值
-/// Returns rendered text on success, or the exact budget, spill-path, clock, or write failure.
-/// 成功时返回渲染文本；失败时返回精确的预算、超限路径、时钟或写入错误。
+/// Returns rendered text, or the exact budget, template-read, spill-path or write failure.
+/// 成功时返回渲染文本；失败时返回精确的预算、模板读取、超限路径或写入错误。
 pub fn render_tool_result_text(
     output: &HostTextRenderInput,
     skill_name: Option<&str>,
@@ -244,8 +244,8 @@ fn resolve_template_name(explicit_template_name: Option<&str>, mode: OverflowMod
 ///
 /// # Returns
 /// # 返回值
-/// Returns normalized or truncated text, or the exact host-budget error.
-/// 返回规范化或截断后的文本，或精确的宿主预算错误。
+/// Returns normalized or truncated text, or the exact host-budget or template-read error.
+/// 返回规范化或截断后的文本，或精确的宿主预算或模板读取错误。
 fn render_truncate_text(
     output: &HostTextRenderInput,
     skill_name: Option<&str>,
@@ -285,8 +285,8 @@ fn render_truncate_text(
 ///
 /// # Returns
 /// # 返回值
-/// Returns inline text or a page pointer, or the exact chunk-planning and persistence failure.
-/// 返回内联文本或分页指针，或精确的分块规划与持久化失败。
+/// Returns inline text or a page pointer, or the exact chunk-planning, template-read or persistence failure.
+/// 返回内联文本或分页指针，或精确的分块规划、模板读取或持久化失败。
 fn render_page_text(
     output: &HostTextRenderInput,
     skill_name: Option<&str>,
