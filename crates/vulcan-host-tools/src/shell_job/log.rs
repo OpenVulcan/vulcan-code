@@ -26,7 +26,7 @@ use super::{SHELL_JOB_LOG_HEAD_BYTES, SHELL_JOB_LOG_LIMIT_BYTES, SHELL_JOB_LOG_S
 
 /// Longest part of one line read for display or matching; the rest is skipped and reported.
 /// 为显示或匹配读取的单行最长部分；其余部分跳过并报告。
-const LOG_LINE_READ_CAP_BYTES: usize = 64 * 1024;
+pub(super) const LOG_LINE_READ_CAP_BYTES: usize = 64 * 1024;
 
 /// File extension of one log segment.
 /// 单个日志分段的文件扩展名。
@@ -484,7 +484,7 @@ impl ShellJobLogReader {
         let raw = self.read_range(window_start, self.total_bytes)?;
         let start_in_window = (start - window_start) as usize;
         let bytes = &raw[start_in_window..];
-        let spans = redaction.find(&raw)?;
+        let spans = redaction.find(&raw, run_start > 0 && window_start == run_start, false)?;
         // starts_at_line is true when the first byte begins a line.
         // starts_at_line 在第一个字节是行首时为 true。
         let starts_at_line = start == 0 || (start == run_start && run_index == 0);
@@ -762,7 +762,11 @@ impl ShellJobLogReader {
                                 // 此连续段内后续的短行复用已扫描的窗口。
                                 let end = (last + LOG_LINE_READ_CAP_BYTES as u64).min(run_end);
                                 let raw = self.read_range(first, end)?;
-                                let spans = redaction.find(&raw)?;
+                                let spans = redaction.find(
+                                    &raw,
+                                    run_start > 0 && first == run_start,
+                                    run_end < self.total_bytes && end == run_end,
+                                )?;
                                 window = Some(RedactionWindow {
                                     start: first,
                                     raw,

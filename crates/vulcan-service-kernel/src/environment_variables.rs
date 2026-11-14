@@ -929,6 +929,8 @@ mod tests {
         )
         .expect("initialize the application schema");
         let locator = fixture.v1_storage_locator();
+        let tail_fragment = "history-tail-fragment";
+        let tail_suffix = tail_fragment.repeat(128);
         save_session_environment(
             &locator,
             &[
@@ -942,6 +944,13 @@ mod tests {
                 SessionEnvironmentVariable {
                     name: String::from("VULCAN_ENV_MULTILINE"),
                     value: String::from("synthetic-first-fragment\nsynthetic-second-fragment"),
+                    kind: EnvironmentVariableKind::Secret,
+                    description: String::new(),
+                    updated_at_ms: 1,
+                },
+                SessionEnvironmentVariable {
+                    name: String::from("VULCAN_ENV_TAIL"),
+                    value: format!("tail-head{tail_suffix}"),
                     kind: EnvironmentVariableKind::Secret,
                     description: String::new(),
                     updated_at_ms: 1,
@@ -1001,19 +1010,24 @@ mod tests {
             "{prefix}synthetic-history-value synthetic-project-history-value synthetic-global-history-value\nleft synthetic-first-fragment\nsynthetic-second-fragment right\n"
         );
         std::fs::write(fixture.data_root().join("fixture.log"), line).unwrap();
-        #[cfg(windows)]
-        let mut child = {
-            let mut command = tokio::process::Command::new("cmd.exe");
-            command.args(["/D", "/C", "type fixture.log"]);
+        // Build a fresh process per job to exercise log capture, persistence and the RPC reader.
+        // 每个任务创建独立进程，覆盖日志捕获、持久化和 RPC 读取。
+        let fixture_process = || {
+            #[cfg(windows)]
+            let mut command = {
+                let mut command = tokio::process::Command::new("cmd.exe");
+                command.args(["/D", "/C", "type fixture.log"]);
+                command
+            };
+            #[cfg(not(windows))]
+            let mut command = {
+                let mut command = tokio::process::Command::new("cat");
+                command.arg("fixture.log");
+                command
+            };
+            command.current_dir(fixture.data_root());
             command
         };
-        #[cfg(not(windows))]
-        let mut child = {
-            let mut command = tokio::process::Command::new("cat");
-            command.arg("fixture.log");
-            command
-        };
-        child.current_dir(fixture.data_root());
         let job = runtime
             .spawn(
                 ShellJobSpawn {
@@ -1029,7 +1043,7 @@ mod tests {
                     timeout: Some(std::time::Duration::from_secs(10)),
                     capture_streams: false,
                 },
-                child,
+                fixture_process(),
             )
             .unwrap();
         assert_eq!(job.wait().await.status, ShellJobStatus::Completed);
@@ -1078,6 +1092,49 @@ mod tests {
                 );
             }
         }
+
+        // Place a synthetic value over the WebUI tail byte boundary of a second persisted job.
+        // 让第二个持久化任务的合成密钥跨过 WebUI 尾部字节边界。
+        let budget = crate::session_activity_services::SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES;
+        let filler = "x".repeat(budget - tail_suffix.len());
+        std::fs::write(
+            fixture.data_root().join("fixture.log"),
+            format!("tail-head{tail_suffix}{filler}"),
+        )
+        .unwrap();
+        let clipped = runtime
+            .spawn(
+                ShellJobSpawn {
+                    owner_session_id: session_id.to_string(),
+                    origin: None,
+                    command: "fixture command".into(),
+                    purpose: "fixture job".into(),
+                    shell_label: "fixture".into(),
+                    cwd: fixture.data_root().to_owned(),
+                    jobs_dir: locator.session_directory().join(SHELL_JOBS_DIRECTORY),
+                    stdin: None,
+                    background: false,
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                    capture_streams: false,
+                },
+                fixture_process(),
+            )
+            .unwrap();
+        assert_eq!(clipped.wait().await.status, ShellJobStatus::Completed);
+        let page = read_shell_job_output_rpc(
+            Arc::clone(&restarted),
+            session_id,
+            clipped.id(),
+            None,
+            None,
+            None,
+        )
+        .await;
+        let observed: String = page.rows.iter().map(|row| row.text.as_str()).collect();
+        assert!(page.has_earlier);
+        assert!(observed.contains(&"x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES)));
+        assert!(!observed.contains(tail_fragment));
+        assert!(observed.contains("[redacted:VULCAN_ENV_TAIL]"));
 
         // The model's host port must supply the same values, independently of the WebUI filter state.
         // 模型宿主端口须独立于 WebUI 过滤器状态，提供相同的值。

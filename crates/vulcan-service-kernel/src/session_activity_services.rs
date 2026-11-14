@@ -39,7 +39,7 @@ const SHELL_JOB_ACTIVITY_RECENT_LINES: usize = 3;
 
 /// Byte budget of one output page read by the activity panel.
 /// 活动面板读取的一页输出的字节预算。
-const SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES: usize = 4 * SHELL_OUTPUT_TAIL_BUDGET_BYTES;
+pub(crate) const SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES: usize = 4 * SHELL_OUTPUT_TAIL_BUDGET_BYTES;
 
 /// Latest tool calls shown for each subagent.
 /// 每个子代理显示的最近工具调用数。

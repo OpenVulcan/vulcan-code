@@ -91,6 +91,10 @@ impl crate::tooling::native::NativeEnvironmentHost for HistoryRedactionHost {
         Ok(vec![
             ("FIXTURE".into(), "fixture-head-fixture-tail".into()),
             (
+                "TAIL".into(),
+                format!("tail-head{}", "fixture-tail-fragment".repeat(128)),
+            ),
+            (
                 "MULTILINE".into(),
                 "synthetic-first-fragment\r\nsynthetic-second-fragment".into(),
             ),
@@ -241,6 +245,98 @@ async fn shell_job_filters_log_before_numbering_final_model_result() {
             assert_eq!(output.trim(), format!("{prefix}[redacted:FIXTURE]"));
         }
     }
+}
+
+/// Redacts a value whose beginning falls just outside the model's raw tail window.
+/// 密钥起点刚好落在模型原始尾部窗口之外时，仍遮蔽该值。
+#[tokio::test]
+async fn shell_job_redacts_tail_byte_boundary_in_final_model_result() {
+    use vulcan_host_tools::shell_job::{
+        SHELL_OUTPUT_LINE_WRAP_BYTES, SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobRuntime,
+        ShellJobSpawn, ShellJobStatus,
+    };
+
+    let session_id = Uuid::new_v4();
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(ShellJobRuntime::new());
+    // The synthetic fragment spans several display rows, including rows that survive the tail budget.
+    // 合成片段横跨多个显示行，包括尾部预算内保留下来的行。
+    let suffix = "fixture-tail-fragment".repeat(128);
+    let marker = "[redacted:TAIL]";
+    let filler = "x".repeat(SHELL_OUTPUT_TAIL_BUDGET_BYTES - suffix.len());
+    let line = format!("tail-head{suffix}{filler}");
+    std::fs::write(directory.path().join("fixture.log"), line).unwrap();
+    #[cfg(windows)]
+    let mut process = {
+        let mut command = tokio::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", "type fixture.log"]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut process = {
+        let mut command = tokio::process::Command::new("cat");
+        command.arg("fixture.log");
+        command
+    };
+    process.current_dir(directory.path());
+    let job = runtime
+        .spawn(
+            ShellJobSpawn {
+                owner_session_id: session_id.to_string(),
+                origin: None,
+                command: "fixture".into(),
+                purpose: "fixture".into(),
+                shell_label: "fixture".into(),
+                cwd: directory.path().to_owned(),
+                jobs_dir: directory.path().join("jobs"),
+                stdin: None,
+                background: false,
+                timeout: Some(std::time::Duration::from_secs(10)),
+                capture_streams: false,
+            },
+            process,
+        )
+        .unwrap();
+    assert_eq!(job.wait().await.status, ShellJobStatus::Completed);
+
+    // The same bounded projection is exercised directly and through the model formatter.
+    // 直接验证有界投影，并通过模型格式化链路验证同一路径。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let bridge = shell_job_model_bridge(session_id, runtime, &task_runtime);
+    let request = ToolInvocationRequest {
+        request_stream_id: "job-byte-boundary-stream".into(),
+        tool_call_id: "job-byte-boundary-call".into(),
+        tool_name: "shell_job".into(),
+        arguments: json!({"action": "read", "job_id": job.id()}),
+        argument_parse_error: None,
+        raw_arguments: Default::default(),
+        user_request: Default::default(),
+    };
+    install_test_invocation_identity(&bridge, &request, 101, 102, 105);
+    let result = bridge.execute_tool(&request).await.unwrap();
+    assert!(!result.is_error);
+    assert!(!result.model_output.contains("tail-head"));
+    assert!(!result.model_output.contains("fixture-tail-fragment"));
+    assert!(result.model_output.contains(marker));
+    assert!(
+        result
+            .model_output
+            .contains(&"x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES))
+    );
+
+    // A page that reaches a full match still shows its label.
+    // 分页读取完整匹配时仍显示其遮蔽标签。
+    let range = job
+        .log_reader()
+        .unwrap()
+        .read_lines_with_redaction(
+            1,
+            1,
+            usize::MAX,
+            &task_runtime.shell_job_log_redaction().unwrap(),
+        )
+        .unwrap();
+    assert!(range.rows.iter().any(|row| row.text.contains(marker)));
 }
 
 /// Returns the same model-facing terminal receipt after a stop, a retry, and a cold reload.

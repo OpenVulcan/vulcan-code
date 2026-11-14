@@ -13,8 +13,8 @@ pub struct ShellJobLogRedaction {
     /// Values in registry order, with a longer value taking priority at the same start.
     /// 按注册表顺序保存的值，同一起点处优先匹配较长值。
     values: Vec<(String, String)>,
-    /// Bytes of adjacent raw context needed for matches that contain newlines.
-    /// 含换行符的匹配需要的相邻原始上下文字节数。
+    /// Bytes of adjacent raw context needed for a match cut at either window boundary.
+    /// 匹配在任一窗口边界被截断时需要的相邻原始上下文字节数。
     overlap: u64,
 }
 
@@ -28,7 +28,6 @@ impl ShellJobLogRedaction {
             .collect();
         let overlap = values
             .iter()
-            .filter(|(value, _)| value.contains('\n'))
             .map(|(value, _)| value.len().saturating_sub(1) as u64)
             .max()
             .unwrap_or_default();
@@ -51,7 +50,12 @@ impl ShellJobLogRedaction {
     /// 记录窗口内所有受保护的字节范围，包括互相重叠的匹配。
     /// The byte offsets stay aligned with the original log even when a match crosses a newline.
     /// 即使匹配跨过换行，字节偏移仍与原始日志对齐。
-    pub(crate) fn find<'a>(&'a self, raw: &[u8]) -> io::Result<Vec<LogRedactionSpan<'a>>> {
+    pub(crate) fn find<'a>(
+        &'a self,
+        raw: &[u8],
+        missing_before: bool,
+        missing_after: bool,
+    ) -> io::Result<Vec<LogRedactionSpan<'a>>> {
         if self.is_empty() {
             return Ok(Vec::new());
         }
@@ -86,6 +90,24 @@ impl ShellJobLogRedaction {
                         .len_utf8();
             }
         }
+        // At a retention gap the missing bytes cannot be checked for a crossing match.
+        // 滚动保留产生缺口时，无法用缺失字节判断是否有跨缺口的匹配。
+        let margin = (self.overlap as usize).min(text.len());
+        if missing_before {
+            let end = text.ceil_char_boundary(margin);
+            spans.push(LogRedactionSpan {
+                bytes: start..start + end,
+                replacement: "[redacted]",
+            });
+        }
+        if missing_after {
+            let begin = text.floor_char_boundary(text.len() - margin);
+            spans.push(LogRedactionSpan {
+                bytes: start + begin..start + text.len(),
+                replacement: "[redacted]",
+            });
+        }
+
         spans.sort_unstable_by_key(|span| (span.bytes.start, std::cmp::Reverse(span.bytes.end)));
         let mut merged: Vec<LogRedactionSpan<'_>> = Vec::new();
         for span in spans {
