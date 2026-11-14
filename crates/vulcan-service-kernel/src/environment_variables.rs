@@ -38,7 +38,7 @@ use vulcan_workspace_store::workspace_store::{
 };
 
 use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
-use crate::{ServiceBridgeState, SharedServiceBridgeState};
+use crate::{ServiceBridgeState, SharedServiceBridgeState, TaskRuntime};
 
 /// Serializes read-modify-write cycles of session environment files within this process.
 /// 在本进程内串行化会话环境文件的读取-修改-写入周期。
@@ -218,15 +218,26 @@ pub(crate) async fn session_effective_environment(
     session_id: SessionId,
 ) -> Result<Vec<EffectiveEnvironmentVariable>, String> {
     let root = crate::tool_permission_host::root_session_of(registry, session_id)?;
-    let (database, project_id) = database_and_project(state, root)?;
-    let records = list_environment_variables(&database).await?;
     let locator = crate::session_goal_lifecycle::registered_session_v1_handle(registry, root)?
         .storage_locator()
         .map_err(|error| error.to_string())?;
-    let session = load_session_environment(&locator)?;
+    effective_environment_at(state, &locator).await
+}
+
+/// Resolves the existing environment layers for a root session with a verified storage locator.
+/// 为具有已校验存储定位器的根会话解析现有环境变量层。
+async fn effective_environment_at(
+    state: &SharedServiceBridgeState,
+    locator: &vulcan_workspace_store::workspace_store::SessionV1StorageLocator,
+) -> Result<Vec<EffectiveEnvironmentVariable>, String> {
+    // The indexed locator retains the project even when the workspace view omits the session.
+    // 即使工作区视图不包含该会话，已索引的定位器仍保留所属项目。
+    let database = database_of(state)?;
+    let records = list_environment_variables(&database).await?;
+    let session = load_session_environment(locator)?;
     Ok(resolve_effective_environment(
         &records,
-        project_id.as_deref(),
+        Some(locator.project_id()),
         &session,
     ))
 }
@@ -636,6 +647,22 @@ async fn session_locator(
     Ok((root, locator))
 }
 
+/// Registers the environment that applies to an owned job before stored text is projected.
+/// 在投影已存储文本之前，登记适用于该归属任务的环境变量。
+pub(crate) async fn register_activity_environment_secrets(
+    state: &SharedServiceBridgeState,
+    raw_session_id: &str,
+    task_runtime: &TaskRuntime,
+) -> Result<(), String> {
+    let (_, locator) = session_locator(state, raw_session_id).await?;
+    for variable in effective_environment_at(state, &locator).await? {
+        if variable.kind == EnvironmentVariableKind::Secret {
+            task_runtime.register_environment_secret(&variable.name, &variable.value)?;
+        }
+    }
+    Ok(())
+}
+
 /// Projects one stored variable for the manager; a secret value is never sent.
 /// 为管理器投影一条存储变量；密钥值从不发送。
 fn entry_from_record(record: &EnvironmentVariableRecord) -> EnvironmentVariableEntry {
@@ -702,6 +729,92 @@ mod tests {
             ..record
         };
         assert_eq!(entry_from_record(&plain).value, "secret-value");
+    }
+
+    /// Registers stored session and project secrets on the first history read after startup.
+    /// 重启后首次读取历史记录时，登记已存储的会话和项目密钥。
+    #[tokio::test]
+    async fn historical_job_redaction_registers_cold_session_secrets() {
+        use crate::tests::test_support::{
+            TestHostRuntimeRoot, test_service_state_with_parent_session,
+        };
+
+        use vulcan_workspace_store::{
+            data_plane::build_application_schema_script, local_database_runtime::LogicalDatabase,
+            local_sql,
+        };
+
+        // Store only synthetic values in an isolated indexed session.
+        // 仅在隔离的已索引会话中保存合成值。
+        let session_id = SessionId::new_v4();
+        let fixture = TestHostRuntimeRoot::new(session_id);
+        let controller = fixture.attached_host_runtime_handle().await;
+        local_sql::execute_script(
+            &controller.local,
+            LogicalDatabase::AppState,
+            build_application_schema_script(),
+            &[],
+        )
+        .expect("initialize the application schema");
+        let locator = fixture.v1_storage_locator();
+        save_session_environment(
+            &locator,
+            &[SessionEnvironmentVariable {
+                name: String::from("VULCAN_ENV_FIXTURE"),
+                value: String::from("synthetic-history-value"),
+                kind: EnvironmentVariableKind::Secret,
+                description: String::new(),
+                updated_at_ms: 1,
+            }],
+        )
+        .unwrap();
+
+        // Bind a project secret to the authoritative project of the indexed session.
+        // 将项目密钥绑定到已索引会话的权威项目。
+        let project = vulcan_workbench_model::TaskProjectSummary::new(
+            locator.project_id(),
+            "Fixture",
+            fixture.data_root().to_string_lossy(),
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        );
+        vulcan_workspace_store::workspace_store::persist_new_project(controller.clone(), &project)
+            .await
+            .unwrap();
+        create_environment_variable(
+            &controller,
+            EnvironmentVariableDraft {
+                name: String::from("VULCAN_ENV_PROJECT_FIXTURE"),
+                value: String::from("synthetic-project-history-value"),
+                kind: EnvironmentVariableKind::Secret,
+                description: String::new(),
+                scope: EnvironmentVariableScope::Projects(vec![locator.project_id().to_owned()]),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Start with no workspace projection or registered session, as during a cold read.
+        // 清除工作区投影并使用空会话注册表，以模拟冷启动读取。
+        let mut restarted = test_service_state_with_parent_session(session_id);
+        restarted.workspace_snapshot = None;
+        restarted.controller_runtime = Some(controller);
+        let restarted = Arc::new(std::sync::Mutex::new(restarted));
+        let runtime = TaskRuntime::new();
+        register_activity_environment_secrets(&restarted, &session_id.to_string(), &runtime)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .redact_sensitive_text(
+                    "before synthetic-history-value synthetic-project-history-value after"
+                )
+                .unwrap(),
+            "before [redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_PROJECT_FIXTURE] after",
+        );
     }
 
     /// Every layer key round-trips and unknown keys are refused.

@@ -60,8 +60,10 @@ Vulcan 把它们注入代理启动的命令、终端与 MCP 服务；AI 通过 `
    或多个变量。
 2. **模式与会话限制。** 计划模式只允许 `list`；子代理可用 `list` 与 `set_session`，不能 `request`；无人值守
    会话拒绝 `request`。
-3. **脱敏。** 每次解析有效变量时登记全部密钥值，工具结果中长度不少于
-   `ENVIRONMENT_SECRET_REDACTION_MIN_CHARS` 的密钥值替换为 `[redacted:NAME]`。
+3. **脱敏。** 每次解析有效变量时登记全部密钥值。读取历史 shell 任务时，WebUI 和模型侧工具先解析
+   任务所属会话的当前有效环境，项目归属以持久化的会话定位器为准。会话日志的脱敏服务未就绪时返回错误。
+   工具结果中长度不少于 `ENVIRONMENT_SECRET_REDACTION_MIN_CHARS` 的密钥值替换为 `[redacted:NAME]`。
+   已轮换或删除的旧值可能留在历史日志中，重启后只能从当前存储的变量补齐脱敏登记。
 
 ## 取值请求
 

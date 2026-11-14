@@ -95,8 +95,23 @@ impl ShellJobSessionContext {
     fn redact(&self, text: &str) -> Result<String, String> {
         match &self.task_runtime {
             Some(task_runtime) => task_runtime.redact_sensitive_text(text),
-            None => Ok(text.to_string()),
+            None => Err(String::from("Shell job output redaction is not ready.")),
         }
+    }
+
+    /// Loads the owning environment before projecting persisted job text.
+    /// 在投影持久化任务文本前，加载任务归属会话的环境。
+    async fn prepare_redaction(&self, state: &SharedServiceBridgeState) -> Result<(), String> {
+        let task_runtime = self
+            .task_runtime
+            .as_deref()
+            .ok_or_else(|| String::from("Shell job output redaction is not ready."))?;
+        crate::environment_variables::register_activity_environment_secrets(
+            state,
+            &self.owner,
+            task_runtime,
+        )
+        .await
     }
 }
 
@@ -146,6 +161,7 @@ pub(crate) async fn service_list_shell_jobs(
     request: ShellJobListRequest,
 ) -> Result<ShellJobList, String> {
     let context = shell_job_session_context(&state, &request.session_id).await?;
+    context.prepare_redaction(&state).await?;
     let marks = load_session_activity_marks(&context.host_runtime, &context.owner).await?;
     let runtime = ShellJobRuntime::global();
     let summaries = runtime
@@ -274,6 +290,7 @@ pub(crate) async fn service_read_shell_job_output(
     request: ShellJobOutputRequest,
 ) -> Result<ShellJobOutputPage, String> {
     let context = shell_job_session_context(&state, &request.session_id).await?;
+    context.prepare_redaction(&state).await?;
     let runtime = ShellJobRuntime::global();
     let reader = runtime
         .open_log(&context.owner, &context.jobs_dir, &request.job_id)

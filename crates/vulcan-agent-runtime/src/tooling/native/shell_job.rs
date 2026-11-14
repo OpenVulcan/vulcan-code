@@ -205,6 +205,24 @@ async fn execute_shell_job_tool(
         .owner_session_id()
         .to_string();
     let args = parse_shell_job_arguments(request.arguments)?;
+    // Historical output may be the first tool result after a restart. Register the
+    // owning environment before any stored text reaches the normal result filter.
+    // 历史输出可能是重启后的首个工具结果，须在进入常规结果过滤器前登记归属会话环境。
+    if request.invocation_context.is_some() || request.session_id.is_some() {
+        // Scoped calls must have both a validated session and its redaction host.
+        // 有作用域的调用必须同时具备已校验的会话与脱敏宿主。
+        let session_id = request.session_id.ok_or_else(|| {
+            NativeToolError::new("Shell job output requires a valid session identity.")
+        })?;
+        let environment = request
+            .environment
+            .as_ref()
+            .ok_or_else(|| NativeToolError::new("Shell job output redaction is not ready."))?;
+        environment
+            .effective(session_id)
+            .await
+            .map_err(NativeToolError::new)?;
+    }
     let runtime = ShellJobRuntime::global();
     let jobs_dir = runtime.jobs_directory(&owner);
     let job_id = || {
