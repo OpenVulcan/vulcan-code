@@ -144,6 +144,28 @@ function shownTools(): (string | null)[] {
     .map((element) => element.getAttribute("data-tool"));
 }
 
+it.each(["plain first tool", "initially closed group"])("keeps the measured height after a shorter tool replaces the %s", async (start) => {
+  // jsdom has no layout. Measure the actual mounted card fixtures as a browser would.
+  // jsdom 不计算布局，按浏览器的方式测量实际挂载的卡片夹具。
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.querySelector('[data-tool="tall"]') ? 180 : 36;
+  });
+  try {
+    if (start === "initially closed group") await render([row("finished"), row("tall")]);
+    // history keeps the same group key as tools enter and leave its visible body.
+    // history 让工具进出可见正文时继续使用同一个分组键。
+    const history = start === "initially closed group" ? [row("finished")] : [];
+    await render([...history, row("tall", "running")]);
+    await render([...history, row("tall"), row("short", "running")]);
+    // body belongs to the live successor; its measured floor reserves the predecessor's height.
+    // body 属于当前后继卡片，其实测高度下限保留前一张卡片的空间。
+    const body = host.querySelector<HTMLElement>('[data-tool="short"]')?.closest<HTMLElement>(".vk-tool-seq-body");
+    expect(body?.style.getPropertyValue("--vk-tool-seq-min-h")).toBe("180px");
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
 it("keeps the last card between serial calls instead of closing and reopening the body", async () => {
   const folds = vi.fn();
   window.addEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, folds);

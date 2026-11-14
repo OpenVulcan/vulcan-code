@@ -9,9 +9,14 @@ import { useConversationScrollController } from "./conversation-scroll-controlle
 // A followed tail must keep its page height when a folded tool batch is replaced by a shorter one:
 // the automatic fold fills the shrinkage with the tail reserve and the next batch consumes it.
 // 锁底尾部在折叠的工具批次被更短批次替换时必须保持页面高度：自动折叠用尾部预留填补收缩，下一批次消耗预留。
-it("keeps a followed page height steady when a tall tool batch folds and a shorter one follows", async () => {
+it.each([
+  "announced fold",
+  "unannounced running tool replacement",
+])("keeps the followed tail visible and steady through an %s", async (change) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+  // Hold animation callbacks so a correction queued for the next frame cannot pass a before-paint assertion.
+  // 暂停动画回调，避免下一帧的校正通过当前绘制前的断言。
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
   vi.stubGlobal("cancelAnimationFrame", () => {});
   // resizes delivers the content observer notification the browser sends after each geometry change.
   // resizes 派发浏览器在每次几何变化后发出的内容观察器通知。
@@ -37,6 +42,7 @@ it("keeps a followed page height steady when a tall tool batch folds and a short
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
     const controller = useConversationScrollController({
       active: true, surfaceId: "auto-fold", scrollRef,
+      holdRunningTailHeight: change === "unannounced running tool replacement",
       readSnapshot: (id) => saved.get(id) ?? null,
       writeSnapshot: (id, snapshot) => { saved.set(id, snapshot); },
       onFollowTailChange: () => {},
@@ -66,12 +72,15 @@ it("keeps a followed page height steady when a tall tool batch folds and a short
     notify();
     const before = pageHeight();
 
-    // The four-tool batch finishes and folds: its cards leave the body and the timeline shrinks by 160px.
-    // 四个工具的批次完成并折叠：卡片离开正文，时间线收缩 160px。
-    dispatchConversationAutomaticFold(timeline.querySelector("[data-tool-run]")!);
-    contentHeight -= 160;
+    // A tall running replacement can exceed the manual fold budget without sending a fold event.
+    // 活动工具替换的收缩量可超过手动折叠预算，且无需发出折叠事件。
+    const shrink = change === "announced fold" ? 160 : 350;
+    if (change === "announced fold") dispatchConversationAutomaticFold(timeline.querySelector("[data-tool-run]")!);
+    contentHeight -= shrink;
+    element.scrollTop = element.scrollHeight - element.clientHeight;
     notify();
     expect(pageHeight()).toBe(before);
+    expect(element.scrollTop).toBe(before - element.clientHeight);
     // The fold window closes before the next batch arrives, so the batch is measured as ordinary followed growth.
     // 折叠窗口在下一批次到达前关闭，使该批次按普通锁底增长计量。
     await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
@@ -84,10 +93,26 @@ it("keeps a followed page height steady when a tall tool batch folds and a short
 
     // Content beyond the earlier height consumes the rest of the reserve, so the page grows only by the excess.
     // 超出原高度的内容消耗剩余预留，使页面只按超出部分增长。
-    contentHeight += 100;
+    contentHeight += shrink - 90 + 30;
     notify();
     expect(reserveHeight()).toBe(0);
     expect(pageHeight()).toBe(before + 30);
+
+    // A leaf assistant text update has no ChatArea commit. Resize delivery alone must follow it before paint.
+    // 助手正文的叶子更新不提交 ChatArea。仅派发尺寸变化也必须在绘制前跟随。
+    contentHeight += 80;
+    notify();
+    expect(element.scrollTop).toBe(pageHeight() - element.clientHeight);
+
+    // Reader scroll releases the tail, even while automatic output continues.
+    // 即使自动输出仍在继续，阅读者上滚也会释放锁底。
+    const readingTop = element.scrollTop - 300;
+    element.scrollTop = readingTop;
+    element.dispatchEvent(new Event("scroll"));
+    contentHeight += 60;
+    notify();
+    expect(element.scrollTop).toBe(readingTop);
+    expect(saved.get("auto-fold")?.followTail).toBe(false);
   } finally {
     await React.act(async () => root.unmount());
     host.remove();

@@ -217,43 +217,43 @@ export function groupVisibleProcessBodyEntries(
 // TOOL_SEQUENCE_SWAP_MS 是折叠序列中一张卡片替换另一张时上推动画的时长；样式表通过 --vk-tool-swap 读取。
 const TOOL_SEQUENCE_SWAP_MS = 420;
 
-// useToolSequenceHighWaterFloor keeps a folded body at the tallest height it reached while active, so it
-// only ever grows until the run closes. The bounded body's max height still caps it.
-// useToolSequenceHighWaterFloor 让折叠正文在活动期间保持曾达到的最高高度，使其在序列结束前只增不减；
-// 限高正文的最大高度仍是上限。
-// Parameters: bodyRef is the bounded body, active says whether a floor applies, resetKey restarts it.
+// useToolSequenceHighWaterFloor measures the active run from its first card. The folded body then uses
+// that height as its floor, capped by the same CSS limit as its maximum height.
+// useToolSequenceHighWaterFloor 从首张卡片起测量活动序列。折叠正文使用该高度作为下限，并由同一个 CSS 高度上限约束。
+// Parameters: body is the mounted body, active enables measurement, resetKey restarts it after a manual toggle.
 // Returns nothing.
-// 参数：bodyRef 是限高正文，active 表示是否施加下限，resetKey 变化时重新计算。无返回值。
+// 参数：body 是已挂载的正文，active 开启测量，resetKey 在手动切换后重新计量。无返回值。
 function useToolSequenceHighWaterFloor(
-  bodyRef: React.RefObject<HTMLDivElement | null>,
+  body: HTMLDivElement | null,
   active: boolean,
   resetKey: number,
 ): void {
   React.useLayoutEffect(() => {
-    const body = bodyRef.current;
-    if (!body) return;
-    if (!active) {
-      body.style.minHeight = "";
-      return;
-    }
+    if (!body || !active) return;
+    // Keep the measurement across live card replacements, including the first switch to grouped layout.
+    // 保留实时卡片替换前的测量，包括首次切换到分组布局。
     let highWater = 0;
+    // Record a larger body height so shorter successors can reuse the space. Takes no parameters and returns nothing.
+    // 记录更高的正文高度，以便较矮的后续卡片复用空间。不接收参数，无返回值。
     const raise = () => {
+      // Read the layout height, excluding scrollable overflow and transformed cards.
+      // 读取布局高度，排除可滚动溢出及位移中的卡片。
       const height = body.offsetHeight;
       if (height > highWater) {
         highWater = height;
-        body.style.minHeight = `${highWater}px`;
+        body.style.setProperty("--vk-tool-seq-min-h", `${highWater}px`);
       }
     };
     raise();
-    if (typeof ResizeObserver === "undefined") return () => { body.style.minHeight = ""; };
-    const observer = new ResizeObserver(raise);
-    observer.observe(body);
-    for (const child of body.children) observer.observe(child);
+    // Observe the committed body even when the collapse shell mounted it in a later commit.
+    // 即使折叠外壳在后续提交才挂载正文，也观察已提交的正文。
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(raise);
+    observer?.observe(body);
     return () => {
-      observer.disconnect();
-      body.style.minHeight = "";
+      observer?.disconnect();
+      body.style.removeProperty("--vk-tool-seq-min-h");
     };
-  }, [active, bodyRef, resetKey]);
+  }, [active, body, resetKey]);
 }
 
 // Return the row's render-instance key, using its ID when the projection supplies no separate key.
@@ -329,9 +329,9 @@ export function ConversationToolSequenceGroup(props: {
   // sectionRef locates this group's transcript when announcing an automatic fold.
   // sectionRef 用于在通告自动折叠时定位本分组所属的转录。
   const sectionRef = React.useRef<HTMLElement | null>(null);
-  // bodyRef is the body, a bounded scroll viewport only while folded.
-  // bodyRef 是正文，仅在折叠时为限高滚动视口。
-  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  // toolBody tracks late mounts by the collapse shell so height observation starts with the first visible card.
+  // toolBody 跟踪折叠外壳的延后挂载，从首张可见卡片开始观察高度。
+  const [toolBody, setToolBody] = React.useState<HTMLDivElement | null>(null);
   // toggledRef marks a commit caused by the user's own toggle, which is not an automatic fold.
   // toggledRef 标记由用户自己切换引起的提交，它不属于自动折叠。
   const toggledRef = React.useRef(false);
@@ -344,10 +344,9 @@ export function ConversationToolSequenceGroup(props: {
     toggleCountRef.current += 1;
     setExpanded(!open);
   };
-  // A folded body that shows live cards keeps its tallest height until it closes, so parallel finishes and
-  // shorter replacement cards never shrink it.
-  // 显示实时卡片的折叠正文在收起前保持其最高高度，使并行结束或更矮的替换卡片都不会让它变矮。
-  useToolSequenceHighWaterFloor(bodyRef, folded && bodyVisible, toggleCountRef.current);
+  // The first plain card contributes its height to the same run, before the second call makes it a folded group.
+  // 首张普通卡片的高度也计入同一序列，在第二次调用将它变为折叠分组之前就已记录。
+  useToolSequenceHighWaterFloor(toolBody, props.collapseEnabled && bodyVisible && (folded || (!grouped && !props.closed)), toggleCountRef.current);
   // Resolve the outgoing card from the latest rows even if it completes in the same update as its successor.
   // 即使旧卡结束和新卡出现发生在同一次更新，也从最新记录读取离场卡片。
   const [leavingKey, setLeavingKey] = React.useState<string | null>(null);
@@ -400,7 +399,7 @@ export function ConversationToolSequenceGroup(props: {
       {grouped ? <ToolSequenceHead entries={entries} expanded={open} onToggle={handleToggle} /> : null}
       <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={bodyVisible}>
         <ToolSequenceGroupedContext.Provider value={grouped}>
-        <div className="vk-tool-seq-body" ref={bodyRef}>
+        <div className="vk-tool-seq-body" ref={setToolBody}>
           {leaving && enteringKey !== null ? (
             <div
               aria-hidden="true"

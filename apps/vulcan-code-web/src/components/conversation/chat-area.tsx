@@ -451,6 +451,7 @@ export function ChatArea(props: ChatAreaProps) {
   // conversationScrollController 是主转录滚动位置与界面恢复的唯一所有者。
   const conversationScrollController = useConversationScrollController({
     active: Boolean(activeSurfaceConversationId && !isEmptyConversation && !showConversationLoadingOnly),
+    holdRunningTailHeight: isConversationRunning,
     onFollowTailChange: handleConversationFollowTailChange,
     readSnapshot: readConversationScrollSnapshot,
     scrollRef: workspaceRef,

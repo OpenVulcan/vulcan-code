@@ -25,6 +25,9 @@ export interface UseConversationScrollControllerOptions {
   // Whether the transcript contains a materialized scroll surface.
   // 转录是否包含已实体化的滚动界面。
   active: boolean;
+  // Whether automatic reflow should keep the followed tail's height while the session is running.
+  // 会话运行期间，自动重排是否保留已锁底的尾部高度。
+  holdRunningTailHeight?: boolean;
   // Reports tail ownership changes to the scroll-to-bottom affordance.
   // 向滚动到底部操作入口报告尾部所有权变化。
   onFollowTailChange: (followTail: boolean) => void;
@@ -285,11 +288,9 @@ export function useConversationScrollController(
 
   // reconcileTailReserve keeps a manual fold from pulling the content above down to the bottom.
   // reconcileTailReserve 防止手动折叠把上方内容一下子拉到底部。
-  // Only during a manual fold may the reserve grow, and only by what the browser would otherwise clamp.
-  // Outside a fold it never grows: new content removes it while following, and once the reader owns
-  // the viewport it shrinks to the part still on screen, disappearing as the reader scrolls up.
-  // 只有手动折叠期间预留才会增长，且只增长浏览器原本会截断的部分。折叠之外绝不增长：跟随时新内容到达
-  // 即撤掉；阅读者接管视口后缩小到仍在屏幕上的部分，并随向上滚动而消失。
+  // Automatic reflow can shrink a running transcript without announcing a fold. Preserve the full
+  // followed height so even a tall tool can be replaced without a backward jump.
+  // 会话运行时，自动重排也可能在没有折叠通知的情况下缩短转录。保留完整锁底高度，使高工具卡被替换时也不会回跳。
   // Parameters: element is the scrollport of the active surface.
   // 参数：element 是活动界面的滚动视口。
   // Returns: nothing.
@@ -303,7 +304,9 @@ export function useConversationScrollController(
     const current = reserve.offsetHeight;
     const contentHeight = timeline.offsetHeight;
     let next: number;
-    if (foldLimitRef.current !== null) {
+    if (followTailRef.current && latestOptionsRef.current.holdRunningTailHeight && !layoutTransactionRef.current) {
+      next = Math.max(0, tailTotalRef.current - contentHeight);
+    } else if (foldLimitRef.current !== null) {
       // visibleArea excludes the sticky footer that covers the bottom of the scrollport.
       // visibleArea 不含覆盖滚动视口底部的粘性页脚。
       const footer = element.querySelector<HTMLElement>("[data-conversation-scroll-footer]");
@@ -452,8 +455,8 @@ export function useConversationScrollController(
     writeScrollTop(element, conversationScrollTopForSnapshot(element, snapshot));
   }, [publishFollowTail, writeScrollTop]);
 
-  // scheduleSnapshotRestore settles a displaced tail immediately and coalesces normal layout work into one frame.
-  // scheduleSnapshotRestore 立即稳定发生位移的尾部，并将正常布局工作合并到一个动画帧。
+  // scheduleSnapshotRestore aligns a followed tail before paint and defers reader restoration.
+  // scheduleSnapshotRestore 在绘制前对齐锁底位置，并延后恢复阅读位置。
   // Parameters: surfaceId and snapshot bind the correction to one exact business surface; revision optionally guards reader movement.
   // 参数：surfaceId 与 snapshot 将校正绑定到一个精确业务界面；revision 可选地防止覆盖阅读者移动。
   // Returns: nothing.
@@ -472,6 +475,19 @@ export function useConversationScrollController(
     const element = currentOptions.scrollRef.current;
     if (currentOptions.active && currentOptions.surfaceId === surfaceId
       && element?.dataset.conversationSurfaceId === surfaceId) {
+      if (snapshot.followTail && followTailRef.current && programmaticTargetRef.current === null) {
+        // ResizeObserver runs after this frame's animation callbacks. Another frame would let new content
+        // paint under the composer even though the reader is still following the tail.
+        // ResizeObserver 在本帧动画回调之后执行。继续等一帧会让新内容在锁底时仍被输入框盖住。
+        cancelPendingFrame();
+        reconcileTailReserve(element);
+        if (element.scrollHeight - element.clientHeight - element.scrollTop > 0.5
+          || Math.abs(element.scrollTop - snapshot.scrollTop) > 0.5) {
+          restoreSnapshot(element, snapshot);
+          writeCurrentSnapshot(element, surfaceId);
+        }
+        return;
+      }
       // Composer shrink can clip scrollTop before the prompt grows the range again, ahead of the native scroll event.
       // 输入区收缩可能先截断 scrollTop，随后提示词再次增大范围，而原生滚动事件尚未到达。
       // Record that exact clipping now so the delayed event cannot cancel tail ownership as a supposed reader move.
@@ -481,19 +497,6 @@ export function useConversationScrollController(
         element.scrollTop,
         Math.max(0, element.scrollHeight - element.clientHeight),
       );
-      if (snapshot.followTail && followTailRef.current
-        && Math.abs(element.scrollTop - observedScrollTopRef.current) > 0.5) {
-        // A composer shrink and prompt insertion may both finish before the queued native scroll event.
-        // 输入框收缩和提示词插入可能都在排队的原生滚动事件之前完成。
-        // Settle the owned tail now: the intermediate clamp may no longer match the new scroll range.
-        // 立即稳定已拥有的尾部位置：中间截断位置可能已不再匹配新的滚动范围。
-        // Keep the frame for subsequent layout, while genuine reader movement can still cancel it.
-        // 保留下一帧处理后续布局，真实阅读者移动仍可取消该帧。
-        // Ordinary streaming growth keeps its acknowledged position and remains frame-coalesced.
-        // 普通流式增长保持已确认位置，仍按帧合并处理。
-        restoreSnapshot(element, snapshot);
-        writeCurrentSnapshot(element, surfaceId);
-      }
     }
     cancelPendingFrame();
     pendingFrameRef.current = window.requestAnimationFrame(() => {
@@ -516,7 +519,7 @@ export function useConversationScrollController(
       restoreSnapshot(element, snapshot);
       writeCurrentSnapshot(element, surfaceId);
     });
-  }, [cancelPendingFrame, restoreSnapshot, writeCurrentSnapshot]);
+  }, [cancelPendingFrame, reconcileTailReserve, restoreSnapshot, writeCurrentSnapshot]);
 
   // remember captures the current mounted surface without changing ownership or position.
   // remember 捕获当前已挂载界面，且不改变所有权或位置。
@@ -867,6 +870,7 @@ export function useConversationScrollController(
       scrollTop: element.scrollHeight,
     };
     restoreSnapshot(element, savedSnapshot);
+    reconcileTailReserve(element);
     surfaceRestoreRef.current = savedSnapshot.followTail
       ? null
       : { surfaceId, snapshot: savedSnapshot, userRevision: userRevisionRef.current };
@@ -879,6 +883,7 @@ export function useConversationScrollController(
     options.readSnapshot,
     options.scrollRef,
     options.surfaceId,
+    reconcileTailReserve,
     restoreSnapshot,
     writeCurrentSnapshot,
   ]);
@@ -987,8 +992,8 @@ export function useConversationScrollController(
     // 移除／测量／插入提交可截断 scrollTop 却恢复原尺寸，因此不产生尺寸变化通知。
     // Acknowledge that displaced owned tail in the mutation microtask before the queued native scroll event.
     // 在排队的原生滚动事件前，通过修改微任务确认已拥有尾部发生的位移。
-    // Ordinary text growth remains ResizeObserver/frame-coalesced; reader-owned history is never restored here.
-    // 普通文本增长仍由尺寸观察器按帧合并；此处绝不恢复阅读者拥有的历史位置。
+    // ResizeObserver handles ordinary growth before paint. This observer also catches a native clamp with no resize.
+    // 普通增长由尺寸观察器在绘制前处理。此观察器还会捕获未触发尺寸变化的原生滚动截断。
     const observer = new MutationObserver(() => {
       if (latestOptionsRef.current.surfaceId !== surfaceId
         || element.dataset.conversationSurfaceId !== surfaceId
