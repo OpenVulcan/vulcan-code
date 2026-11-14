@@ -336,6 +336,19 @@ impl CommandSessionRuntime {
         }
     }
 
+    /// Waits for the specified owned session's state lock and returns its current snapshot.
+    /// 等待指定归属会话的状态锁，并返回当前快照。
+    pub async fn snapshot_owned_session(
+        &self,
+        owner_session_id: SessionId,
+        command_session_id: SessionId,
+    ) -> Result<CommandSessionSnapshot, String> {
+        Ok(self
+            .session_for_owner(owner_session_id, command_session_id)?
+            .snapshot()
+            .await)
+    }
+
     /// Returns one best-effort live snapshot for the requested owned command session without blocking on async state, so WebUI status surfaces can prefer current runtime state over historical transcript payloads.
     /// 在不阻塞异步状态锁的前提下返回目标归属命令会话的一份尽力而为实时快照，使 WebUI 状态界面可以优先展示当前运行时状态而不是历史转录载荷。
     pub fn try_snapshot_owned_session(
