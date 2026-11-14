@@ -15,6 +15,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 标识当前版本唯一接受的推理契约版本。
 pub const INFERENCE_CONTRACT_VERSION: u32 = 1;
 
+/// Prefix of host-owned knowledge-base consumer profiles, before the library ID and vector-space fingerprint.
+/// 宿主持有的知识库消费者配置档前缀，后接库标识和向量空间指纹。
+pub const KNOWLEDGE_CONSUMER_PROFILE_PREFIX: &str = "knowledge_base:";
+
 /// Identifies one permission granted to an inference caller.
 /// 标识授予推理调用方的一项权限。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

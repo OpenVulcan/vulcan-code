@@ -4,6 +4,9 @@
 use super::*;
 use crate::openvulcan::{CONTRACT_VERSION, DECISION_CONTRACT_VERSION};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::borrow::Cow;
+use vulcan_ai_contract::KNOWLEDGE_CONSUMER_PROFILE_PREFIX;
 
 /// Prevents automatic replay of a separately billable native dispatch, preserving its outcome evidence.
 /// 阻止自动重放独立计费的原生分派，并保留其结果证据。
@@ -81,11 +84,19 @@ struct Coordinate {
     value: f32,
 }
 
+/// Maximum consumer-profile length in the OpenVulcan request schema.
+/// OpenVulcan 请求契约中的消费者配置档最大长度。
+const MAX_CONSUMER_PROFILE_LEN: usize = 64;
+
+/// Distinguishes projected knowledge-base consumers in OpenVulcan requests.
+/// 标识 OpenVulcan 请求中经过映射的知识库消费者。
+const KNOWLEDGE_WIRE_PROFILE_PREFIX: &str = "kb-";
+
 /// Validates the consumer identity before dispatch instead of silently rewriting its owner.
 /// 在分派前校验消费者身份，不静默重写其归属。
 fn validate_consumer(value: &str) -> Result<(), ProviderExecutionFailure> {
     if value.is_empty()
-        || value.len() > 64
+        || value.len() > MAX_CONSUMER_PROFILE_LEN
         || !value.as_bytes()[0].is_ascii_lowercase()
         || !value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
@@ -96,6 +107,45 @@ fn validate_consumer(value: &str) -> Result<(), ProviderExecutionFailure> {
         ));
     }
     Ok(())
+}
+
+/// Projects an authorized host embedding consumer ID into OpenVulcan's request schema.
+/// 将已授权的宿主向量消费者标识映射到 OpenVulcan 请求契约。
+/// `value` is the host profile. Returns its wire ID or a pre-dispatch error for invalid identities.
+/// `value` 是宿主配置档标识。返回线协议标识，无效身份返回分派前错误。
+fn project_embedding_consumer(value: &str) -> Result<Cow<'_, str>, ProviderExecutionFailure> {
+    let Some(knowledge_identity) = value.strip_prefix(KNOWLEDGE_CONSUMER_PROFILE_PREFIX) else {
+        validate_consumer(value)?;
+        return Ok(Cow::Borrowed(value));
+    };
+    // Only canonical knowledge profiles generated from a library UUID and a hexadecimal SHA-256 are eligible.
+    // 仅允许映射由库 UUID 和十六进制 SHA-256 生成的规范知识库配置档。
+    let (library_id, space) = knowledge_identity.split_once(':').ok_or_else(|| {
+        pre_dispatch_failure("Invalid host knowledge-base embedding consumer profile.")
+    })?;
+    if !uuid::Uuid::parse_str(library_id).is_ok_and(|uuid| {
+        uuid.get_version_num() == 4 && uuid.hyphenated().to_string() == library_id
+    }) || space.len() != Sha256::output_size() * 2
+        || !space
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(pre_dispatch_failure(
+            "Invalid host knowledge-base embedding consumer profile.",
+        ));
+    }
+    // Hash both internal identity components together so distinct spaces and libraries remain distinct on the wire.
+    // 对两个内部身份组成部分一起取摘要，使不同库或不同空间在线协议中仍能区分。
+    let digest = Sha256::digest(value.as_bytes());
+    // Use as many whole digest bytes as can be represented in lowercase hex within the schema limit.
+    // 在契约长度限制内尽量使用完整的摘要字节，并以小写十六进制表示。
+    let digest_bytes = (MAX_CONSUMER_PROFILE_LEN - KNOWLEDGE_WIRE_PROFILE_PREFIX.len()) / 2;
+    let wire_id = format!(
+        "{KNOWLEDGE_WIRE_PROFILE_PREFIX}{}",
+        hex::encode(&digest[..digest_bytes])
+    );
+    validate_consumer(&wire_id)?;
+    Ok(Cow::Owned(wire_id))
 }
 
 /// Replaces the System One envelope with the native versioned envelope, retaining state/questions.
@@ -181,7 +231,9 @@ impl ProviderExecutionClient {
         // started_at 和 request_id 标识此次独立计费分派，绝不表示自动重放。
         let started_at = Instant::now();
         let request_id = uuid::Uuid::new_v4().to_string();
-        validate_consumer(&request.consumer_profile_id)?;
+        // Project only the serialized field. The authorized host request retains its original profile.
+        // 仅映射序列化字段。已授权的宿主请求保留原配置档标识。
+        let consumer_profile_id = project_embedding_consumer(&request.consumer_profile_id)?;
         if request.invalid_input_policy
             != vulcan_ai_contract::EmbeddingInvalidInputPolicy::FailBatch
         {
@@ -226,7 +278,7 @@ impl ProviderExecutionClient {
             })?;
         // body preserves the declared task spelling while projecting the remaining native request fields.
         // body 保留声明的任务拼写，同时投影其余原生请求字段。
-        let body = json!({"contract_version": CONTRACT_VERSION, "request_id": request_id, "consumer_profile_id": request.consumer_profile_id, "model_id": model.id, "inputs": inputs, "task": wire_task, "dimensions": request.dimensions.unwrap_or(0), "output_kind": request.output_kind, "encoding": request.encoding, "invalid_input_policy": "reject_request"});
+        let body = json!({"contract_version": CONTRACT_VERSION, "request_id": request_id, "consumer_profile_id": consumer_profile_id, "model_id": model.id, "inputs": inputs, "task": wire_task, "dimensions": request.dimensions.unwrap_or(0), "output_kind": request.output_kind, "encoding": request.encoding, "invalid_input_policy": "reject_request"});
         // response is the single billable dispatch result; no failure permits automatic replay.
         // response 是单次计费分派结果；任何失败均不允许自动重放。
         let response = self
@@ -446,6 +498,95 @@ mod tests {
         };
         let body = json!({"contract_version":CONTRACT_VERSION,"request_id":"dispatch","model_id":"vector","dimensions":2,"output_kind":"dense","encoding":"float","data":[{"index":1,"dense":[0.0,1.0]},{"index":0,"dense":[1.0,0.0]}],"usage":{"input_tokens":2,"charged_micro_points":1,"ledger":"free"}});
         (model, request, body)
+    }
+
+    /// Verifies that stable wire IDs distinguish both libraries and spaces and that other consumers still validate.
+    /// 验证稳定线协议标识能区分库和空间，并且其他消费者仍经过校验。
+    #[test]
+    fn openvulcan_embedding_consumer_projection_preserves_identity_boundaries() {
+        // Vary each component separately to catch a projection that ignores part of the identity.
+        // 分别改变每个组成部分，以捕获遗漏部分身份的映射。
+        let profile = format!(
+            "{KNOWLEDGE_CONSUMER_PROFILE_PREFIX}12345678-1234-4123-8123-1234567890ab:{}",
+            "ab".repeat(32)
+        );
+        let other_library = profile.replace("12345678-", "87654321-");
+        let other_space = profile.replace(&"ab".repeat(32), &"cd".repeat(32));
+        let projected = project_embedding_consumer(&profile).unwrap();
+        assert_eq!(projected, project_embedding_consumer(&profile).unwrap());
+        assert_ne!(
+            projected,
+            project_embedding_consumer(&other_library).unwrap()
+        );
+        assert_ne!(projected, project_embedding_consumer(&other_space).unwrap());
+        assert_eq!(project_embedding_consumer("vmm").unwrap(), "vmm");
+        assert!(project_embedding_consumer("unknown:consumer").is_err());
+        assert!(project_embedding_consumer("knowledge_base:missing").is_err());
+        assert!(project_embedding_consumer(&profile.replace(&"ab".repeat(32), "abcd")).is_err());
+    }
+
+    /// Verifies that the normal OpenVulcan embedding route sends a valid projected ID to a loopback peer.
+    /// 验证正常的 OpenVulcan 向量路由向回环服务发送合规的映射标识。
+    #[tokio::test]
+    async fn openvulcan_posts_projected_knowledge_embedding_consumer() {
+        // A fixed response distinguishes a real HTTP dispatch from a local validation failure.
+        // 使用固定响应区分真正的 HTTP 分派和本地校验失败。
+        let (base_url, server) = super::super::tests::serve_once("400 Bad Request", "{}").await;
+        // Keep the bundled embedding route and redirect only the test transport to loopback with a dummy key.
+        // 保留随包向量路由，仅将测试传输重定向至回环地址，并使用虚拟密钥。
+        let mut route = crate::execution::test_support::bundled_manifest_route(
+            "openvulcan",
+            "china",
+            vulcan_llm_core::OPENVULCAN_NATIVE_PROFILE_ID,
+        );
+        route.entry.base_url = base_url;
+        route.protocol_route.base_url_override = None;
+        route.protocol_route.authentication =
+            Some(crate::AuthenticationProjection::BearerAuthorization);
+        // Use the exact host ID shape from knowledge-base embedding requests.
+        // 使用知识库向量请求生成的精确宿主标识形状。
+        let (model, mut request, _) = embedding_fixture();
+        let internal_profile = format!(
+            "{KNOWLEDGE_CONSUMER_PROFILE_PREFIX}12345678-1234-4123-8123-1234567890ab:{}",
+            "ab".repeat(32)
+        );
+        request.consumer_profile_id = internal_profile.clone();
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-key"))
+            .unwrap()
+            .execution_secret()
+            .unwrap();
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            std::sync::Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().unwrap()),
+        );
+        let failure = client
+            .execute_embedding(
+                &route,
+                &model,
+                &request,
+                InferenceUsageScope::InternalBackground,
+                ExecutionRevisionRefs {
+                    catalog: "catalog",
+                    route: "route",
+                },
+                &secret,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(failure.error.http_status, Some(400), "{failure:?}");
+        // Inspect the JSON actually received by the peer, using the request schema's character and length rules.
+        // 检查回环服务实际收到的 JSON，并按请求契约的字符和长度规则断言。
+        let raw = server.await.unwrap();
+        let (_, json_body) = raw.split_once("\r\n\r\n").unwrap();
+        let body: Value = serde_json::from_str(json_body).unwrap();
+        let wire_id = body["consumer_profile_id"].as_str().unwrap();
+        assert_ne!(wire_id, internal_profile);
+        assert!(wire_id.starts_with("kb-") && wire_id.len() <= 64);
+        assert!(wire_id.bytes().all(|byte| byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || b"._-".contains(&byte)));
+        assert_eq!(request.consumer_profile_id, internal_profile);
     }
 
     /// Native responses preserve input identity and reject foreign models, request IDs and duplicate indices.

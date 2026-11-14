@@ -2,6 +2,7 @@
 //! AI 维护知识与显式人工生命周期模型。
 
 use serde::{Deserialize, Serialize};
+use vulcan_ai_contract::KNOWLEDGE_CONSUMER_PROFILE_PREFIX;
 pub use vulcan_lancedb_engine::types::LanceDbDistanceMetric as KnowledgeVectorMetric;
 
 /// Maximum UTF-8 bytes in one body.
@@ -269,7 +270,7 @@ impl KnowledgeLibrarySettings {
 /// The result scopes derived space profiles; it never grants a route by itself.
 /// 结果为派生空间配置档划定范围；其自身绝不授予路由。
 pub fn knowledge_consumer_profile_id(library_id: &str) -> String {
-    format!("knowledge_base:{library_id}")
+    format!("{KNOWLEDGE_CONSUMER_PROFILE_PREFIX}{library_id}")
 }
 
 /// Registry projection; invalid libraries expose their reason and deletion only.

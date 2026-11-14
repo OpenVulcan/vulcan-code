@@ -1999,7 +1999,7 @@ mod tests {
 
     /// Serves one canned HTTP response on loopback and returns the raw request it received.
     /// 在回环地址上返回一份预置 HTTP 响应，并返回收到的原始请求。
-    async fn serve_once(
+    pub(super) async fn serve_once(
         status: &'static str,
         body: &'static str,
     ) -> (String, tokio::task::JoinHandle<String>) {
