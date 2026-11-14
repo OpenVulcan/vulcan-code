@@ -492,7 +492,7 @@ impl ShellJobLogReader {
         let body = if self.ends_with_newline {
             &bytes[..bytes.len().saturating_sub(1)]
         } else {
-            &bytes[..]
+            bytes
         };
         let mut pieces: Vec<&[u8]> = body.split(|byte| *byte == b'\n').collect();
         let mut first_partial = !starts_at_line;
