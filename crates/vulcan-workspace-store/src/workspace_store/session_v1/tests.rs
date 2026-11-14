@@ -875,6 +875,36 @@ fn split_map_readers_reject_an_unanchored_first_entry() {
     }
 }
 
+/// Refuses a mismatched first event before staging or replacing the tail.
+/// 在暂存或替换尾段前拒绝起点不一致的首条事件。
+#[test]
+fn tail_flush_rejects_mismatched_first_event() {
+    let (_root, layout) = fresh_layout("tail-start");
+    let document = filled_document(&layout.session_id, 2);
+    let metadata = publish_initial(&layout, &document);
+    let entry = metadata.split_list.last().unwrap();
+    let candidate = layout.segment_entry_path(
+        metadata.segment_generation,
+        &SessionV1Layout::alternate_segment_file_name(entry.segment_number, &entry.file_name)
+            .unwrap(),
+    );
+    let request = FlushRequest {
+        dirty: &BTreeSet::from([DirtyFile::ActiveTail]),
+        metadata: &metadata,
+        runtime_lock: &document.runtime_lock,
+        runtime_updated_at_ms: 1,
+        compactions: &document.compactions,
+        events: &document.events()[1..],
+        tail_start: Some(entry.start_seq),
+    };
+    assert!(flush_session(&layout, &request).is_err());
+    assert!(!candidate.exists());
+    assert_eq!(
+        load_session(&layout).unwrap().document.events(),
+        document.events()
+    );
+}
+
 /// A flush with an empty dirty set writes nothing.
 /// 空 dirty 集的 flush 不写入任何文件。
 #[test]
