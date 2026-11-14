@@ -33,7 +33,7 @@ pub const SUBAGENT_TASK_ID_MAX_BYTES: usize = 256;
 macro_rules! define_local_id {
     ($(#[$doc:meta])* $name:ident, $entity:literal) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
         #[serde(transparent)]
         pub struct $name(u64);
 
@@ -51,6 +51,14 @@ macro_rules! define_local_id {
             /// 返回原始 id 值。
             pub fn value(self) -> u64 {
                 self.0
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            /// Reads a numeric id through the same validation as the normal constructor.
+            /// 使用普通构造函数的同一校验读取数字 ID。
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Self::try_new(u64::deserialize(deserializer)?).map_err(D::Error::custom)
             }
         }
 
@@ -457,6 +465,35 @@ mod tests {
             assert_eq!(u64::from(seq), previous + 1);
             previous = u64::from(seq);
         }
+    }
+
+    /// Preserves numeric JSON encoding while enforcing the domain bounds on deserialization.
+    /// 保留数字 JSON 编码，并在反序列化时强制执行领域边界。
+    #[test]
+    fn numeric_session_ids_validate_when_deserialized() {
+        // The same checks apply to sequence numbers and every local entity id.
+        // 相同的检查适用于序号和所有本地实体 ID。
+        fn check<T: for<'de> Deserialize<'de> + Serialize>() {
+            for value in [LOCAL_ID_MIN, JS_SAFE_INTEGER_MAX] {
+                // Round-trip the exact numeric representation at both supported boundaries.
+                // 验证两个合法边界的数字表示可以往返。
+                let decoded: T = serde_json::from_value(serde_json::json!(value)).unwrap();
+                assert_eq!(
+                    serde_json::to_value(decoded).unwrap(),
+                    serde_json::json!(value)
+                );
+            }
+            for value in [0, JS_SAFE_INTEGER_MAX + 1, u64::MAX] {
+                assert!(serde_json::from_value::<T>(serde_json::json!(value)).is_err());
+            }
+        }
+        check::<Seq>();
+        check::<TurnId>();
+        check::<ApiCallId>();
+        check::<ToolCallId>();
+        check::<CompactionId>();
+        check::<PendingInputId>();
+        check::<ResourceId>();
     }
 
     /// The local id allocator advances independently of seq.
