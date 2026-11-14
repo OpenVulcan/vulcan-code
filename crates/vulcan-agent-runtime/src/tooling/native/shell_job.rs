@@ -57,7 +57,7 @@ fn shell_job_tool_description() -> String {
         "Inspect and control the shell jobs of this session. Every `shell_command` call is a job; its output (stdout and stderr together, in arrival order) is kept in a rolling log, so long output can be read here even after the command returned only its end.\n\
 - `list`: running jobs first, then the {SHELL_JOB_LIST_FINISHED_LIMIT} most recent finished ones, each with its title.\n\
 - `status`: one job's state, run time, output size, time of the latest output and, while it runs, its live processes with CPU time; use it to tell a stuck command from a busy one.\n\
-- `read`: output rows with line numbers. Omit `start_line` for the end of the output; give it to page from that line. `N|` starts line N, `N+|` continues a long line split into rows.\n\
+- `read`: output rows with line numbers. Omit `start_line` for the end of the output; give it to page from that line. `N|` starts line N, `N+|` continues a long line split into rows. A capped line may end with [N more bytes not shown].\n\
 - `search`: regular-expression search over the whole log, with `context_lines` around each match (`N>|` marks matching rows).\n\
 - `wait`: wait up to `timeout_ms` (default {SHELL_JOB_WAIT_DEFAULT_MS}, at most {SHELL_JOB_WAIT_MAX_MS}) for a running job to finish; returns early when the user sends a message.\n\
 - `stop`: terminate a running job's process tree.\n\

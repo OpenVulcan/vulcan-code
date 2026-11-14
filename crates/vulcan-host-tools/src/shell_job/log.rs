@@ -204,8 +204,8 @@ impl ShellJobLogWriter {
         self.drop_oldest_body_segments()
     }
 
-    /// Drops the oldest body segments while the retained body exceeds the log limit.
-    /// 当保留的正文超出日志上限时丢弃最早的正文分段。
+    /// Drops the oldest sealed body segments while the body exceeds the limit, preserving the head and open segment.
+    /// 正文超限时丢弃最早的已封口正文分段，保留头段及正在写入的分段。
     fn drop_oldest_body_segments(&mut self) -> io::Result<()> {
         let body_limit = self.limits.limit.saturating_sub(self.limits.head);
         let mut retained_body: u64 = self.segments[1..].iter().map(|segment| segment.len).sum();
