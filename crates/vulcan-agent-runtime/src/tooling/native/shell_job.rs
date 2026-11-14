@@ -45,7 +45,9 @@ pub(crate) fn build_shell_job_tool() -> Arc<NativeToolDefinition> {
         descriptor,
         shell_job_args_schema(),
         move |request: NativeToolExecutionRequest| {
-            Box::pin(async move { execute_shell_job_tool(request).await })
+            Box::pin(
+                async move { execute_shell_job_tool(request, ShellJobRuntime::global()).await },
+            )
         },
     )
 }
@@ -196,34 +198,54 @@ fn parse_shell_job_arguments(arguments: Value) -> Result<ShellJobToolArgs, Nativ
     Ok(args)
 }
 
-/// Runs one `shell_job` call.
-/// 执行一次 `shell_job` 调用。
+/// Prepares redaction before exposing a scoped job's stored text.
+/// 在返回有作用域任务的存储文本前准备脱敏。
+/// The identity comes from the invocation and the host registers the owning environment.
+/// 调用提供归属身份，宿主登记归属环境。
+async fn prepare_shell_job_redaction(
+    session_id: Option<SessionId>,
+    environment: Option<&NativeEnvironmentAccess>,
+) -> Result<(), NativeToolError> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    let environment = environment
+        .ok_or_else(|| NativeToolError::new("Shell job output redaction is not ready."))?;
+    environment
+        .effective(session_id)
+        .await
+        .map_err(NativeToolError::new)?;
+    Ok(())
+}
+
+/// Runs one `shell_job` call against the runtime that owns the jobs.
+/// 在持有任务的运行时上处理一次 `shell_job` 调用。
+/// Returns the action result or a validation, storage, or redaction error.
+/// 返回动作结果，或参数校验、存储、脱敏错误。
 async fn execute_shell_job_tool(
     request: NativeToolExecutionRequest,
+    runtime: &ShellJobRuntime,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let owner = ShellCommandJobContext::of_request(&request)
         .owner_session_id()
         .to_string();
-    let args = parse_shell_job_arguments(request.arguments)?;
-    // Historical output may be the first tool result after a restart. Register the
-    // owning environment before any stored text reaches the normal result filter.
-    // 历史输出可能是重启后的首个工具结果，须在进入常规结果过滤器前登记归属会话环境。
-    if request.invocation_context.is_some() || request.session_id.is_some() {
-        // Scoped calls must have both a validated session and its redaction host.
-        // 有作用域的调用必须同时具备已校验的会话与脱敏宿主。
-        let session_id = request.session_id.ok_or_else(|| {
-            NativeToolError::new("Shell job output requires a valid session identity.")
-        })?;
-        let environment = request
-            .environment
-            .as_ref()
-            .ok_or_else(|| NativeToolError::new("Shell job output redaction is not ready."))?;
-        environment
-            .effective(session_id)
-            .await
-            .map_err(NativeToolError::new)?;
+    // Validate ownership before any operation, including a stop without log details.
+    // 执行任何操作前先校验归属，包括不附带日志详情的停止操作。
+    if request.invocation_context.is_some() && request.session_id.is_none()
+        || request
+            .session_id
+            .is_some_and(|session_id| session_id.to_string() != owner)
+    {
+        return Err(NativeToolError::new(
+            "Shell job requires a valid owning session identity.",
+        ));
     }
-    let runtime = ShellJobRuntime::global();
+    let args = parse_shell_job_arguments(request.arguments)?;
+    let prepare_redaction =
+        || prepare_shell_job_redaction(request.session_id, request.environment.as_ref());
+    if args.action != "stop" {
+        prepare_redaction().await?;
+    }
     let jobs_dir = runtime.jobs_directory(&owner);
     let job_id = || {
         args.job_id
@@ -404,6 +426,7 @@ async fn execute_shell_job_tool(
                 .job(&owner, job_id)
                 .filter(|job| job.outcome().is_none())
             else {
+                prepare_redaction().await?;
                 let summary = find_summary(runtime, &owner, &jobs_dir, job_id)?;
                 return Ok(shell_job_result(
                     format!("The job is not running.\n{}", render_job_status(&summary)),
@@ -413,6 +436,17 @@ async fn execute_shell_job_tool(
             job.request_stop("Stopped with shell_job.");
             let outcome = job.wait().await;
             runtime.discard_notice(&owner, job_id);
+            // Returning stop state is safe even when the stored text cannot be redacted.
+            // 即使存储文本无法脱敏，也可以安全返回停止状态。
+            if prepare_redaction().await.is_err() {
+                return Ok(shell_job_result(
+                    format!(
+                        "The job ended with status {}. Job details are unavailable.",
+                        outcome.status.as_str()
+                    ),
+                    json!({"action": "stop", "job_id": job_id, "running": false, "status": outcome.status.as_str()}),
+                ));
+            }
             let mut text = format!(
                 "The job ended with status {}.\n{}",
                 outcome.status.as_str(),
@@ -637,6 +671,73 @@ fn render_job_status(job: &ShellJobSummary) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stops a live task when the redaction host is unavailable and returns only terminal state.
+    /// 脱敏宿主不可用时仍停止运行中的任务，并且只返回终态。
+    #[tokio::test]
+    async fn stops_live_shell_job_without_redaction_host() {
+        // The test owns the process runtime, log directory and session.
+        // 测试独占进程运行时、日志目录及会话。
+        let runtime = ShellJobRuntime::new();
+        let dir = tempfile::tempdir().expect("allocate isolated job directory");
+        let session_id = SessionId::new_v4();
+        #[cfg(windows)]
+        let mut child = {
+            let mut command = tokio::process::Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut child = {
+            let mut command = tokio::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        child.current_dir(dir.path());
+        let job = runtime
+            .spawn(
+                vulcan_host_tools::shell_job::ShellJobSpawn {
+                    owner_session_id: session_id.to_string(),
+                    origin: None,
+                    command: String::from("synthetic-command"),
+                    purpose: String::from("synthetic-purpose"),
+                    shell_label: String::from("test"),
+                    cwd: dir.path().to_owned(),
+                    jobs_dir: dir.path().join("jobs"),
+                    stdin: None,
+                    background: true,
+                    timeout: Some(Duration::from_secs(30)),
+                    capture_streams: false,
+                },
+                child,
+            )
+            .expect("start isolated sleeping process");
+
+        let mut request = super::super::tests::test_native_request(json!({
+            "action": "stop", "job_id": job.id(),
+        }));
+        request.session_id = Some(session_id);
+        let result = execute_shell_job_tool(request, &runtime)
+            .await
+            .expect("stop without loading details");
+        let outcome = job.outcome().expect("job actually stopped");
+        assert_eq!(
+            outcome.status,
+            vulcan_host_tools::shell_job::ShellJobStatus::Stopped
+        );
+        let payload = result.host_result.expect("shell job host result").payload;
+        assert_eq!(payload["running"], false);
+        assert_eq!(payload["status"], outcome.status.as_str());
+        assert!(payload.get("purpose").is_none());
+        let text = result.model_output.as_str().expect("text result");
+        assert!(!text.contains("synthetic-command"));
+        assert!(!text.contains("synthetic-purpose"));
+    }
 
     /// Checks that execution enforces the ranges advertised for job reads, searches, and waits.
     /// 验证执行入口遵循任务读取、搜索和等待所声明的参数范围。
