@@ -5,7 +5,8 @@ use super::super::test_support::bundled_manifest_route;
 use super::*;
 use std::sync::Arc;
 use vulcan_llm_core::{
-    ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID,
 };
 
 /// Verifies conversation media upload selection is frozen entirely from bundled manifests.
@@ -110,6 +111,65 @@ fn bundled_media_upload_routes_are_manifest_driven() {
             && channel.signing_primitive
                 == Some(crate::UploadSigningPrimitiveKind::TemporaryOssPolicy)
     }));
+}
+
+/// Verifies that only Model Studio routes resolve a DashScope conversation upload contract.
+/// 验证只有百炼 API 路由会解析出 DashScope 会话文件上传契约。
+#[test]
+fn alibaba_token_plan_has_no_conversation_upload_contract() {
+    // Client resolves the same upload contract used before preparing local media.
+    // 客户端解析本地媒体准备前使用的同一上传契约。
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().expect("protocol registry")),
+    );
+    // Cases cover both regional endpoints and editions that expose the conversation protocols.
+    // 测试覆盖提供对话协议的两个地域端点和两个订阅版本。
+    let token_plan_entries = [
+        "token-plan-personal-cn",
+        "token-plan-personal-global",
+        "token-plan-team-cn",
+        "token-plan-team-global",
+    ];
+    for entry_id in token_plan_entries {
+        for protocol_id in [
+            OPENAI_CHAT_PROFILE_ID,
+            OPENAI_RESPONSES_PROFILE_ID,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+        ] {
+            // Route selects the exact entry and protocol used to prepare a conversation resource.
+            // 路由指定准备会话资源所用的具体入口和协议。
+            let route = bundled_manifest_route("alibaba", entry_id, protocol_id);
+            for (kind, mime_type) in [
+                (ResourceKind::Image, "image/png"),
+                (ResourceKind::Video, "video/mp4"),
+            ] {
+                assert!(
+                    client
+                        .conversation_media_upload_contract(&route, kind, mime_type)
+                        .expect("route upload configuration must be valid")
+                        .is_none(),
+                    "{entry_id}/{protocol_id} must not upload {mime_type}"
+                );
+            }
+            assert!(
+                !route
+                    .protocol_route
+                    .request_headers
+                    .contains_key("x-dashscope-ossresource-resolve")
+            );
+        }
+    }
+
+    // The check also exercises the supported pay-as-you-go upload contract.
+    // 同时验证按量付费 API 支持的上传契约。
+    let route = bundled_manifest_route("alibaba", "model-studio-cn", OPENAI_CHAT_PROFILE_ID);
+    assert!(
+        client
+            .conversation_media_upload_contract(&route, ResourceKind::Image, "image/png")
+            .expect("Model Studio upload configuration must be valid")
+            .is_some()
+    );
 }
 
 /// Verifies prepared media keys follow provider, service, and upload-contract boundaries.

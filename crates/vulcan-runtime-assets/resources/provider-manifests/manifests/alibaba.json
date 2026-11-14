@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 33,
-  "published_at": "2026-11-12T10:12:31Z",
+  "revision": 34,
+  "published_at": "2026-11-14T08:55:47Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -99,23 +99,6 @@
         {
           "protocol_profile_id": "openai-chat-completions.v1",
           "endpoint_path": "/chat/completions",
-          "request_headers": {
-            "x-dashscope-ossresource-resolve": "enable"
-          },
-          "input_resource_constraints": [
-            {
-              "resource_kind": "image",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["cn.temporary-oss"]
-            },
-            {
-              "resource_kind": "video",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["cn.temporary-oss"]
-            }
-          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
@@ -127,23 +110,6 @@
         {
           "protocol_profile_id": "openai-responses.v1",
           "endpoint_path": "/responses",
-          "request_headers": {
-            "x-dashscope-ossresource-resolve": "enable"
-          },
-          "input_resource_constraints": [
-            {
-              "resource_kind": "image",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["cn.temporary-oss"]
-            },
-            {
-              "resource_kind": "video",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["cn.temporary-oss"]
-            }
-          ],
           "usage_profile_refs": [
             "alibaba.openai.responses.body.v1",
             "alibaba.openai.responses.sse.completed.v1",
@@ -160,23 +126,8 @@
           "base_url_override": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
           "authentication": "x_api_key",
           "request_headers": {
-            "anthropic-version": "2023-06-01",
-            "x-dashscope-ossresource-resolve": "enable"
+            "anthropic-version": "2023-06-01"
           },
-          "input_resource_constraints": [
-            {
-              "resource_kind": "image",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["cn.temporary-oss"]
-            },
-            {
-              "resource_kind": "video",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["cn.temporary-oss"]
-            }
-          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "alibaba.token-plan.anthropic.thinking.v1"
@@ -263,23 +214,6 @@
         {
           "protocol_profile_id": "openai-chat-completions.v1",
           "endpoint_path": "/chat/completions",
-          "request_headers": {
-            "x-dashscope-ossresource-resolve": "enable"
-          },
-          "input_resource_constraints": [
-            {
-              "resource_kind": "image",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["sg.temporary-oss"]
-            },
-            {
-              "resource_kind": "video",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["sg.temporary-oss"]
-            }
-          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
@@ -291,23 +225,6 @@
         {
           "protocol_profile_id": "openai-responses.v1",
           "endpoint_path": "/responses",
-          "request_headers": {
-            "x-dashscope-ossresource-resolve": "enable"
-          },
-          "input_resource_constraints": [
-            {
-              "resource_kind": "image",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["sg.temporary-oss"]
-            },
-            {
-              "resource_kind": "video",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["sg.temporary-oss"]
-            }
-          ],
           "usage_profile_refs": [
             "alibaba.openai.responses.body.v1",
             "alibaba.openai.responses.sse.completed.v1",
@@ -324,23 +241,8 @@
           "base_url_override": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
           "authentication": "x_api_key",
           "request_headers": {
-            "anthropic-version": "2023-06-01",
-            "x-dashscope-ossresource-resolve": "enable"
+            "anthropic-version": "2023-06-01"
           },
-          "input_resource_constraints": [
-            {
-              "resource_kind": "image",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["sg.temporary-oss"]
-            },
-            {
-              "resource_kind": "video",
-              "max_bytes": 1073741824,
-              "reference_policy": "local_only",
-              "upload_channel_refs": ["sg.temporary-oss"]
-            }
-          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "alibaba.token-plan.anthropic.thinking.v1"
@@ -4578,46 +4480,6 @@
       "reference_encoding": "response_url"
     },
     {
-      "upload_channel_id": "sg.temporary-oss",
-      "description": "Upload one local conversation resource through the reviewed temporary OSS policy handshake.",
-      "primitive": "signed_object_upload",
-      "signing_primitive": "temporary_oss_policy",
-      "endpoint_host": "dashscope-intl.aliyuncs.com",
-      "endpoint_path": "/api/v1/uploads",
-      "method": "GET",
-      "accepted_mime_types": [
-        "image/jpeg",
-        "image/png",
-        "image/bmp",
-        "image/webp",
-        "image/gif",
-        "audio/aac",
-        "audio/amr",
-        "audio/flac",
-        "audio/mp4",
-        "audio/mpeg",
-        "audio/ogg",
-        "audio/opus",
-        "audio/wav",
-        "audio/x-ms-wma",
-        "video/mp4",
-        "video/mpeg",
-        "video/quicktime",
-        "video/webm",
-        "video/x-flv",
-        "video/x-matroska",
-        "video/x-ms-wmv",
-        "video/x-msvideo"
-      ],
-      "max_bytes": 2147483648,
-      "max_count": 100,
-      "timeout_ms": 1800000,
-      "progress_supported": true,
-      "cancellation_supported": true,
-      "cache_duration_ms": 1800000,
-      "reference_encoding": "response_url"
-    },
-    {
       "upload_channel_id": "inline.image-data-url",
       "description": "Materialize a verified local image as an inline Data URL.",
       "primitive": "inline_data_url",
@@ -5208,13 +5070,7 @@
       "tool_target_refs": [
         "model-studio-cn.happyhorse-1.1-t2v",
         "model-studio-cn.happyhorse-1.1-i2v",
-        "model-studio-cn.happyhorse-1.1-r2v",
-        "token-plan-personal-cn.happyhorse-1.1-t2v",
-        "token-plan-personal-cn.happyhorse-1.1-i2v",
-        "token-plan-team-cn.happyhorse-1.1-t2v",
-        "token-plan-team-cn.happyhorse-1.1-i2v",
-        "token-plan-personal-cn.happyhorse-1.1-r2v",
-        "token-plan-team-cn.happyhorse-1.1-r2v"
+        "model-studio-cn.happyhorse-1.1-r2v"
       ],
       "request_profile_refs": ["alibaba.async.happyhorse-generate.request.v1"],
       "response_profile_refs": ["alibaba.async.task.response.v1"],
@@ -5321,14 +5177,20 @@
       }
     },
     {
-      "operation_id": "alibaba.alibaba_happy_horse_video_generate_sg",
+      "operation_id": "alibaba.alibaba_happy_horse_video_generate_token_plan",
       "operation": "video_generate",
       "carrier": "provider_tool",
-      "input_resources": ["image", "video", "audio"],
+      "input_resources": ["image"],
       "output_resources": [
         "video"
       ],
       "tool_target_refs": [
+        "token-plan-personal-cn.happyhorse-1.1-t2v",
+        "token-plan-personal-cn.happyhorse-1.1-i2v",
+        "token-plan-team-cn.happyhorse-1.1-t2v",
+        "token-plan-team-cn.happyhorse-1.1-i2v",
+        "token-plan-personal-cn.happyhorse-1.1-r2v",
+        "token-plan-team-cn.happyhorse-1.1-r2v",
         "token-plan-personal-global.happyhorse-1.1-t2v",
         "token-plan-personal-global.happyhorse-1.1-i2v",
         "token-plan-personal-global.happyhorse-1.1-r2v",
@@ -5338,7 +5200,7 @@
       ],
       "request_profile_refs": ["alibaba.async.happyhorse-generate.request.v1"],
       "response_profile_refs": ["alibaba.async.task.response.v1"],
-      "upload_channel_refs": ["inline.image-data-url", "sg.temporary-oss"],
+      "upload_channel_refs": ["inline.image-data-url"],
       "upload_bindings": [
         {
           "source_path": "/first_frame_path",
@@ -5368,38 +5230,6 @@
             "webp": "image/webp"
           },
           "required": true,
-          "remove_source": true
-        },
-        {
-          "source_path": "/references",
-          "target_path": "/references",
-          "item_source_path": "/path",
-          "item_target_path": "/carrier",
-          "item_match_path": "/kind",
-          "item_match_value": "video",
-          "upload_channel_refs": ["sg.temporary-oss"],
-          "mime_types_by_extension": {
-            "mp4": "video/mp4",
-            "mov": "video/quicktime"
-          },
-          "required": true,
-          "remove_source": true
-        },
-        {
-          "source_path": "/references",
-          "target_path": "/references",
-          "item_source_path": "/voice_path",
-          "item_target_path": "/voice",
-          "upload_channel_refs": ["sg.temporary-oss"],
-          "mime_types_by_extension": {
-            "mp3": "audio/mpeg",
-            "wav": "audio/wav",
-            "m4a": "audio/mp4",
-            "mp4": "audio/mp4",
-            "aac": "audio/aac",
-            "flac": "audio/flac"
-          },
-          "required": false,
           "remove_source": true
         }
       ],
@@ -10698,17 +10528,7 @@
         "endpoint_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com",
         "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
         "execution_kind": "http_json_async_poll",
-        "start_fixed_headers": {"x-dashscope-async": "enable"},
-        "start_conditional_headers": [
-          {
-            "name": "x-dashscope-ossresource-resolve",
-            "value": "enable",
-            "when_any": [
-              {"pointer_pattern": "/references/*/kind", "equals": "video"},
-              {"pointer_pattern": "/references/*/voice"}
-            ]
-          }
-        ]
+        "start_fixed_headers": {"x-dashscope-async": "enable"}
       },
       "input_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -10744,16 +10564,11 @@
               "properties": {
                 "kind": {
                   "enum": [
-                    "image",
-                    "video"
+                    "image"
                   ],
                   "type": "string"
                 },
                 "path": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "voice_path": {
                   "minLength": 1,
                   "type": "string"
                 }
@@ -10826,17 +10641,7 @@
         "endpoint_base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
         "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
         "execution_kind": "http_json_async_poll",
-        "start_fixed_headers": {"x-dashscope-async": "enable"},
-        "start_conditional_headers": [
-          {
-            "name": "x-dashscope-ossresource-resolve",
-            "value": "enable",
-            "when_any": [
-              {"pointer_pattern": "/references/*/kind", "equals": "video"},
-              {"pointer_pattern": "/references/*/voice"}
-            ]
-          }
-        ]
+        "start_fixed_headers": {"x-dashscope-async": "enable"}
       },
       "input_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -10872,16 +10677,11 @@
               "properties": {
                 "kind": {
                   "enum": [
-                    "image",
-                    "video"
+                    "image"
                   ],
                   "type": "string"
                 },
                 "path": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "voice_path": {
                   "minLength": 1,
                   "type": "string"
                 }
@@ -12152,22 +11952,7 @@
         "execution_kind": "http_json_async_poll",
         "start_fixed_headers": {
           "x-dashscope-async": "enable"
-        },
-        "start_conditional_headers": [
-          {
-            "name": "x-dashscope-ossresource-resolve",
-            "value": "enable",
-            "when_any": [
-              {
-                "pointer_pattern": "/references/*/kind",
-                "equals": "video"
-              },
-              {
-                "pointer_pattern": "/references/*/voice"
-              }
-            ]
-          }
-        ]
+        }
       },
       "input_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12203,16 +11988,11 @@
               "properties": {
                 "kind": {
                   "enum": [
-                    "image",
-                    "video"
+                    "image"
                   ],
                   "type": "string"
                 },
                 "path": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "voice_path": {
                   "minLength": 1,
                   "type": "string"
                 }
@@ -12471,22 +12251,7 @@
         "execution_kind": "http_json_async_poll",
         "start_fixed_headers": {
           "x-dashscope-async": "enable"
-        },
-        "start_conditional_headers": [
-          {
-            "name": "x-dashscope-ossresource-resolve",
-            "value": "enable",
-            "when_any": [
-              {
-                "pointer_pattern": "/references/*/kind",
-                "equals": "video"
-              },
-              {
-                "pointer_pattern": "/references/*/voice"
-              }
-            ]
-          }
-        ]
+        }
       },
       "input_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12522,16 +12287,11 @@
               "properties": {
                 "kind": {
                   "enum": [
-                    "image",
-                    "video"
+                    "image"
                   ],
                   "type": "string"
                 },
                 "path": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "voice_path": {
                   "minLength": 1,
                   "type": "string"
                 }
@@ -12843,7 +12603,11 @@
       },
       {
         "url": "https://www.alibabacloud.com/help/en/model-studio/qwen-code",
-        "note": "Singapore Token Plan Personal lists the decision model on its regional gateway. System One and local uploads on Singapore Token Plan were not live-tested with a matching credential."
+        "note": "Singapore Token Plan Personal lists the decision model on its regional gateway. System One was not live-tested with a matching credential."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/cli/config",
+        "note": "DashScope temporary file upload is unavailable with Token Plan credentials. Keep temporary OSS upload on Model Studio API routes."
       },
       {
         "url": "https://www.alibabacloud.com/help/en/model-studio/get-temporary-file-url",
