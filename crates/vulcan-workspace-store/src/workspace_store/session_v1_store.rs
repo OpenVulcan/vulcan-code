@@ -144,6 +144,9 @@ pub struct SessionV1StorageLocator {
     /// Exact project resource directory inherited by every embedded child session.
     /// 每个内嵌子会话继承的精确项目资源目录。
     project_directory: PathBuf,
+    /// Whether this locator was derived from a parent rather than published in the index.
+    /// 定位器是否由父会话派生而非发布在会话索引中。
+    embedded: bool,
     /// Exact physical layout derived and validated inside this crate.
     /// 在本 crate 内派生并校验的精确物理布局。
     layout: SessionV1Layout,
@@ -264,8 +267,22 @@ impl SessionV1StorageLocator {
     /// 若为内嵌子会话则返回声明的根会话 ID，根会话则返回 None。
     pub fn read_environment_root_session_id(&self) -> Result<Option<String>, SessionV1StoreError> {
         let metadata = self.read_indexed_metadata()?;
-        let Some(profile) = metadata.child_execution_profile else {
-            return Ok(None);
+        let profile = match (self.embedded, metadata.child_execution_profile) {
+            (false, None) => return Ok(None),
+            (true, Some(profile)) => profile,
+            (embedded, _) => {
+                let detail = if embedded {
+                    "embedded session is missing its child execution profile"
+                } else {
+                    "indexed root has a child execution profile"
+                };
+                return Err(SessionV1StorageError::corrupt(
+                    SessionV1StorageErrorCode::MetadataCorrupt,
+                    self.layout.metadata_path(),
+                    detail,
+                )
+                .into());
+            }
         };
         profile
             .validate_owner(self.session_id(), metadata.segment_generation)
@@ -1683,6 +1700,7 @@ fn storage_locator_from_row(
         project_id: row.project_id,
         relative_path: row.relative_path,
         project_directory,
+        embedded: false,
         layout,
     })
 }
@@ -1814,6 +1832,7 @@ fn embedded_task_locator(
         project_id: parent.project_id.clone(),
         relative_path: format!("{}/{}", parent.relative_path, child_relative_path),
         project_directory: parent.project_directory.clone(),
+        embedded: true,
         layout,
     })
 }

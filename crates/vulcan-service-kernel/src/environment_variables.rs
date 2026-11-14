@@ -801,6 +801,77 @@ mod tests {
         assert_eq!(entry_from_record(&plain).value, "secret-value");
     }
 
+    /// Rejects WebUI history for an embedded session whose persisted execution profile is absent.
+    /// 内嵌会话缺少持久执行配置时，拒绝 WebUI 的历史输出请求。
+    #[tokio::test]
+    async fn historical_job_redaction_rejects_embedded_session_without_profile() {
+        use crate::session_runtime_registry_v1::SessionHandle;
+        use crate::tests::test_support::{
+            TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
+        };
+        use vulcan_session_core::v1::document::SessionDocument;
+        use vulcan_workspace_store::workspace_store::{
+            CreateEmbeddedTaskSessionV1Request, create_embedded_task_session_v1,
+        };
+
+        // Publish an embedded session without a profile using the normal storage writer.
+        // 通过常规存储写入器发布缺少执行配置的内嵌会话。
+        let root_id = SessionId::new_v4();
+        let fixture = TestHostRuntimeRoot::new(root_id);
+        let root = fixture.v1_storage_locator();
+        let child_id = SessionId::new_v4();
+        use vulcan_session_core::v1::context::{RuntimeInitializationState, RuntimeLock};
+        use vulcan_session_core::v1::config::MetadataDocument;
+
+        let document = SessionDocument::new(child_id.to_string(), root.project_id(), "child", 1);
+        let metadata = MetadataDocument::new(child_id.to_string(), root.project_id(), "child", 1);
+        let runtime_lock = RuntimeLock {
+            initialization_state: RuntimeInitializationState::Initialized,
+            current_compaction_id: None,
+            locked_sources: Vec::new(),
+        };
+        let child = create_embedded_task_session_v1(
+            &root,
+            &CreateEmbeddedTaskSessionV1Request {
+                metadata: &metadata,
+                runtime_lock: &runtime_lock,
+                compactions: &[],
+                events: &[],
+            },
+        )
+        .unwrap();
+
+        // Use the real locator registry and compare the RPC error with the storage error.
+        // 使用真实定位器注册表，并比较 RPC 与存储层返回的错误。
+        let mut state = test_service_state_with_parent_session(root_id);
+        state.controller_runtime = Some(fixture.attached_host_runtime_handle().await);
+        state.agent_runtime = Some(test_agent_runtime_bridge());
+        let locator = child.locator;
+        state
+            .session_runtime_registry
+            .register(SessionHandle::new(child_id, locator.clone(), document))
+            .unwrap();
+        let error = crate::session_activity_services::service_read_shell_job_output(
+            Arc::new(Mutex::new(state)),
+            vulcan_service_api::ShellJobOutputRequest {
+                session_id: child_id.to_string(),
+                job_id: String::from("job_0123456789ab"),
+                before_line: None,
+                from_line: None,
+                max_lines: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            locator
+                .read_environment_root_session_id()
+                .unwrap_err()
+                .to_string()
+        );
+    }
+
     /// Registers all stored same-name secrets on the first history read after startup.
     /// 重启后首次读取历史记录时，登记全部已存储的同名密钥。
     #[tokio::test]
