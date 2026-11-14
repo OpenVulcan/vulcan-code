@@ -3878,29 +3878,21 @@ fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
 /// Returns text with all URL runs replaced except exact matches in the trusted `public_links` list.
 /// 返回替换网址后的文本，仅保留与可信 `public_links` 列表精确匹配的网址。
 fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String {
-    // is_url_delimiter excludes parentheses, brackets and apostrophes because they can occur inside URLs.
-    // is_url_delimiter 排除圆括号、方括号和单引号，因为它们可以出现在 URL 内部。
+    // is_url_delimiter excludes backticks and non-ASCII whitespace because they can occur inside HTTP URL queries.
+    // is_url_delimiter 排除反引号和非 ASCII 空白，因为它们可以出现在 HTTP URL 查询串内部。
     let is_url_delimiter =
-        |character: char| character.is_whitespace() || matches!(character, '`' | '"' | '<' | '>');
+        |character: char| character.is_ascii_whitespace() || matches!(character, '"' | '<' | '>');
     let mut redacted = String::with_capacity(value.len());
     let mut remaining = value;
-    while let Some(separator) = remaining.find("://") {
-        // scheme_start walks back over RFC 3986 scheme characters before the separator.
-        // scheme_start 从分隔符向前回溯 RFC 3986 scheme 字符。
-        let scheme_start = remaining[..separator]
-            .char_indices()
-            .rev()
-            .take_while(|(_, character)| {
-                character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
-            })
-            .last()
-            .map_or(separator, |(index, _)| index);
+    // url_start includes the scheme when one is present and authority_start follows both slashes.
+    // url_start 在协议存在时包含协议，authority_start 位于两个斜杠之后。
+    while let Some((url_start, authority_start)) = provider_diagnostic_url_start(remaining) {
         // url_end skips embedded credential markers because they may split an otherwise contiguous URL.
         // url_end 跳过嵌入的凭据标记，因为这些标记可能分隔原本连续的 URL。
         let url_end = {
-            // scan starts immediately after the URL scheme separator.
-            // scan 从 URL 协议分隔符之后开始扫描。
-            let mut scan = separator + 3;
+            // scan starts at the authority so either form of a URL uses identical redaction.
+            // scan 从授权部分起始位置开始，确保两种 URL 使用相同的脱敏规则。
+            let mut scan = authority_start;
             loop {
                 // offset locates the next delimiter relative to the current scan position.
                 // offset 定位相对于当前扫描起点的下一个分隔符。
@@ -3916,10 +3908,23 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
         };
         // prefix can end in an opening wrapper adjacent to the URL.
         // prefix 可能以紧挨 URL 的包裹开符号结尾。
-        let prefix = &remaining[..scheme_start];
+        let prefix = &remaining[..url_start];
         // token includes the complete URL and any trailing sentence punctuation or matching wrapper.
         // token 包含完整的 URL 以及可能紧随其后的句末标点或配对包裹字符。
-        let token = &remaining[scheme_start..url_end];
+        let token = &remaining[url_start..url_end];
+        redacted.push_str(prefix);
+        // Treat an ideographic full stop before prose as a boundary only after an exact approved URL.
+        // 只有在完整匹配的已核验 URL 之后，才将正文前的中文句号视为边界。
+        if let Some((link, following_text)) = token.split_once('。')
+            && public_links.contains(&link)
+            && approved_diagnostic_link_followed_by_prose(following_text)
+        {
+            redacted.push_str(link);
+            // Resume from the full stop so any later URL in the same paragraph is still scanned.
+            // 从句号处继续扫描，确保同段正文里的后续 URL 仍经过脱敏。
+            remaining = &remaining[url_start + link.len()..];
+            continue;
+        }
         // Strip sentence periods only after scanning the full token, so a suffix cannot expose credentials.
         // 扫描完整片段后才剥离句号，避免后缀暴露凭据。
         let url = token.trim_end_matches(['.', '。']);
@@ -3930,9 +3935,9 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
             Some('[') => url.strip_suffix(']').unwrap_or(url),
             Some('{') => url.strip_suffix('}').unwrap_or(url),
             Some('\'') => url.strip_suffix('\'').unwrap_or(url),
+            Some('`') => url.strip_suffix('`').unwrap_or(url),
             _ => url,
         };
-        redacted.push_str(prefix);
         redacted.push_str(if public_links.contains(&url) {
             url
         } else {
@@ -3943,6 +3948,81 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
     }
     redacted.push_str(remaining);
     redacted
+}
+
+/// Reports whether `following_text` begins with prose or a separate URL after an approved link's period.
+/// 判断已核验链接的句号后，`following_text` 是否以正文或独立 URL 开头。
+/// Returns false for an empty suffix or URI delimiters outside any subsequent URL.
+/// 后缀为空或后续 URL 之前出现 URI 分隔符时返回 false。
+fn approved_diagnostic_link_followed_by_prose(following_text: &str) -> bool {
+    // prose ends at the next URL so its own query does not invalidate the preceding approved link.
+    // prose 在下一个 URL 处结束，因此该 URL 自身的查询串不影响前面的已核验链接。
+    let prose = match provider_diagnostic_url_start(following_text) {
+        Some((next_url, _)) => &following_text[..next_url],
+        None => following_text,
+    };
+    (prose.len() < following_text.len() || prose.starts_with(char::is_alphanumeric))
+        && !prose.contains(['?', '&', '=', '@', '#', '%', '/'])
+}
+
+/// Finds the byte offsets of the first URL and its authority in a provider diagnostic `value`.
+/// 查找供应商诊断 `value` 中首个 URL 及其主机部分的字节偏移。
+/// Both scheme URLs and standalone network-path references are recognized. Returns `None` when neither occurs.
+/// 识别包含协议的 URL 及独立的无协议网络路径，两者均不存在时返回 `None`。
+fn provider_diagnostic_url_start(value: &str) -> Option<(usize, usize)> {
+    // slashes is the byte offset of the authority separator for either form of URL.
+    // slashes 是两种 URL 共用的授权部分分隔符的字节偏移。
+    value.match_indices("//").find_map(|(slashes, _)| {
+        // before contains the scheme or the prose preceding a network-path reference.
+        // before 包含协议或无协议网络路径前的正文。
+        let before = &value[..slashes];
+        // authority_start skips both slashes before the host or user information.
+        // authority_start 跳过主机或用户信息前的两个斜杠。
+        let authority_start = slashes + 2;
+        if let Some(scheme_prefix) = before.strip_suffix(':') {
+            // scheme_start walks back over RFC 3986 scheme characters.
+            // scheme_start 按 RFC 3986 的协议字符规则向前查找。
+            let scheme_start = scheme_prefix
+                .trim_end_matches(|character: char| {
+                    character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+                })
+                .len();
+            if scheme_start < scheme_prefix.len() {
+                return Some((scheme_start, authority_start));
+            }
+        }
+        // A network-path reference begins a token. A doubled slash inside a relative path is ordinary text.
+        // 无协议网络路径位于片段起始处，相对路径内部的双斜杠属于普通文本。
+        let at_boundary = before.chars().next_back().is_none_or(|character| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '(' | '['
+                        | '{'
+                        | '<'
+                        | '"'
+                        | '\''
+                        | '`'
+                        | '='
+                        | ':'
+                        | '：'
+                        | '。'
+                        | ','
+                        | '，'
+                        | ';'
+                        | '；'
+                )
+        });
+        // An authority must immediately follow the slashes, which also preserves standalone `//` prose.
+        // 授权部分必须紧跟双斜杠，这也保留了正文中独立的 `//`。
+        let has_authority = value[authority_start..]
+            .chars()
+            .next()
+            .is_some_and(|character| {
+                !character.is_ascii_whitespace() && !matches!(character, '"' | '>')
+            });
+        (at_boundary && has_authority).then_some((slashes, authority_start))
+    })
 }
 
 /// Sanitizes one provider-controlled diagnostic scalar without retaining URLs or credentials.

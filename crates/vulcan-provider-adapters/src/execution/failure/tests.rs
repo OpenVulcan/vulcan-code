@@ -183,8 +183,55 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
     let cases = [
         (format!("{help_link}."), format!("{help_link}.")),
         (format!("{help_link}。"), format!("{help_link}。")),
+        (
+            format!("{help_link}。请稍后重试。"),
+            format!("{help_link}。请稍后重试。"),
+        ),
+        (
+            format!(
+                "{help_link}。请参考 https://blob.example.invalid/report?sig=fixture-sas-value"
+            ),
+            format!("{help_link}。请参考 <redacted-url>"),
+        ),
         (format!("({help_link})."), format!("({help_link}).")),
         (format!("'{help_link}'"), format!("'{help_link}'")),
+        (
+            String::from("`https://blob.example.invalid/report?name=a`b&sig=fixture-sas-value`"),
+            String::from("`<redacted-url>`"),
+        ),
+        (
+            String::from("https://owner:part`fixture-password@blob.example.invalid/report.pdf"),
+            String::from("<redacted-url>"),
+        ),
+        (
+            String::from(
+                "//owner:fixture-password@blob.example.invalid/report?sig=fixture-sas-value",
+            ),
+            String::from("<redacted-url>"),
+        ),
+        (
+            String::from(
+                "`//owner:part`fixture-password@[2001:db8::1]/report(1).pdf?sig=fixture-sas-value`",
+            ),
+            String::from("`<redacted-url>`"),
+        ),
+        (
+            format!("{help_link}。//blob.example.invalid/report?sig=fixture-sas-value"),
+            format!("{help_link}。<redacted-url>"),
+        ),
+        (
+            format!("{help_link}。详见https://blob.example.invalid/report?sig=fixture-sas-value"),
+            format!("{help_link}。详见<redacted-url>"),
+        ),
+        (
+            format!("{help_link}。suffix?sig=fixture-sas-value"),
+            String::from("<redacted-url>"),
+        ),
+        (
+            String::from("//blob.example.invalid/report?name=a\u{a0}b&sig=fixture-sas-value"),
+            String::from("<redacted-url>"),
+        ),
+        (String::from("path//segment"), String::from("path//segment")),
         (
             String::from("<https://blob.example.invalid/report(1).pdf?sig=fixture-sas-value>"),
             String::from("<<redacted-url>>"),
@@ -212,6 +259,12 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
                 "https://www.alibabacloud.com/help/en/model-studio/error-code?sig=fixture-sas-value#token-limit.",
             ),
             String::from("<redacted-url>."),
+        ),
+        (
+            String::from(
+                "https://www.alibabacloud.com/help/en/model-studio/error-code?sig=fixture-sas-value#token-limit。请稍后重试。",
+            ),
+            String::from("<redacted-url>。"),
         ),
     ];
     // Each diagnostic contains surrounding text so the assertions also detect accidental over-redaction.
