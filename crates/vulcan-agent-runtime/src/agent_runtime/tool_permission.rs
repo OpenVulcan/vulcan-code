@@ -553,7 +553,8 @@ pub fn classify_tool_call(definition: &ResolvedToolDefinition, args: &Value) -> 
             })
         }
         VulcanToolSourceKind::Native => {
-            let mut subject = classify_native(&definition.descriptor.id, args);
+            let mut subject = classify_native(&definition.descriptor.id, args)
+                .unwrap_or(PermissionSubject::Opaque);
             if let PermissionSubject::Command { shell, .. } = &mut subject
                 && (definition.descriptor.id == SHELL_COMMAND_TOOL_ID
                     || args.get("action").and_then(Value::as_str) == Some("start"))
@@ -591,9 +592,11 @@ pub fn classify_tool_call(definition: &ResolvedToolDefinition, args: &Value) -> 
 
 /// Classifies one native tool call by its canonical id and arguments.
 /// 按规范标识与参数对一次原生工具调用分类。
-fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
+fn classify_native(tool_id: &str, args: &Value) -> Option<PermissionSubject> {
+    // Read string fields without interpreting malformed input as a valid action.
+    // 读取字符串字段，避免把格式错误的输入当成有效动作。
     let string_arg = |field: &str| args.get(field).and_then(Value::as_str).map(str::to_string);
-    match tool_id {
+    Some(match tool_id {
         // These tools mutate only explicitly enabled knowledge storage or user-directory memory,
         // or read native local text.
         // 这些工具仅变更显式启用的知识存储或用户目录记忆，或读取原生本地文本。
@@ -601,10 +604,53 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
         | "memory_outline" | "memory_search" | "memory_write" | "file_read" => {
             PermissionSubject::Ungoverned
         }
+        // Preserve the declared behavior of existing runtime, collaboration, and host UI tools.
+        // 保持现有运行时、协作和宿主界面工具的既定行为。
+        "native_workspace_describe"
+        | "native_registry_list_agents"
+        | "native_registry_list_skills"
+        | "native_mcp_list_servers"
+        | "skill"
+        | "todolist"
+        | "submit_plan"
+        | "get_goal"
+        | "create_goal"
+        | "update_goal"
+        | DECLARE_INTENT_TOOL_ID
+        | "env"
+        | "shell_job"
+        | "mcp_tools"
+        | "runtime-config"
+        | "vmm_memory_search"
+        | "vmm_turn_details"
+        | "vmm_memory_write"
+        | "vmm_memory_delete"
+        | "browser_list"
+        | "browser_open"
+        | "browser_select"
+        | "browser_close"
+        | "ask"
+        | vulcan_tool_chain::TOOL_CHAIN_TOOL_ID
+        | vulcan_luaskills_prompt::LUASKILL_HELP_TOOL_NAME
+        | vulcan_subagent_core::SPAWN_AGENT_TOOL
+        | vulcan_subagent_core::AGENT_ORCHESTRATION_INFO_TOOL
+        | vulcan_subagent_core::SEND_MESSAGE_TOOL
+        | vulcan_subagent_core::LIST_AGENTS_TOOL
+        | vulcan_subagent_core::INTERRUPT_AGENT_TOOL
+        | vulcan_subagent_core::CLOSE_AGENT_TOOL
+        | vulcan_subagent_core::WAIT_AGENTS_RESULT_TOOL
+        | "ask_question"
+        | "ask_parent"
+        | "reply_question"
+        | "cancel_question"
+        | "list_sessions"
+        | "read_session"
+        | "send_session_message"
+        | "send_notification" => PermissionSubject::Ungoverned,
         FILE_TOOL_ID => {
             let action = args.get("action").and_then(Value::as_str);
             if action.is_some_and(|action| FILE_READ_ACTIONS.contains(&action)) {
-                return PermissionSubject::Ungoverned;
+                return Some(PermissionSubject::Ungoverned);
             }
             let paths: Vec<String> = [string_arg("path"), string_arg("destination")]
                 .into_iter()
@@ -659,8 +705,10 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
             Some(FEEDBACK_DRAFT_ACTION) => PermissionSubject::Ungoverned,
             _ => PermissionSubject::Opaque,
         },
-        _ => PermissionSubject::Ungoverned,
-    }
+        // A newly registered native tool needs an explicit classification before bypassing review.
+        // 新注册的原生工具必须显式分类，才能跳过审批。
+        _ => return None,
+    })
 }
 
 /// Classifies one `mcp_connect` call: starting a stdio server runs its command line, and reaching

@@ -210,11 +210,56 @@ fn knowledge_and_ingest_file_reads_are_ungoverned() {
         ] {
             assert!(matches!(
                 classify_native(tool, &args),
-                PermissionSubject::Ungoverned
+                Some(PermissionSubject::Ungoverned)
             ));
         }
     }
 }
+/// Requires explicit classification of every tool in the standard native catalog.
+/// 要求标准原生工具目录中的每项工具都有显式分类。
+#[test]
+fn native_catalog_has_explicit_permission_classifications() {
+    // Use the production catalog so registering a new tool exercises this assertion.
+    // 使用生产工具目录，让新增工具注册自动覆盖此断言。
+    let config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("test-agent"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    // The non-optional registrations require no plugin or live LuaSkills host.
+    // 非可选注册项无需插件或正在运行的 LuaSkills 宿主。
+    let catalog = crate::tooling::native::build_native_tool_catalog(
+        &config,
+        None,
+        &Default::default(),
+        Arc::new(vulcan_host_tools::command_session_runtime::CommandSessionRuntime::new()),
+        Default::default(),
+        None,
+        None,
+    );
+    for descriptor in &catalog.descriptors {
+        assert!(
+            classify_native(&descriptor.id, &json!({})).is_some(),
+            "Native tool {} has no explicit permission classification",
+            descriptor.id,
+        );
+    }
+}
+
+/// Checks that an unclassified synthetic native definition is sent for permission review.
+/// 确认未分类的合成原生工具定义进入权限审批流程。
+#[test]
+fn unclassified_native_tool_is_opaque() {
+    assert!(matches!(
+        classify_tool_call(&native("fixture_unclassified_tool"), &json!({})),
+        PermissionSubject::Opaque
+    ));
+}
+
 use crate::tooling::native::FILE_READ_TOOL_ID;
 use serde_json::json;
 use vulcan_tools_manager::{
