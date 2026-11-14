@@ -3883,10 +3883,10 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
     // url_start includes the scheme when one is present and authority_start follows both slashes.
     // url_start 在协议存在时包含协议，authority_start 位于两个斜杠之后。
     while let Some((url_start, authority_start)) = provider_diagnostic_url_start(remaining) {
-        // url_end uses ASCII whitespace so quotes, angle brackets and embedded credential markers cannot split a URL.
-        // url_end 以 ASCII 空白定位终点，避免引号、尖括号及嵌入的凭据标记截断 URL。
+        // URL parsing ignores embedded tabs and line breaks, so only a literal space ends the candidate.
+        // URL 解析会忽略内部制表符和换行符，因此只用普通空格结束候选地址。
         let url_end = remaining[authority_start..]
-            .find(|character: char| character.is_ascii_whitespace())
+            .find(' ')
             .map_or(remaining.len(), |offset| authority_start + offset);
         // prefix can end in an opening wrapper adjacent to the URL.
         // prefix 可能以紧挨 URL 的包裹开符号结尾。
@@ -3895,23 +3895,28 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
         // token 包含完整的 URL 以及可能紧随其后的句末标点或配对包裹字符。
         let token = &remaining[url_start..url_end];
         redacted.push_str(prefix);
-        // Treat an ideographic full stop before prose as a boundary only after an exact approved URL.
-        // 只有在完整匹配的已核验 URL 之后，才将正文前的中文句号视为边界。
-        if let Some((link, following_text)) = token.split_once('。')
-            && public_links.contains(&link)
-            && approved_diagnostic_link_followed_by_prose(following_text)
+        // An exact ASCII help URL may be followed directly by localized prose. Check only URI syntax before the next URL.
+        // 精确匹配的 ASCII 帮助地址后可直接跟本地化正文，仅检查下一个 URL 之前的 URI 语法。
+        if let Some((prose_start, _)) = token
+            .char_indices()
+            .find(|(_, character)| !character.is_ascii())
+            && public_links.contains(&&token[..prose_start])
+            && !has_provider_diagnostic_url_suffix(&token[prose_start..])
         {
-            redacted.push_str(link);
-            // Resume from the full stop so any later URL in the same paragraph is still scanned.
-            // 从句号处继续扫描，确保同段正文里的后续 URL 仍经过脱敏。
-            remaining = &remaining[url_start + link.len()..];
+            redacted.push_str(&token[..prose_start]);
+            remaining = &remaining[url_start + prose_start..];
             continue;
         }
-        // Strip sentence periods only after scanning the full token, so a suffix cannot expose credentials.
-        // 扫描完整片段后才剥离句号，避免后缀暴露凭据。
-        let url = token.trim_end_matches(['.', '。']);
-        // A closing wrapper is prose only when that wrapper opens directly before the URL.
-        // 只有开符号紧挨 URL 之前，配对的闭符号才视为诊断文字的一部分。
+        // Only terminal prose punctuation is restored after a private URL has been fully consumed.
+        // 私密地址被完整扫描后，只恢复末尾的正文标点。
+        let url = token.trim_end_matches(|character: char| {
+            character == '.'
+                || (!character.is_ascii()
+                    && !character.is_alphanumeric()
+                    && !character.is_whitespace())
+        });
+        // ASCII wrappers may also occur inside URLs, so restore only a matching trailing wrapper.
+        // ASCII 包裹符也可能出现在 URL 内，因此只恢复末尾和开符号配对的闭符号。
         let url = prefix
             .chars()
             .next_back()
@@ -3930,28 +3935,23 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
     redacted
 }
 
-/// Reports whether `following_text` begins with prose or a separate URL after an approved link's period.
-/// 判断已核验链接的句号后，`following_text` 是否以正文或独立 URL 开头。
-/// Accepts opening wrappers and prose with slashes while rejecting URI parameter syntax outside a later URL.
-/// 接受以包裹符号开头或含斜杠的正文，并拒绝后续 URL 之外的 URI 参数语法。
-fn approved_diagnostic_link_followed_by_prose(following_text: &str) -> bool {
-    // prose ends at the next URL so its own query does not invalidate the preceding approved link.
-    // prose 在下一个 URL 处结束，因此该 URL 自身的查询串不影响前面的已核验链接。
-    let prose = match provider_diagnostic_url_start(following_text) {
-        Some((next_url, _)) => &following_text[..next_url],
-        None => following_text,
-    };
-    // An opening wrapper can introduce a sentence immediately after the Chinese period.
-    // 包裹开符号可以紧接中文句号引出下一句正文。
-    (prose.len() < following_text.len()
-        || prose.starts_with(|character: char| {
-            character.is_alphanumeric() || diagnostic_url_closing_wrapper(character).is_some()
-        }))
-        && !prose.contains(['?', '&', '=', '@', '#', '%'])
+/// Detects URI suffix syntax in `tail` after an approved ASCII URL and before any separate address.
+/// 检测 `tail` 中位于已核验 ASCII 地址之后、下一个独立地址之前的 URI 后缀语法。
+/// Returns true when query, fragment, user-info or percent-escape syntax makes the boundary ambiguous.
+/// 查询、片段、用户信息或百分号编码语法导致边界不明确时返回 true。
+fn has_provider_diagnostic_url_suffix(tail: &str) -> bool {
+    // suffix excludes any later URL, which will go through its own redaction pass.
+    // suffix 排除后续独立 URL，该 URL 会在后续扫描中单独脱敏。
+    let suffix =
+        &tail[..provider_diagnostic_url_start(tail).map_or(tail.len(), |(start, _)| start)];
+    suffix.contains(['?', '&', '=', '@', '#'])
+        || suffix.as_bytes().windows(3).any(|bytes| {
+            bytes[0] == b'%' && bytes[1].is_ascii_hexdigit() && bytes[2].is_ascii_hexdigit()
+        })
 }
 
-/// Returns the matching closing character for an opening prose wrapper, or `None` for other characters.
-/// 返回正文包裹开符号对应的闭符号，其他字符返回 `None`。
+/// Returns the matching closing character for an ASCII opening wrapper, or `None` for other characters.
+/// 返回 ASCII 包裹开符号对应的闭符号，其他字符返回 `None`。
 fn diagnostic_url_closing_wrapper(opening: char) -> Option<char> {
     Some(match opening {
         '(' => ')',
@@ -3959,14 +3959,6 @@ fn diagnostic_url_closing_wrapper(opening: char) -> Option<char> {
         '{' => '}',
         '<' => '>',
         '"' | '\'' | '`' => opening,
-        '（' => '）',
-        '【' => '】',
-        '《' => '》',
-        '〈' => '〉',
-        '「' => '」',
-        '『' => '』',
-        '“' => '”',
-        '‘' => '’',
         _ => return None,
     })
 }
@@ -3997,12 +3989,10 @@ fn provider_diagnostic_url_start(value: &str) -> Option<(usize, usize)> {
                 return Some((scheme_start, authority_start));
             }
         }
-        // A network-path reference begins a token. A doubled slash inside a relative path is ordinary text.
-        // 无协议网络路径位于片段起始处，相对路径内部的双斜杠属于普通文本。
+        // A path character before the slashes indicates an embedded separator, not a network-path reference.
+        // 双斜杠之前是路径字符时，它属于现有路径，不是无协议地址的起点。
         let at_boundary = before.chars().next_back().is_none_or(|character| {
-            character.is_whitespace()
-                || diagnostic_url_closing_wrapper(character).is_some()
-                || matches!(character, '=' | ':' | '：' | '。' | ',' | '，' | ';' | '；')
+            !character.is_ascii_alphanumeric() && !matches!(character, '.' | '_' | '-' | '/' | '\\')
         });
         // An authority must immediately follow the slashes, which also preserves standalone `//` prose.
         // 授权部分必须紧跟双斜杠，这也保留了正文中独立的 `//`。
@@ -4057,6 +4047,7 @@ pub(crate) fn sanitize_provider_diagnostic_text_with_public_links(
         "secret=",
         "token=",
         "signature=",
+        "sig=",
         "password=",
         "\"api_key\"",
         "\"api-key\"",

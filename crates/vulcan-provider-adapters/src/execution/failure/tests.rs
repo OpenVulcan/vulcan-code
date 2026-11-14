@@ -198,6 +198,16 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
             format!("{help_link}。请查看输入/输出限制。"),
         ),
         (
+            format!("「{help_link}」。请查看输入/输出占用率100%。"),
+            format!("「{help_link}」。请查看输入/输出占用率100%。"),
+        ),
+        (
+            format!(
+                "{help_link}。（下载）//owner:fixture-password@blob.example.invalid/report?sig=fixture-sas-value"
+            ),
+            format!("{help_link}。（下载）<redacted-url>"),
+        ),
+        (
             format!(
                 "{help_link}。请参考 https://blob.example.invalid/report?sig=fixture-sas-value"
             ),
@@ -224,6 +234,20 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
                 "\"https://blob.example.invalid/report?name=a`\"b&sig=fixture-sas-value\"",
             ),
             String::from("\"<redacted-url>\""),
+        ),
+        (
+            String::from("https://blob.example.invalid/report?name=a`<b>\tc&sig=fixture-sas-value"),
+            String::from("<redacted-url>"),
+        ),
+        (
+            String::from(
+                "//owner:fixture%2Dpassword@blob.example.invalid/report?sig=fixture%2Dsas%2Dvalue",
+            ),
+            String::from("<redacted-url>"),
+        ),
+        (
+            String::from("https://blob.example.invalid/report?sig=fixture\r\n-sas-value"),
+            String::from("<redacted-url>"),
         ),
         (
             String::from(
@@ -265,6 +289,10 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
         ),
         (
             format!("{help_link}。suffix?sig=fixture-sas-value"),
+            String::from("<redacted-url>"),
+        ),
+        (
+            format!("{help_link}。suffix?%73ig=fixture-sas-value"),
             String::from("<redacted-url>"),
         ),
         (
