@@ -6,12 +6,15 @@ use crate::{
     create_service_bridge_state, project_conversation_services::begin_project_lifecycle_transition,
     tests::test_support::test_service_shell_host,
 };
+use vulcan_sqlite_engine::sql_exec::SqliteValue;
 use vulcan_workspace_store::{
     data_plane::prepare_application_schema_for_test,
     local_database_runtime::LogicalDatabase,
     local_sql::{execute_script_async, query_json_async},
     workspace_store::{delete_active_project_row_v1, ensure_session_v1_storage_schema},
 };
+
+mod recovery_http;
 
 /// The exact project inserted into each isolated recovery database.
 /// 写入每个隔离恢复数据库的精确项目。
@@ -35,14 +38,18 @@ async fn prepare_recovery_project(fixture: &LifecycleStorageFixture) {
     ensure_session_v1_storage_schema(&fixture.controller)
         .await
         .unwrap();
+    // The workbench loader requires an absolute project path inside the fixture.
+    // 工作台加载器要求使用夹具内的绝对项目路径。
+    let root_path = fixture._temporary.path().to_string_lossy().into_owned();
     execute_script_async(
         &fixture.controller.local,
         LogicalDatabase::AppState,
-        format!(
-            "INSERT INTO projects (id, name, root_path, created_at, updated_at)
-             VALUES ('{RECOVERY_PROJECT_ID}', 'Recovery project', 'recovery-fixture', '1', '1');"
-        ),
-        Vec::new(),
+        "INSERT INTO projects (id, name, root_path, created_at, updated_at)
+         VALUES (?1, 'Recovery project', ?2, '1', '1');",
+        vec![
+            SqliteValue::Text(RECOVERY_PROJECT_ID.into()),
+            SqliteValue::Text(root_path),
+        ],
     )
     .await
     .unwrap();

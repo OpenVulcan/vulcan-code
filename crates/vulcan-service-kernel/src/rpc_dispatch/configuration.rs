@@ -721,6 +721,7 @@ pub(super) async fn dispatch(
         ),
         "service_create_reasoning_recovery_session" => rpc_json_result(
             service_create_reasoning_recovery_session(
+                app,
                 state,
                 rpc_required_param(params, "request")?,
             )

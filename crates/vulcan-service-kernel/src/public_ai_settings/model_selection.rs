@@ -530,9 +530,12 @@ impl ReasoningRecoveryRequest {
 
 /// Creates a new idle session for the requested model using only the source session's visible text.
 /// 为所请求模型创建新的空闲会话，仅携带来源会话的可见文本。
-/// Returns the indexed session id; no Provider request is dispatched by this operation.
-/// 返回已索引会话标识；本操作不发出供应商请求。
+/// `app` delivers workbench events, `state` owns the projection, and `request` identifies the recovery.
+/// `app` 传递工作台事件，`state` 持有投影，`request` 标识恢复操作。
+/// Returns the indexed session ID after refreshing the workbench without dispatching a Provider request.
+/// 在刷新工作台后返回已索引会话标识，期间不发出供应商请求。
 pub(crate) async fn service_create_reasoning_recovery_session(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: ReasoningRecoveryRequest,
 ) -> Result<String, String> {
@@ -547,15 +550,14 @@ pub(crate) async fn service_create_reasoning_recovery_session(
             std::sync::Arc::clone(&guard.session_runtime_registry),
         )
     };
-    // The publication task keeps project admission until SQLite finishes even if the client disconnects.
-    // 即使客户端断开，发布任务也会持有项目准入直至 SQLite 执行完成。
-    let publication_state = state.clone();
+    // The task owns durable publication and the retained workbench update even if the RPC is dropped.
+    // 即使 RPC 被取消，此任务仍负责可靠发布和更新保留的工作台。
     tokio::spawn(async move {
         // Keep target validation and publication atomic with respect to AI configuration changes.
         // 将目标校验和发布与 AI 配置变更串行化。
-        let _transaction = begin_public_ai_configuration_transaction().await;
+        let transaction = begin_public_ai_configuration_transaction().await;
         crate::session_v1_lifecycle::create_or_get_recovery_draft_session_v1(
-            &publication_state,
+            &state,
             &controller,
             &registry,
             session_id,
@@ -563,7 +565,7 @@ pub(crate) async fn service_create_reasoning_recovery_session(
                 // Retrying after publication needs neither the original history nor a still-enabled target.
                 // 发布后的重试无需重新读取来源历史或要求目标仍然启用。
                 let source = crate::session_goal_lifecycle::session_v1_handle_from_state(
-                    &publication_state,
+                    &state,
                     request.conversation_id,
                 )
                 .await?;
@@ -571,8 +573,7 @@ pub(crate) async fn service_create_reasoning_recovery_session(
                     tokio::task::spawn_blocking(move || recovery_conversation_text(&source))
                         .await
                         .map_err(|error| error.to_string())??;
-                let (runtime, configuration) =
-                    public_ai_runtime_and_configuration(&publication_state)?;
+                let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
                 let route = runtime.resolve_connection_model_selection(
                     &configuration,
                     &request.connection_id,
@@ -592,13 +593,20 @@ pub(crate) async fn service_create_reasoning_recovery_session(
                 })
             },
         )
-        .await
+        .await?;
+        drop(transaction);
+
+        // Publish the refreshed snapshot to clients that reconnected before the task completed.
+        // 向在任务完成前已重连的客户端发布刷新后的快照。
+        let workbench = crate::workbench_refresh::refresh_workbench_snapshot_for_selected_session(
+            state, session_id,
+        )
+        .await?;
+        crate::settings_runtime_projection::emit_workbench_event(&app, &workbench);
+        Ok(session_id.to_string())
     })
     .await
-    .map_err(|error| format!("Recovery session publication task failed: {error}"))??;
-    crate::workbench_refresh::refresh_workbench_snapshot_for_selected_session(state, session_id)
-        .await?;
-    Ok(session_id.to_string())
+    .map_err(|error| format!("Recovery session publication task failed: {error}"))?
 }
 
 /// Holds the source's project, display title, and text for an independent recovery draft.
