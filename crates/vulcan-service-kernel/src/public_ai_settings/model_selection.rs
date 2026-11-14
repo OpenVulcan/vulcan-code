@@ -2,6 +2,7 @@
 //! 精确模型选择、全局账号回退与会话租约撤销规则。
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_provider_adapters::{
     ActiveAiModelSelection, ConnectionModelCatalog, PersistedAiConfiguration, PublicAiRuntime,
@@ -244,15 +245,23 @@ pub(crate) async fn service_select_public_ai_model(
         // Check the exact history and target route before publishing any pending choice or account preference.
         // 发布待生效选择或账号偏好之前，校验精确历史和目标路由。
         let projection_handle = std::sync::Arc::clone(handle);
-        let (snapshot, active_api_started_seq) = tokio::task::spawn_blocking(move || {
-            projection_handle.capture_model_switch_projection()
+        // History encoding is CPU work, so keep it on the same blocking worker as the durable read.
+        // 历史编码是 CPU 工作，因此与可靠读取一起放在阻塞工作线程。
+        let replay_route = selected_model.route.clone();
+        let replay_model_id = selected_model.model.id.clone();
+        let precheck = tokio::task::spawn_blocking(move || {
+            let (snapshot, active_api_started_seq) =
+                projection_handle.capture_model_switch_projection()?;
+            crate::agent_stream::precheck_projected_assistant_replay(
+                &snapshot,
+                active_api_started_seq,
+                &replay_route,
+                &replay_model_id,
+            )
         })
         .await
-        .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-        match crate::agent_stream::precheck_projected_assistant_replay(
-            &snapshot, active_api_started_seq, &selected_model.route, &selected_model.model.id,
-        ) {
+        match precheck {
             Ok(()) => {}
             Err(error @ crate::session_runtime_registry_v1::SessionRuntimeError::UnreplayableReasoningHistory(_)) => {
                 tracing::warn!(session = %handle.session_id(), %error, "Rejected model switch before saving an unreplayable route");
@@ -469,24 +478,61 @@ pub(crate) async fn service_select_public_ai_model(
     Ok(snapshot)
 }
 
+/// Identifies one recovery action and its exact source and target model.
+/// 标识一次恢复操作及其精确来源和目标模型。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReasoningRecoveryRequest {
+    /// Stable action identity reused by the client after a lost response.
+    /// 客户端在响应丢失后复用的稳定操作身份。
+    action_id: String,
+    /// Source conversation identifier.
+    /// 来源会话标识。
+    conversation_id: crate::SessionId,
+    /// Target provider identifier.
+    /// 目标供应商标识。
+    provider_id: String,
+    /// Target model identifier.
+    /// 目标模型标识。
+    model_id: String,
+    /// Target credential connection identifier.
+    /// 目标凭据连接标识。
+    connection_id: String,
+}
+
+impl ReasoningRecoveryRequest {
+    /// Derives a session UUID from a validated action and its complete immutable request tuple.
+    /// 从已校验的操作及其完整不可变请求元组派生会话 UUID。
+    fn session_id(&self) -> Result<crate::SessionId, String> {
+        let action = vulcan_session_core::v1::ids::ClientActionId::try_new(self.action_id.as_str())
+            .map_err(|error| error.to_string())?;
+        // A versioned domain and structured encoding keep unrelated operations distinct without storing a new metadata field.
+        // 带版本的命名域和结构化编码区分不同操作，无需新增持久元数据字段。
+        let identity = serde_json::to_vec(&(
+            "vulcan.reasoning-recovery.v1",
+            action.as_str(),
+            self.conversation_id,
+            &self.provider_id,
+            &self.model_id,
+            &self.connection_id,
+        ))
+        .map_err(|error| error.to_string())?;
+        let digest = Sha256::digest(identity);
+        let mut bytes = [0; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        Ok(uuid::Builder::from_custom_bytes(bytes).into_uuid())
+    }
+}
+
 /// Creates a new idle session for the requested model using only the source session's visible text.
 /// 为所请求模型创建新的空闲会话，仅携带来源会话的可见文本。
 /// Returns the indexed session id; no Provider request is dispatched by this operation.
 /// 返回已索引会话标识；本操作不发出供应商请求。
 pub(crate) async fn service_create_reasoning_recovery_session(
     state: SharedServiceBridgeState,
-    request: PublicAiModelSelectionRequest,
+    request: ReasoningRecoveryRequest,
 ) -> Result<String, String> {
-    // source_id is supplied by the blocked switch, never derived from the selected sidebar row.
-    // source_id 由受阻的切换提供，绝不从当前侧栏选择推断。
-    let source_id = request
-        .conversation_id
-        .as_deref()
-        .ok_or_else(|| String::from("Reasoning recovery requires a source conversation."))?
-        .parse::<crate::SessionId>()
-        .map_err(|error| error.to_string())?;
-    let source =
-        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, source_id).await?;
+    let session_id = request.session_id()?;
     let (controller, registry) = {
         let guard = state.lock().map_err(|error| error.to_string())?;
         (
@@ -497,32 +543,45 @@ pub(crate) async fn service_create_reasoning_recovery_session(
             std::sync::Arc::clone(&guard.session_runtime_registry),
         )
     };
-    let draft = tokio::task::spawn_blocking(move || recovery_conversation_text(&source))
-        .await
-        .map_err(|error| error.to_string())??;
+    // Keep target validation and initial publication atomic with respect to AI configuration changes.
+    // 将目标校验和首次发布与 AI 配置变更串行化。
     let transaction = begin_public_ai_configuration_transaction().await;
-    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
-    let route = runtime.resolve_connection_model_selection(
-        &configuration,
-        &request.connection_id,
-        &request.provider_id,
-        &request.model_id,
-    )?;
-    let session_id = crate::session_v1_lifecycle::create_recovery_draft_session_v1(
+    let session_id = crate::session_v1_lifecycle::create_or_get_recovery_draft_session_v1(
         &controller,
         &registry,
-        &draft.project_id,
-        &draft.title,
-        draft.text,
-        ActiveAiModelSelection {
-            provider_id: route.route.provider.id.clone(),
-            model_id: route.model.id,
-            connection_id: route.route.connection.id.clone(),
+        session_id,
+        async {
+            // Retrying after publication needs neither the original history nor a still-enabled target.
+            // 发布后的重试无需重新读取来源历史或要求目标仍然启用。
+            let source = crate::session_goal_lifecycle::session_v1_handle_from_state(
+                &state,
+                request.conversation_id,
+            )
+            .await?;
+            let draft = tokio::task::spawn_blocking(move || recovery_conversation_text(&source))
+                .await
+                .map_err(|error| error.to_string())??;
+            let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+            let route = runtime.resolve_connection_model_selection(
+                &configuration,
+                &request.connection_id,
+                &request.provider_id,
+                &request.model_id,
+            )?;
+            Ok(crate::session_v1_lifecycle::RecoveryDraftSessionV1 {
+                project_id: draft.project_id,
+                title: draft.title,
+                text: draft.text,
+                selection: ActiveAiModelSelection {
+                    provider_id: route.route.provider.id.clone(),
+                    model_id: route.model.id,
+                    connection_id: route.route.connection.id.clone(),
+                },
+                now_ms: crate::session_goal_lifecycle::current_v1_goal_unix_millis()?,
+            })
         },
-        crate::session_goal_lifecycle::current_v1_goal_unix_millis()?,
     )
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
     drop(transaction);
     crate::workbench_refresh::refresh_workbench_snapshot_for_selected_session(state, session_id)
         .await?;
@@ -550,7 +609,6 @@ struct ReasoningRecoveryDraft {
 fn recovery_conversation_text(
     source: &crate::session_runtime_registry_v1::SessionHandle,
 ) -> Result<ReasoningRecoveryDraft, String> {
-    use vulcan_session_core::v1::event::{EventBody, EventVisibility, UserInputSource};
     use vulcan_session_core::v1::ids::Seq;
     // Read display history independently of whether the original Provider projection is replayable.
     // 独立读取展示历史，无论原供应商投影是否可以回放。
@@ -581,16 +639,50 @@ fn recovery_conversation_text(
     } else {
         Vec::new()
     };
+    let text = recovery_transcript(&events, &cleaned, metadata.cleaned_history.as_ref());
+    Ok(ReasoningRecoveryDraft {
+        project_id: locator.project_id().to_owned(),
+        title: metadata.title,
+        text,
+    })
+}
+
+/// Formats the published display questions and answers while omitting auxiliary compaction output.
+/// 格式化已发布的展示问答，并排除辅助压缩输出。
+/// The publication identifies ledger rows replaced by cleaned history; the result is editable draft text.
+/// 历史发布记录标识已被精简历史替换的账本行；返回可编辑草稿文本。
+fn recovery_transcript(
+    events: &[vulcan_session_core::v1::event::ConversationEvent],
+    cleaned: &vulcan_session_core::v1::history_cleanup::CleanedHistory,
+    publication: Option<&vulcan_session_core::v1::history_cleanup::HistoryPublication>,
+) -> String {
+    use vulcan_session_core::v1::event::{
+        ApiPurposeKind, EventBody, EventVisibility, UserInputSource,
+    };
+    // Both durable API facts identify the same compaction group, just as in the timeline.
+    // 与时间线一致，两种可靠 API 记录均可标识同一个压缩组。
+    let compaction_calls = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            EventBody::ApiStarted(start) if start.purpose == ApiPurposeKind::Compaction => {
+                Some(start.api_call_id)
+            }
+            EventBody::ApiStats(stats) if stats.purpose == ApiPurposeKind::Compaction => {
+                Some(stats.api_call_id)
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     // entries preserve the published display history and exclude the ledger rows it replaces.
     // entries 保留已发布的展示历史，并排除由它替代的账本条目。
     let mut entries = Vec::new();
-    for turn in cleaned.turns {
-        for input in turn.inputs {
+    for turn in &cleaned.turns {
+        for input in &turn.inputs {
             if !input.text.trim().is_empty() {
                 entries.push(format!("User:\n{}", input.text));
             }
         }
-        if let Some(answer) = turn.answer
+        if let Some(answer) = &turn.answer
             && !answer.text.trim().is_empty()
         {
             entries.push(format!("Assistant:\n{}", answer.text));
@@ -598,7 +690,7 @@ fn recovery_conversation_text(
     }
     for event in events {
         if event.visibility == EventVisibility::HostOnly
-            || metadata.cleaned_history.as_ref().is_some_and(|history| {
+            || publication.is_some_and(|history| {
                 history
                     .ranges
                     .iter()
@@ -607,22 +699,20 @@ fn recovery_conversation_text(
         {
             continue;
         }
-        let (role, text) = match event.event {
+        let (role, text) = match &event.event {
             EventBody::UserInput(input) if input.input_source != UserInputSource::AgentMessage => {
-                ("User", input.text)
+                ("User", &input.text)
             }
-            EventBody::AssistantText(answer) => ("Assistant", answer.text),
+            EventBody::AssistantText(answer) if !compaction_calls.contains(&answer.api_call_id) => {
+                ("Assistant", &answer.text)
+            }
             _ => continue,
         };
         if !text.trim().is_empty() {
             entries.push(format!("{role}:\n{text}"));
         }
     }
-    Ok(ReasoningRecoveryDraft {
-        project_id: locator.project_id().to_owned(),
-        title: metadata.title,
-        text: entries.join("\n\n"),
-    })
+    entries.join("\n\n")
 }
 
 /// Durably clears a session window selection so the session follows its (new) model.

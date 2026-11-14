@@ -555,7 +555,7 @@ export async function selectPublicAiModel(request: PublicAiModelSelection): Prom
 // 为选择器提供的精确来源和目标创建空闲恢复会话。
 // Returns the new session id with the visible transcript prefilled in its composer.
 // 返回新会话标识，其输入区已预填可见问答。
-export function createReasoningRecoverySession(request: PublicAiModelSelection & { conversationId: string }): Promise<string> {
+export function createReasoningRecoverySession(request: PublicAiModelSelection & { conversationId: string; actionId: string }): Promise<string> {
   return serviceClient.request<string>("service_create_reasoning_recovery_session", { request });
 }
 

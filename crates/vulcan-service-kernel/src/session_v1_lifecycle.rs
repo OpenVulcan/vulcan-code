@@ -818,25 +818,79 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
         .map_err(SessionV1LifecycleError::from)
 }
 
-/// Publishes an idle recovery session with a visible transcript draft and the chosen initial route.
-/// 发布空闲恢复会话，填入可见问答草稿并设置所选初始路由。
-/// Returns the registered session id; the next explicit user submission starts its first execution.
-/// 返回已注册的会话标识；下一次用户显式提交才启动首次执行。
-pub(crate) async fn create_recovery_draft_session_v1(
+/// Initial values for a new, unsent recovery session.
+/// 新建未发送恢复会话的初始值。
+pub(crate) struct RecoveryDraftSessionV1 {
+    /// Indexed source project that owns the new session.
+    /// 持有新会话的来源项目。
+    pub(crate) project_id: String,
+    /// Display title captured from the source.
+    /// 从来源捕获的展示标题。
+    pub(crate) title: String,
+    /// Editable transcript of the visible questions and answers.
+    /// 可编辑的可见问答文本。
+    pub(crate) text: String,
+    /// Validated model, provider and connection for the first request.
+    /// 已校验的首次请求模型、供应商和连接。
+    pub(crate) selection: vulcan_provider_adapters::ActiveAiModelSelection,
+    /// Creation time in Unix milliseconds.
+    /// 创建时间，单位为 Unix 毫秒。
+    pub(crate) now_ms: i64,
+}
+
+/// Publishes an idle recovery session or returns the exact result of an earlier attempt.
+/// 发布空闲恢复会话，或返回先前请求的精确结果。
+/// The caller derives `session_id` from the complete operation identity; `build` runs only before initial publication.
+/// 调用方从完整操作身份派生 `session_id`；`build` 只在首次发布前执行。
+pub(crate) async fn create_or_get_recovery_draft_session_v1(
     controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
-    project_id: &str,
-    title: &str,
-    draft_text: String,
-    selection: vulcan_provider_adapters::ActiveAiModelSelection,
-    now_ms: i64,
+    session_id: SessionId,
+    build: impl Future<Output = Result<RecoveryDraftSessionV1, String>>,
+) -> Result<SessionId, String> {
+    // Serialize the lookup and creation so concurrent retries also see one indexed session.
+    // 将查找与创建串行化，使并发重试也只看到一个索引会话。
+    let _lifecycle = registry
+        .acquire_lifecycle_transition(session_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    // The lookup precedes creation, so initialize the same index the store normally prepares during creation.
+    // 查找先于创建，因此先准备存储层通常在创建时初始化的同一个索引。
+    vulcan_workspace_store::workspace_store::ensure_session_v1_storage_schema(controller)
+        .await
+        .map_err(|error| error.to_string())?;
+    if locate_optional_session_v1_storage(controller, &session_id.to_string())
+        .await
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Ok(session_id);
+    }
+    publish_recovery_draft_session_v1(controller, registry, session_id, build.await?)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Publishes the prepared draft under the lifecycle guard held by its caller.
+/// 在调用方持有生命周期守卫期间发布已准备的草稿。
+/// Returns the registered session ID without dispatching a request.
+/// 返回已注册的会话标识，不派发请求。
+async fn publish_recovery_draft_session_v1(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+    draft: RecoveryDraftSessionV1,
 ) -> Result<SessionId, SessionV1LifecycleError> {
-    // session_id owns a completely new ledger, with no inherited Provider execution facts.
-    // session_id 拥有全新账本，不继承供应商执行记录。
-    let session_id = SessionId::new_v4();
+    let RecoveryDraftSessionV1 {
+        project_id,
+        title,
+        text,
+        selection,
+        now_ms,
+    } = draft;
     let reservation = registry.reserve_creation(session_id)?;
-    let mut document = SessionDocument::new(session_id.to_string(), project_id, title, now_ms);
-    document.set_draft(draft_text, Vec::new(), now_ms)?;
+    let mut document = SessionDocument::new(session_id.to_string(), &project_id, &title, now_ms);
+    document.set_draft(text, Vec::new(), now_ms)?;
     document.set_pending_request(
         vulcan_session_core::v1::config::PendingRequestConfig {
             provider: Some(selection.provider_id),
@@ -861,7 +915,7 @@ pub(crate) async fn create_recovery_draft_session_v1(
         controller,
         &CreateSessionV1Request {
             cleaned_history: None,
-            project_id,
+            project_id: &project_id,
             storage_partition: SESSION_V1_STORAGE_PARTITION,
             date_bucket: &date_bucket,
             metadata: &candidate.metadata,

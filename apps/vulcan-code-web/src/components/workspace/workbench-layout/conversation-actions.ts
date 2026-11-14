@@ -133,6 +133,9 @@ export function useWorkbenchConversationActions(options: WorkbenchConversationAc
   // inflightSubagentOpenRequestsRef coalesces duplicate opens without serializing independent side-panel tabs.
   // inflightSubagentOpenRequestsRef 合并重复打开请求，但不串行化彼此独立的侧栏页签。
   const inflightSubagentOpenRequestsRef = React.useRef<SubagentOpenRequestMap>(new Map());
+  // Pending recovery offers retain their action identities when the user reselects the same route.
+  // 未完成的恢复提示在用户重新选择同一路由时保留操作身份。
+  const recoveryActionsRef = React.useRef(new Map<string, { actionId: string; running: boolean }>());
 // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
 // handleSubmitConversationPrompt 通过共享后端运行时发送输入区文本。
 const handleSubmitConversationPrompt = React.useCallback(async (submission: ComposerSubmission): Promise<boolean> => {
@@ -751,14 +754,24 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
     return true;
   } catch (nextError) {
     if (conversationId && nextError instanceof BrowserServiceRpcError && nextError.code === "unreplayable_reasoning_history") {
+      // recoveryKey scopes retries to the exact source session and target route.
+      // recoveryKey 将重试限定到精确的来源会话与目标路由。
+      const recoveryKey = JSON.stringify([conversationId, choice.providerId, choice.connectionId, choice.modelId]);
+      const recovery = recoveryActionsRef.current.get(recoveryKey) ?? { actionId: createClientOwnedActionId(), running: false };
+      recoveryActionsRef.current.set(recoveryKey, recovery);
+      const toastId = `reasoning-recovery:${recoveryKey}`;
       toast(translate("conversationActions.reasoningReplayBlocked"), {
-        id: `reasoning-recovery:${conversationId}`,
+        id: toastId,
         description: translate("conversationActions.reasoningRecoveryDescription"),
         duration: Infinity,
         action: {
           label: translate("conversationActions.reasoningRecoveryCreate"),
-          onClick: () => {
+          onClick: (event) => {
+            event.preventDefault();
+            if (recovery.running) return;
+            recovery.running = true;
             void createReasoningRecoverySession({
+              actionId: recovery.actionId,
               conversationId,
               providerId: choice.providerId,
               modelId: choice.modelId,
@@ -772,7 +785,13 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
                 setDraftConversation(null);
                 setSelectedConversationId(sessionId);
               }
-            }).catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+              recoveryActionsRef.current.delete(recoveryKey);
+              toast.dismiss(toastId);
+            }).catch((error: unknown) => {
+              toast.error(error instanceof Error ? error.message : String(error));
+            }).finally(() => {
+              recovery.running = false;
+            });
           },
         },
       });

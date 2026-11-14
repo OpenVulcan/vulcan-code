@@ -1165,28 +1165,143 @@ pub(crate) fn precheck_projected_assistant_replay(
     // The pending model takes effect at a later request boundary, after the running API can seal its envelope.
     // 待生效模型在后续请求边界生效，届时当前 API 可以先封口其封套。
     let target = V1ReplayRouteIdentity::for_execution(route, model_id);
+    // Collect only the history that would reach the selected protocol, in the original order.
+    // 只收集会送达所选协议的历史，保持原有顺序。
+    let mut messages = Vec::new();
+    let check_protocol = route.reasoning_replay_contract().is_some();
     for (index, sourced) in snapshot.sourced_items.iter().enumerate() {
         if active_api_started_seq.is_some_and(|started| sourced.source_from_seq > started) {
             continue;
         }
-        if let ProjectedItem::AssistantText {
-            reasoning,
-            provider_source,
-            ..
-        } = &sourced.item
-        {
-            assistant_replay_projection(
-                reasoning.as_ref().is_some_and(|value| !value.is_empty()),
-                provider_source
-                    .as_ref()
-                    .and_then(|source| source.replay.as_ref()),
-                projected_assistant_request(snapshot, index),
-                Some(&target),
-                &provider_projection_message_id(index),
-            )?;
+        match &sourced.item {
+            ProjectedItem::AssistantText { .. } => {
+                messages.extend(projected_assistant_wire_message(
+                    snapshot,
+                    index,
+                    &sourced.item,
+                    Some(&target),
+                )?);
+            }
+            ProjectedItem::UserInput { text, .. } | ProjectedItem::SubagentReturnText { text }
+                if check_protocol =>
+            {
+                messages.push(text_ai_message(MessageRole::User, text.clone()));
+            }
+            ProjectedItem::SystemText { role, text, .. } if check_protocol => {
+                messages.push(text_ai_message(
+                    projected_system_message_role(*role),
+                    text.clone(),
+                ));
+            }
+            ProjectedItem::ToolResult {
+                tool_call_id,
+                provider_tool_call_id,
+                status,
+                ..
+            } if check_protocol => {
+                // The replay contract needs the call-result pairing, not the recorded result payload.
+                // 回放契约需要调用与结果配对，不需要已记录的工具结果载荷。
+                messages.push(AiMessage {
+                    role: MessageRole::Tool,
+                    content: vec![ContentItem::ToolResult {
+                        result: AiToolResult {
+                            call_id: provider_wire_tool_call_id(
+                                *tool_call_id,
+                                provider_tool_call_id.as_deref(),
+                            ),
+                            is_error: *status != ToolCallStatus::Completed,
+                            content: serde_json::Value::String(String::new()),
+                        },
+                    }],
+                    provider_context_items: Vec::new(),
+                });
+            }
+            _ => {}
         }
     }
-    Ok(())
+    vulcan_provider_adapters::execution::validate_reasoning_replay_for_selection(
+        route, model_id, messages,
+    )
+    .map_err(|error| {
+        if error.error.subcategory.as_deref()
+            == Some(vulcan_provider_adapters::REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY)
+        {
+            unreplayable_replay_runtime_error(
+                error
+                    .error
+                    .upstream_message
+                    .as_deref()
+                    .unwrap_or(&error.error.message),
+            )
+        } else {
+            provider_projection_runtime_error(error)
+        }
+    })
+}
+
+/// Builds the exact replayable assistant message for a projected item and target route.
+/// 为投影条目及目标路由构建精确可回放的助手消息。
+/// Returns no message when the item has no remaining request content.
+/// 条目没有可发送内容时返回空值。
+fn projected_assistant_wire_message(
+    snapshot: &SessionProviderProjectionSnapshot,
+    index: usize,
+    item: &ProjectedItem,
+    route: Option<&V1ReplayRouteIdentity>,
+) -> Result<Option<AiMessage>, SessionRuntimeError> {
+    let ProjectedItem::AssistantText {
+        text,
+        reasoning,
+        tool_calls,
+        provider_source,
+    } = item
+    else {
+        return Err(provider_projection_runtime_error(
+            "Expected a projected assistant item.",
+        ));
+    };
+    // Canonical content is used for visible cross-route history. The matching envelope still owns native replay.
+    // 跨路由可见历史使用规范内容，匹配的封套仍持有原生回放。
+    let mut content = Vec::new();
+    if let Some(reasoning) = reasoning.as_ref().filter(|value| !value.is_empty()) {
+        content.push(ContentItem::Reasoning {
+            text: reasoning.clone(),
+            signature: None,
+        });
+    }
+    if !text.is_empty() {
+        content.push(ContentItem::Text { text: text.clone() });
+    }
+    for tool_call in tool_calls {
+        content.push(ContentItem::ToolCall {
+            call: AiToolCall {
+                id: provider_wire_tool_call_id(
+                    tool_call.tool_call_id,
+                    tool_call.provider_tool_call_id.as_deref(),
+                ),
+                name: tool_call.tool_name.clone(),
+                arguments: serde_json::to_value(&tool_call.input)
+                    .map_err(provider_projection_runtime_error)?,
+                signature: None,
+            },
+        });
+    }
+    let (content, provider_context_items) = resolve_projected_assistant_replay(
+        content,
+        provider_source
+            .as_deref()
+            .and_then(|source| source.replay.as_ref()),
+        projected_assistant_request(snapshot, index),
+        route,
+        &provider_projection_message_id(index),
+    )?;
+    Ok(
+        (!content.is_empty() || !provider_context_items.is_empty()).then_some(AiMessage {
+            role: MessageRole::Assistant,
+            content,
+            provider_context_items,
+        }),
+    )
 }
 
 /// Selects the replay result for one assistant group. An absent result keeps its canonical content.
@@ -1461,62 +1576,9 @@ fn rebuild_provider_transport_candidate_with_compaction(
                     provider_context_items: Vec::new(),
                 });
             }
-            ProjectedItem::AssistantText {
-                text,
-                reasoning,
-                tool_calls,
-                provider_source,
-            } => {
-                let mut content = Vec::new();
-                if let Some(reasoning) = reasoning.as_ref().filter(|value| !value.is_empty()) {
-                    content.push(ContentItem::Reasoning {
-                        text: reasoning.clone(),
-                        signature: None,
-                    });
-                }
-                if !text.is_empty() {
-                    content.push(ContentItem::Text { text: text.clone() });
-                }
-                for tool_call in tool_calls {
-                    let call_id = provider_wire_tool_call_id(
-                        tool_call.tool_call_id,
-                        tool_call.provider_tool_call_id.as_deref(),
-                    );
-                    let arguments = serde_json::to_value(&tool_call.input)
-                        .map_err(provider_projection_runtime_error)?;
-                    content.push(ContentItem::ToolCall {
-                        call: AiToolCall {
-                            id: call_id.clone(),
-                            name: tool_call.tool_name.clone(),
-                            arguments: arguments.clone(),
-                            signature: None,
-                        },
-                    });
-                }
-                // replay prefers the durable provider-native items of the exact frozen route; the
-                // canonical content built above stays the fallback this envelope does not own.
-                // replay 在精确冻结路由上优先使用可持久化供应商原生项；上面构建的规范内容仍作为
-                // 该封套并不拥有的路由的回退。
-                let (content, provider_context_items) = resolve_projected_assistant_replay(
-                    content,
-                    provider_source
-                        .as_deref()
-                        .and_then(|source| source.replay.as_ref()),
-                    projected_assistant_request(&snapshot, index),
-                    replay_route.as_ref(),
-                    provider_projection_message_id(index).as_str(),
-                )?;
-                // A foreign reasoning-only turn has no remaining wire content after a model switch.
-                // 模型切换后，外路由纯思考回合不再有可发送内容。
-                if content.is_empty() && provider_context_items.is_empty() {
-                    continue;
-                }
-                request_messages.push(AiMessage {
-                    role: MessageRole::Assistant,
-                    content,
-                    provider_context_items,
-                });
-            }
+            ProjectedItem::AssistantText { .. } => request_messages.extend(
+                projected_assistant_wire_message(&snapshot, index, item, replay_route.as_ref())?,
+            ),
             ProjectedItem::ToolResult {
                 tool_call_id,
                 provider_tool_call_id,

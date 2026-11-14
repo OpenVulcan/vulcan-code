@@ -43,6 +43,7 @@ pub(crate) use projection_profiles::{
     execute_request_profile_fixture, project_json_request_profiles, project_json_response_profiles,
     project_response_record_text,
 };
+pub use request_encoding::validate_reasoning_replay_for_selection;
 pub(crate) use request_headers::{
     coding_device_identity_headers, execution_headers, insert_coding_device_identity_headers,
     vulcan_code_user_agent,

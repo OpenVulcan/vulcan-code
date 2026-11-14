@@ -15,9 +15,9 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
-    APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiExecutionRequest, ContentItem,
-    FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax, ModelParameterValue,
-    ReasoningEffort, StructuredOutputPolicy, ToolInputFormat,
+    APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiExecutionRequest, AiMessage, AiOperation,
+    ContentItem, FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax,
+    ModelParameterValue, ReasoningEffort, StructuredOutputPolicy, ToolInputFormat,
 };
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, COHERE_CHAT_PROFILE_ID,
@@ -30,6 +30,54 @@ use vulcan_llm_core::{
     encode_internal_responses_request, project_internal_request_for_provider,
     validate_target_media_projection,
 };
+
+/// Encodes the supplied replay history through the selected route without sending a request.
+/// 通过所选路由编码传入的回放历史，不发送请求。
+/// The model and messages describe the history probe; the result covers the route's replay contract.
+/// 模型和消息描述历史探测；返回值覆盖该路由的推理回放契约。
+pub fn validate_reasoning_replay_for_selection(
+    route: &ProviderExecutionRoute,
+    model_id: &str,
+    messages: Vec<AiMessage>,
+) -> Result<(), ProviderExecutionFailure> {
+    if route.reasoning_replay_contract().is_none()
+        || !messages.iter().any(|message| {
+            message
+                .content
+                .iter()
+                .any(|item| matches!(item, ContentItem::Reasoning { .. }))
+                || message
+                    .provider_context_items
+                    .iter()
+                    .any(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
+        })
+    {
+        return Ok(());
+    }
+    // Only history is known at model selection time. Use the same encoding and wire replay checks as dispatch.
+    // 模型选择时只确定历史；使用与派发相同的编码和线协议回放校验。
+    let request = AiExecutionRequest {
+        operation: AiOperation::ConversationRespond,
+        model_id: model_id.to_owned(),
+        cache_scope_id: None,
+        continuation: None,
+        messages,
+        tools: Vec::new(),
+        native_tools: Vec::new(),
+        tool_choice: Default::default(),
+        parallel_tool_calls: Default::default(),
+        structured_output: Default::default(),
+        stop_sequences: Vec::new(),
+        prompt_cache: Default::default(),
+        reasoning_effort: None,
+        reasoning_output: Default::default(),
+        model_parameters: Default::default(),
+        resources: Vec::new(),
+        output_token_limit: None,
+    };
+    let encoded = project_internal_baseline_for_provider(route, &request)?;
+    project_provider_request(route, &request, encoded).map(|_| ())
+}
 
 impl ProviderExecutionClient {
     /// Encodes one immutable execution request without dispatching it.

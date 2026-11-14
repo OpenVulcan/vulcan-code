@@ -5,6 +5,107 @@ use super::*;
 use vulcan_ai_contract::{AiOperation, ModelCapabilities};
 use vulcan_provider_adapters::{CredentialConnection, CredentialMode};
 
+/// Verifies that the recovery identity binds one client action to the source and target.
+/// 验证恢复身份把一次客户端操作绑定到来源和目标。
+#[test]
+fn reasoning_recovery_identity_is_stable_and_scoped() {
+    let mut request = ReasoningRecoveryRequest {
+        action_id: "retryable-action".into(),
+        conversation_id: crate::SessionId::new_v4(),
+        provider_id: "deepseek".into(),
+        model_id: "deepseek-flash".into(),
+        connection_id: "account-a".into(),
+    };
+    let session_id = request.session_id().unwrap();
+    assert_eq!(request.session_id().unwrap(), session_id);
+    request.connection_id = "account-b".into();
+    assert_ne!(request.session_id().unwrap(), session_id);
+    request.connection_id = "account-a".into();
+    request.conversation_id = crate::SessionId::new_v4();
+    assert_ne!(request.session_id().unwrap(), session_id);
+    request.action_id.clear();
+    assert!(request.session_id().is_err());
+}
+
+/// Verifies that recovery keeps the question and answer while omitting a compaction card's body.
+/// 验证恢复保留问题及答复，同时排除压缩卡的正文。
+#[test]
+fn reasoning_recovery_transcript_omits_compaction_summary() {
+    use vulcan_session_core::v1::event::*;
+    use vulcan_session_core::v1::ids::{ApiCallId, ClientActionId, PendingInputId, Seq, TurnId};
+    // Typed fixture events carry two distinct API identities in one conversation.
+    // 强类型夹具事件在同一会话中携带两个不同的 API 身份。
+    let main_call = ApiCallId::try_new(1).unwrap();
+    let compaction_call = ApiCallId::try_new(2).unwrap();
+    let events = [
+        (
+            EventVisibility::Provider,
+            EventBody::UserInput(UserInputEvent {
+                parameters: None,
+                client_action_id: ClientActionId::try_new("visible-question").unwrap(),
+                input_id: PendingInputId::try_new(1).unwrap(),
+                input_source: UserInputSource::Root,
+                text: "Visible question".into(),
+                resource_ids: Vec::new(),
+            }),
+        ),
+        (
+            EventVisibility::Provider,
+            EventBody::AssistantText(AssistantTextEvent {
+                api_call_id: main_call,
+                text: "Visible reply".into(),
+                status: AssistantSemanticStatus::Completed,
+                provider_source: None,
+                code_snapshots: Vec::new(),
+            }),
+        ),
+        (
+            EventVisibility::HostOnly,
+            EventBody::ApiStarted(ApiStartedEvent {
+                api_call_id: compaction_call,
+                purpose: ApiPurposeKind::Compaction,
+                request: ApiRequestSnapshot::new("deepseek", "deepseek-flash"),
+                projection: ProviderProjectionProof {
+                    segment_generation: 1,
+                    document_revision: 1,
+                    retained_from_seq: Seq::try_new(1).unwrap(),
+                    through_seq: Seq::try_new(2).unwrap(),
+                    fingerprint_sha256: "a".repeat(64),
+                },
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                continuation_action_id: None,
+            }),
+        ),
+        (
+            EventVisibility::UiOnly,
+            EventBody::AssistantText(AssistantTextEvent {
+                api_call_id: compaction_call,
+                text: "Internal context summary".into(),
+                status: AssistantSemanticStatus::Completed,
+                provider_source: None,
+                code_snapshots: Vec::new(),
+            }),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (visibility, event))| ConversationEvent {
+        seq: Seq::try_new(index as u64 + 1).unwrap(),
+        turn_id: Some(TurnId::try_new(1).unwrap()),
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        event_revision: 1,
+        visibility,
+        event,
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(
+        recovery_transcript(&events, &Default::default(), None),
+        "User:\nVisible question\n\nAssistant:\nVisible reply",
+    );
+}
+
 /// Verifies an oversized existing conversation is rejected before switching to a smaller model.
 /// 验证已有会话过大时，会在切换到较小模型之前被拒绝。
 #[test]

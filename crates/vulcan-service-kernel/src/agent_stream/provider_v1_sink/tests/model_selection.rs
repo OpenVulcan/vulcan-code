@@ -328,6 +328,71 @@ async fn rebuild_round_trip_request(
     .map(|prepared| prepared.transport.exact_request.messages)
 }
 
+/// Checks that selection rejects opaque same-route replay before dispatch using the DeepSeek Responses contract.
+/// 验证模型选择按 DeepSeek Responses 契约在派发前拒绝同路由不透明回放。
+#[tokio::test]
+async fn model_switch_rejects_opaque_deepseek_reasoning_before_dispatch() {
+    let mut context = media::tests::native_input_context().await.unwrap();
+    let execution = Arc::get_mut(&mut context.execution).unwrap();
+    execution.route.provider.id = "deepseek".into();
+    execution.model.id = "deepseek-flash".into();
+    execution.route.protocol_route.protocol_profile_id = "openai-responses.v1".into();
+    execution.route.protocol_route.reasoning_replay_contract =
+        Some(vulcan_ai_contract::ReasoningReplayContract::DeepseekResponsesPlaintextV1);
+    let route = V1ReplayRouteIdentity::for_execution(&execution.route, &execution.model.id);
+
+    for (reasoning_item, replayable) in [
+        (
+            json!({"type": "reasoning", "encrypted_content": "opaque"}),
+            false,
+        ),
+        (
+            json!({"type": "reasoning", "content": [{"type": "summary_text", "text": "not plaintext"}]}),
+            false,
+        ),
+        (
+            durable_reasoning_envelope().provider_context_items[0].clone(),
+            true,
+        ),
+    ] {
+        let (_directory, handle) = published_stored_open_turn();
+        let mut provider_items = durable_reasoning_envelope().provider_context_items;
+        provider_items[0] = reasoning_item;
+        let envelope = ProviderReplayEnvelope::new(
+            &route.provider_id,
+            &route.connection_id,
+            &route.route_fingerprint,
+            &route.protocol_profile_id,
+            &route.model_id,
+            durable_canonical_content(),
+            provider_items,
+        );
+        record_replay_round_trip_request(
+            &handle,
+            &route,
+            Some(envelope),
+            "durable-reasoning",
+            "durable-answer",
+            10,
+        );
+        let snapshot = handle.capture_controller_projection_snapshot().unwrap();
+        let precheck = precheck_projected_assistant_replay(
+            &snapshot,
+            None,
+            &execution.route,
+            &execution.model.id,
+        );
+        if replayable {
+            precheck.unwrap();
+        } else {
+            assert!(matches!(
+                precheck,
+                Err(SessionRuntimeError::UnreplayableReasoningHistory(_))
+            ));
+        }
+    }
+}
+
 /// A switch informs the model through durable User context and leaves the historical prefix intact.
 /// 模型切换通过持久 User 上下文通知模型，并保持历史前缀不变。
 #[test]

@@ -18,18 +18,41 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
     };
     let transcript = "User:\nOriginal question\n\nAssistant:\nVisible answer";
     let now_ms = 1_787_788_800_000;
-    let session_id = create_recovery_draft_session_v1(
+    let requested_session_id = SessionId::new_v4();
+    let session_id = create_or_get_recovery_draft_session_v1(
         &fixture.controller,
         &registry,
-        "project-explicit",
-        "Recovered conversation",
-        transcript.into(),
-        selection.clone(),
-        now_ms,
+        requested_session_id,
+        std::future::ready(Ok(RecoveryDraftSessionV1 {
+            project_id: "project-explicit".into(),
+            title: "Recovered conversation".into(),
+            text: transcript.into(),
+            selection: selection.clone(),
+            now_ms,
+        })),
     )
     .await
     .unwrap();
+    assert_eq!(session_id, requested_session_id);
     let reload_registry = SessionRuntimeRegistry::default();
+    // Model a lost reply by repeating creation with a fresh registry and unavailable source input.
+    // 用新注册表和不可用的来源输入重复创建，模拟响应丢失。
+    let retry = create_or_get_recovery_draft_session_v1(
+        &fixture.controller,
+        &reload_registry,
+        requested_session_id,
+        std::future::ready(Err(String::from("source unavailable on retry"))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(retry, session_id);
+    assert_eq!(
+        list_active_sessions_v1(&fixture.controller, "project-explicit")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let reloaded = get_or_load_session_v1(&fixture.controller, &reload_registry, session_id)
         .await
         .unwrap();
