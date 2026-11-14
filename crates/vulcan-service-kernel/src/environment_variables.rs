@@ -809,7 +809,8 @@ mod tests {
             TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
         };
         use vulcan_host_tools::shell_job::{
-            SHELL_JOBS_DIRECTORY, ShellJobRuntime, ShellJobSpawn, ShellJobStatus,
+            SHELL_JOBS_DIRECTORY, SHELL_OUTPUT_LINE_WRAP_BYTES, ShellJobRuntime, ShellJobSpawn,
+            ShellJobStatus,
         };
 
         use vulcan_workspace_store::{
@@ -886,16 +887,22 @@ mod tests {
         // Write a finished job into the indexed session using an isolated runtime.
         // 使用独立运行时把已完成任务写入已索引会话。
         let runtime = ShellJobRuntime::new();
+        // Position the first synthetic value across the display row boundary.
+        // 将第一个合成值放在横跨显示行边界的位置。
+        let prefix = "x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES - 5);
+        let line = format!(
+            "{prefix}synthetic-history-value synthetic-project-history-value synthetic-global-history-value"
+        );
         #[cfg(windows)]
         let mut child = {
             let mut command = tokio::process::Command::new("cmd.exe");
-            command.args(["/D", "/C", "echo synthetic-history-value synthetic-project-history-value synthetic-global-history-value"]);
+            command.args(["/D", "/C", &format!("echo {line}")]);
             command
         };
         #[cfg(not(windows))]
         let mut child = {
             let mut command = tokio::process::Command::new("printf");
-            command.args(["%s\n", "synthetic-history-value synthetic-project-history-value synthetic-global-history-value"]);
+            command.args(["%s\n", &line]);
             command
         };
         child.current_dir(fixture.data_root());
@@ -926,23 +933,29 @@ mod tests {
         restarted.controller_runtime = Some(controller);
         restarted.agent_runtime = Some(test_agent_runtime_bridge());
         let restarted = Arc::new(Mutex::new(restarted));
-        let page = crate::session_activity_services::service_read_shell_job_output(
-            Arc::clone(&restarted),
-            vulcan_service_api::ShellJobOutputRequest {
-                session_id: session_id.to_string(),
-                job_id: job.id().to_owned(),
-                before_line: None,
-                from_line: None,
-                max_lines: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(page.rows.len(), 1);
-        assert_eq!(
-            page.rows[0].text.trim(),
-            "[redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE]"
-        );
+        // Both tail and explicit range are projected by the production WebUI service.
+        // 尾部与显式范围均由生产 WebUI 服务投影。
+        for from_line in [None, Some(1)] {
+            let page = crate::session_activity_services::service_read_shell_job_output(
+                Arc::clone(&restarted),
+                vulcan_service_api::ShellJobOutputRequest {
+                    session_id: session_id.to_string(),
+                    job_id: job.id().to_owned(),
+                    before_line: None,
+                    from_line,
+                    max_lines: None,
+                },
+            )
+            .await
+            .unwrap();
+            let observed: String = page.rows.iter().map(|row| row.text.as_str()).collect();
+            assert_eq!(
+                observed.trim(),
+                format!(
+                    "{prefix}[redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE]"
+                )
+            );
+        }
 
         // The model's host port must supply the same values, independently of the WebUI filter state.
         // 模型宿主端口须独立于 WebUI 过滤器状态，提供相同的值。

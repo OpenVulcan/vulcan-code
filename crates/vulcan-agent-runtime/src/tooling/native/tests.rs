@@ -77,7 +77,7 @@ fn test_rtk_disabled() -> crate::provider_config::PersistedRtkConfiguration {
 
 /// Builds one native-tool execution request with only arguments varied.
 /// 构建一条仅变更参数的原生工具执行请求。
-pub(super) fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
+pub(crate) fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
     NativeToolExecutionRequest {
         invocation_context: None,
         arguments,

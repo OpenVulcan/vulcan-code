@@ -88,16 +88,29 @@ impl ShellCommandLiveRun {
 /// Returns the most recent display lines of one job's output as they show on screen, oldest first.
 /// 返回一个任务输出中最近的若干显示行（按屏幕上的显示效果），从旧到新。
 pub fn shell_job_recent_lines(job: &ShellJob, max_lines: usize) -> Vec<String> {
+    shell_job_recent_lines_with_filter(job, max_lines, |text| Ok(text.to_owned()))
+        .unwrap_or_default()
+}
+
+/// Filters each logical line before rendering the live tail.
+/// 在渲染实时尾部前过滤每个逻辑行。
+/// The caller supplies the job, row limit, and filter; a read or filter error is returned.
+/// 调用方提供任务、行数上限和过滤器，读取或过滤出错时返回错误。
+pub fn shell_job_recent_lines_with_filter(
+    job: &ShellJob,
+    max_lines: usize,
+    filter: impl Fn(&str) -> std::io::Result<String>,
+) -> std::io::Result<Vec<String>> {
     let Some(reader) = job.log_reader() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let rows = reader
-        .tail_rows(max_lines, SHELL_OUTPUT_TAIL_BUDGET_BYTES)
-        .unwrap_or_default();
-    rows.iter()
+    let rows =
+        reader.tail_rows_with_line_filter(max_lines, SHELL_OUTPUT_TAIL_BUDGET_BYTES, filter)?;
+    Ok(rows
+        .iter()
         .filter(|row| row.kind != ShellJobRowKind::Separator)
         .map(|row| screen_text(&row.text))
-        .collect()
+        .collect())
 }
 
 /// Text left on screen by a line: a carriage return redraws the line (progress bars), so only its last

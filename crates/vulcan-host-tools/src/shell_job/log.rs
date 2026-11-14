@@ -437,6 +437,18 @@ impl ShellJobLogReader {
     /// Returns the newest rows fitting `budget` bytes; shorter output returns in full.
     /// 返回在 `budget` 字节内的最新显示行；更短的输出完整返回。
     pub fn tail(&self, budget: usize) -> io::Result<ShellJobTail> {
+        self.tail_with_line_filter(budget, |text| Ok(text.to_owned()))
+    }
+
+    /// Filters each retained tail line before wrapping or trimming display rows.
+    /// 在折行或裁剪显示行前过滤保留的每个尾部逻辑行。
+    /// The filter receives decoded text; any error suppresses the whole result.
+    /// 过滤器接收已解码文本，任何错误都阻止返回结果。
+    pub fn tail_with_line_filter(
+        &self,
+        budget: usize,
+        filter: impl Fn(&str) -> io::Result<String>,
+    ) -> io::Result<ShellJobTail> {
         let mut tail = ShellJobTail {
             rows: Vec::new(),
             total_lines: self.total_lines(),
@@ -476,7 +488,7 @@ impl ShellJobLogReader {
         let first_line = last_line + 1 - pieces.len() as u64;
         let mut rows = Vec::new();
         for (index, piece) in pieces.iter().enumerate() {
-            let text = decode_log_slice(piece);
+            let text = filter(&decode_log_slice(piece))?;
             rows.extend(wrap_line(
                 first_line + index as u64,
                 &text,
@@ -493,7 +505,18 @@ impl ShellJobLogReader {
     /// Returns at most `max_rows` of the newest rows, for compact live views.
     /// 返回至多 `max_rows` 个最新显示行，用于紧凑的实时视图。
     pub fn tail_rows(&self, max_rows: usize, budget: usize) -> io::Result<Vec<ShellJobLineRow>> {
-        let mut rows = self.tail(budget)?.rows;
+        self.tail_rows_with_line_filter(max_rows, budget, |text| Ok(text.to_owned()))
+    }
+
+    /// Keeps at most the given number of newest rows after logical-line filtering.
+    /// 在过滤逻辑行后，只保留给定数量的最新显示行。
+    pub fn tail_rows_with_line_filter(
+        &self,
+        max_rows: usize,
+        budget: usize,
+        filter: impl Fn(&str) -> io::Result<String>,
+    ) -> io::Result<Vec<ShellJobLineRow>> {
+        let mut rows = self.tail_with_line_filter(budget, filter)?.rows;
         if rows.len() > max_rows {
             rows.drain(..rows.len() - max_rows);
         }
@@ -508,6 +531,20 @@ impl ShellJobLogReader {
         max_lines: usize,
         budget: usize,
     ) -> io::Result<ShellJobLineRange> {
+        self.read_lines_with_filter(first_line, max_lines, budget, |text| Ok(text.to_owned()))
+    }
+
+    /// Filters each retained logical line before wrapping and applying the page budget.
+    /// 折行并应用单页预算之前过滤保留的逻辑行。
+    /// The returned cursor still refers to the original log line numbers.
+    /// 返回的游标仍指向原始日志行号。
+    pub fn read_lines_with_filter(
+        &self,
+        first_line: u64,
+        max_lines: usize,
+        budget: usize,
+        filter: impl Fn(&str) -> io::Result<String>,
+    ) -> io::Result<ShellJobLineRange> {
         let mut rows: Vec<ShellJobLineRow> = Vec::new();
         let mut used = 0;
         let mut lines = 0;
@@ -515,22 +552,22 @@ impl ShellJobLogReader {
         self.walk_lines(first_line.saturating_sub(1), |item| {
             if lines >= max_lines {
                 next_line = Some(item_line(&item) + 1);
-                return ControlFlow::Break(());
+                return Ok(ControlFlow::Break(()));
             }
-            let item_rows = item_rows(&item, false);
+            let item_rows = item_rows(&item, false, &filter)?;
             let size: usize = item_rows.iter().map(ShellJobLineRow::rendered_len).sum();
             if used + size > budget && !rows.is_empty() {
                 next_line = Some(item_line(&item) + 1);
-                return ControlFlow::Break(());
+                return Ok(ControlFlow::Break(()));
             }
             used += size;
             lines += 1;
             rows.extend(item_rows);
             if used >= budget {
                 next_line = Some(item_line(&item) + 2);
-                return ControlFlow::Break(());
+                return Ok(ControlFlow::Break(()));
             }
-            ControlFlow::Continue(())
+            Ok(ControlFlow::Continue(()))
         })?;
         let total_lines = self.total_lines();
         Ok(ShellJobLineRange {
@@ -548,6 +585,21 @@ impl ShellJobLogReader {
         context: usize,
         max_matches: usize,
         budget: usize,
+    ) -> io::Result<ShellJobSearchMatch> {
+        self.search_with_line_filter(pattern, context, max_matches, budget, |text| {
+            Ok(text.to_owned())
+        })
+    }
+
+    /// Searches filtered logical lines and wraps only the displayable matches and context.
+    /// 搜索过滤后的逻辑行，只折行可展示的匹配结果和上下文。
+    pub fn search_with_line_filter(
+        &self,
+        pattern: &Regex,
+        context: usize,
+        max_matches: usize,
+        budget: usize,
+        filter: impl Fn(&str) -> io::Result<String>,
     ) -> io::Result<ShellJobSearchMatch> {
         let mut result = ShellJobSearchMatch {
             rows: Vec::new(),
@@ -585,12 +637,13 @@ impl ShellJobLogReader {
         self.walk_lines(0, |item| {
             let LogLineItem::Text { line, text, .. } = item else {
                 recent.clear();
-                return ControlFlow::Continue(());
+                return Ok(ControlFlow::Continue(()));
             };
+            let text = filter(&text)?;
             if pattern.is_match(&text) {
                 if result.match_count >= max_matches {
                     result.truncated = true;
-                    return ControlFlow::Break(());
+                    return Ok(ControlFlow::Break(()));
                 }
                 for (before_line, before_text) in recent.drain(..) {
                     if last_emitted.is_some_and(|last| before_line <= last) {
@@ -604,11 +657,11 @@ impl ShellJobLogReader {
                         &before_text,
                         false,
                     ) {
-                        return ControlFlow::Break(());
+                        return Ok(ControlFlow::Break(()));
                     }
                 }
                 if !push_rows(&mut result, &mut used, &mut last_emitted, line, &text, true) {
-                    return ControlFlow::Break(());
+                    return Ok(ControlFlow::Break(()));
                 }
                 result.match_count += 1;
                 after_remaining = context;
@@ -622,7 +675,7 @@ impl ShellJobLogReader {
                     &text,
                     false,
                 ) {
-                    return ControlFlow::Break(());
+                    return Ok(ControlFlow::Break(()));
                 }
             } else if context > 0 {
                 recent.push_back((line, text));
@@ -630,7 +683,7 @@ impl ShellJobLogReader {
                     recent.pop_front();
                 }
             }
-            ControlFlow::Continue(())
+            Ok(ControlFlow::Continue(()))
         })?;
         Ok(result)
     }
@@ -640,7 +693,7 @@ impl ShellJobLogReader {
     fn walk_lines(
         &self,
         from: u64,
-        mut visit: impl FnMut(LogLineItem) -> ControlFlow<()>,
+        mut visit: impl FnMut(LogLineItem) -> io::Result<ControlFlow<()>>,
     ) -> io::Result<()> {
         let mut line = from;
         loop {
@@ -648,7 +701,7 @@ impl ShellJobLogReader {
                 LineLocation::PastEnd => return Ok(()),
                 LineLocation::InGap => {
                     let (bytes, resume) = self.gap_after_head();
-                    if visit(LogLineItem::Gap { line, bytes }).is_break() {
+                    if visit(LogLineItem::Gap { line, bytes })?.is_break() {
                         return Ok(());
                     }
                     line = resume.max(line + 1);
@@ -665,7 +718,7 @@ impl ShellJobLogReader {
                             text: decode_log_slice(&bytes),
                             skipped_bytes: skipped,
                         };
-                        if visit(item).is_break() {
+                        if visit(item)?.is_break() {
                             return Ok(());
                         }
                         line += 1;
@@ -679,7 +732,7 @@ impl ShellJobLogReader {
                     // The run stopped at the gap after the head; the next line is reported as dropped.
                     // 连续段止于开头之后的缺口；下一行作为被丢弃输出报告。
                     let (bytes, resume) = self.gap_after_head();
-                    if visit(LogLineItem::Gap { line, bytes }).is_break() {
+                    if visit(LogLineItem::Gap { line, bytes })?.is_break() {
                         return Ok(());
                     }
                     line = resume.max(line);
@@ -816,15 +869,19 @@ fn item_line(item: &LogLineItem) -> u64 {
 
 /// Rows of one walk item; a skipped line end is reported in a trailing row.
 /// 一个遍历条目的显示行；被跳过的行尾在末尾显示行中说明。
-fn item_rows(item: &LogLineItem, matched: bool) -> Vec<ShellJobLineRow> {
-    match item {
+fn item_rows(
+    item: &LogLineItem,
+    matched: bool,
+    filter: &impl Fn(&str) -> io::Result<String>,
+) -> io::Result<Vec<ShellJobLineRow>> {
+    Ok(match item {
         LogLineItem::Gap { line, bytes } => vec![ShellJobLineRow::gap(line + 1, *bytes)],
         LogLineItem::Text {
             line,
             text,
             skipped_bytes,
         } => {
-            let mut rows = wrap_line(line + 1, text, false, matched);
+            let mut rows = wrap_line(line + 1, &filter(text)?, false, matched);
             if *skipped_bytes > 0 {
                 let mut marker = wrap_line(
                     line + 1,
@@ -836,7 +893,7 @@ fn item_rows(item: &LogLineItem, matched: bool) -> Vec<ShellJobLineRow> {
             }
             rows
         }
-    }
+    })
 }
 
 /// Reads one line of at most `cap` bytes, skipping and counting the rest of a longer line.

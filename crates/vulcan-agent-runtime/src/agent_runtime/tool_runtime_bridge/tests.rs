@@ -70,6 +70,176 @@ fn host_credential_is_redacted_from_tool_model_and_host_results() {
     );
 }
 
+/// Supplies a synthetic historical secret through the same host port as production.
+/// 通过与生产相同的宿主端口提供合成历史密钥。
+#[derive(Debug)]
+struct HistoryRedactionHost;
+
+#[async_trait]
+impl crate::tooling::native::NativeEnvironmentHost for HistoryRedactionHost {
+    async fn effective_environment(
+        &self,
+        _session_id: Uuid,
+    ) -> Result<Vec<crate::tooling::native::EffectiveEnvironmentVariable>, String> {
+        panic!("history must use its own secret scope")
+    }
+
+    async fn historical_job_secrets(
+        &self,
+        _session_id: Uuid,
+    ) -> Result<Vec<(String, String)>, String> {
+        Ok(vec![("FIXTURE".into(), "fixture-head-fixture-tail".into())])
+    }
+
+    async fn set_session_variable(
+        &self,
+        _session_id: Uuid,
+        _name: String,
+        _value: Option<String>,
+        _description: String,
+    ) -> Result<(), String> {
+        panic!("history must not write environment variables")
+    }
+
+    async fn request_values(
+        &self,
+        _session_id: Uuid,
+        _context: vulcan_tools_manager::VulcanToolInvocationContext,
+        _tool_name: String,
+        _arguments: serde_json::Value,
+        _prompt: crate::tooling::native::EnvironmentValuesPrompt,
+    ) -> Result<crate::tooling::native::EnvironmentValuesAnswer, String> {
+        panic!("history must not request environment variables")
+    }
+}
+
+/// Executes shell_job through the tool bridge and checks the exact filtered model result.
+/// 通过工具桥执行 shell_job，并检查精确的脱敏模型结果。
+#[tokio::test]
+async fn shell_job_filters_log_before_numbering_final_model_result() {
+    use crate::tooling::native::{NativeEnvironmentAccess, shell_job, tests::test_native_request};
+    use vulcan_host_tools::shell_job::{
+        SHELL_OUTPUT_LINE_WRAP_BYTES, ShellJobRuntime, ShellJobSpawn, ShellJobStatus,
+    };
+
+    // Keep the entire job and its log in an isolated runtime.
+    // 将完整任务及其日志限定在隔离运行时内。
+    let session_id = Uuid::new_v4();
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(ShellJobRuntime::new());
+    let prefix = "x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES - "fixture-head".len());
+    let line = format!("{prefix}fixture-head-fixture-tail");
+    #[cfg(windows)]
+    let mut child = {
+        let mut command = tokio::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", &format!("echo {line}")]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut child = {
+        let mut command = tokio::process::Command::new("printf");
+        command.args(["%s\n", &line]);
+        command
+    };
+    child.current_dir(directory.path());
+    let job = runtime
+        .spawn(
+            ShellJobSpawn {
+                owner_session_id: session_id.to_string(),
+                origin: None,
+                command: "fixture".into(),
+                purpose: "fixture".into(),
+                shell_label: "fixture".into(),
+                cwd: directory.path().to_owned(),
+                jobs_dir: directory.path().join("jobs"),
+                stdin: None,
+                background: false,
+                timeout: Some(std::time::Duration::from_secs(10)),
+                capture_streams: false,
+            },
+            child,
+        )
+        .unwrap();
+    assert_eq!(job.wait().await.status, ShellJobStatus::Completed);
+
+    // The candidate supplies test storage while reusing the native action and the production tool bridge.
+    // 候选工具提供测试存储，并复用原生动作与生产工具桥。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let environment = NativeEnvironmentAccess::new(
+        Arc::new(HistoryRedactionHost),
+        Arc::downgrade(&task_runtime),
+    );
+    let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor::new(
+            "shell_job",
+            "shell_job",
+            "Read fixture job",
+            None,
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "test", "shell_job"),
+        ),
+        parameters_schema: json!({"type": "object"}),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
+        invoke: Arc::new(move |arguments, context| {
+            let runtime = Arc::clone(&runtime);
+            let environment = environment.clone();
+            Box::pin(async move {
+                let mut request = test_native_request(arguments);
+                request.session_id = Some(session_id);
+                request.invocation_context = Some(context);
+                request.environment = Some(environment);
+                shell_job::execute_shell_job_tool(request, &runtime)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+        }),
+    }]);
+    let definitions = manager.resolve_for_execution_mode("Build").definitions;
+    let bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, session_id, "Build")
+            .with_sensitive_tool_output_values(task_runtime.sensitive_tool_output_values());
+    for (index, arguments) in [
+        json!({"action": "read", "job_id": job.id()}),
+        json!({"action": "read", "job_id": job.id(), "start_line": 1}),
+        json!({"action": "search", "job_id": job.id(), "pattern": "xxx"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = ToolInvocationRequest {
+            request_stream_id: format!("job-history-stream-{index}"),
+            tool_call_id: format!("job-history-call-{index}"),
+            tool_name: "shell_job".into(),
+            arguments,
+            argument_parse_error: None,
+            raw_arguments: Default::default(),
+            user_request: Default::default(),
+        };
+        install_test_invocation_identity(
+            &bridge,
+            &request,
+            101,
+            102 + index as u64,
+            105 + index as u64,
+        );
+        let result = bridge.execute_tool(&request).await.unwrap();
+        assert!(!result.is_error);
+        assert!(!result.model_output.contains("fixture-head"));
+        assert!(!result.model_output.contains("fixture-tail"));
+        // Remove display numbering before checking the full replacement across wrapped rows.
+        // 去掉显示行号后，检查跨折行保留的完整替换文本。
+        let output: String = result
+            .model_output
+            .lines()
+            .filter_map(|line| line.split_once('|'))
+            .filter(|(marker, _)| marker.starts_with('1'))
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(output.trim(), format!("{prefix}[redacted:FIXTURE]"));
+    }
+}
+
 /// Installs one exact durable local identity before a bridge test dispatches the tool body.
 /// 在桥接测试分派工具主体前安装一条精确的持久化本地身份。
 fn install_test_invocation_identity(

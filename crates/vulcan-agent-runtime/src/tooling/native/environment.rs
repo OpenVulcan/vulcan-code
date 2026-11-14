@@ -175,7 +175,7 @@ impl NativeEnvironmentAccess {
     pub(crate) async fn prepare_historical_job_redaction(
         &self,
         session_id: SessionId,
-    ) -> Result<(), String> {
+    ) -> Result<Arc<TaskRuntime>, String> {
         let secrets = self.host.historical_job_secrets(session_id).await?;
         let task_runtime = self
             .task_runtime
@@ -184,7 +184,7 @@ impl NativeEnvironmentAccess {
         for (name, value) in secrets {
             task_runtime.register_environment_secret(&name, &value)?;
         }
-        Ok(())
+        Ok(task_runtime)
     }
 
     /// The host itself.

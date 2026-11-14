@@ -14,7 +14,7 @@ use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use vulcan_agent_runtime::tooling::native::{
-    canonical_shell_job_session_id, shell_job_recent_lines,
+    canonical_shell_job_session_id, shell_job_recent_lines_with_filter,
 };
 use vulcan_host_tools::shell_job::{
     SHELL_JOB_READ_DEFAULT_LINES, SHELL_JOB_READ_MAX_LINES, SHELL_JOBS_DIRECTORY,
@@ -191,10 +191,12 @@ pub(crate) async fn service_list_shell_jobs(
     let mut jobs = Vec::with_capacity(running.len() + finished.len());
     for summary in running {
         let recent_lines = match runtime.job(&context.owner, &summary.job_id) {
-            Some(job) => shell_job_recent_lines(&job, SHELL_JOB_ACTIVITY_RECENT_LINES)
-                .iter()
-                .map(|line| context.redact(line))
-                .collect::<Result<Vec<_>, _>>()?,
+            Some(job) => {
+                shell_job_recent_lines_with_filter(&job, SHELL_JOB_ACTIVITY_RECENT_LINES, |line| {
+                    context.redact(line).map_err(std::io::Error::other)
+                })
+                .map_err(|error| format!("Failed to read the shell job output: {error}"))?
+            }
             None => Vec::new(),
         };
         jobs.push(shell_job_view(&context, summary, recent_lines, false)?);
@@ -309,6 +311,9 @@ pub(crate) async fn service_read_shell_job_output(
         .job(&context.owner, &request.job_id)
         .is_some_and(|job| job.outcome().is_none());
     let total_lines = reader.stats().total_lines;
+    // Filter the logical line before wrapping so display boundaries cannot split a match.
+    // 在折行前过滤逻辑行，避免显示边界截断匹配。
+    let filter_log_line = |line: &str| context.redact(line).map_err(std::io::Error::other);
     let (rows, next_line) = match (request.before_line, request.from_line) {
         (Some(_), Some(_)) => {
             return Err(String::from(
@@ -316,22 +321,27 @@ pub(crate) async fn service_read_shell_job_output(
             ));
         }
         (Some(before_line), None) => (
-            read_rows_before(&reader, before_line, max_lines)?,
+            read_rows_before(&reader, before_line, max_lines, &filter_log_line)?,
             Some(before_line).filter(|line| *line <= total_lines),
         ),
         (None, Some(from_line)) => {
             let range = reader
-                .read_lines(
+                .read_lines_with_filter(
                     from_line.max(1),
                     max_lines,
                     SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES,
+                    filter_log_line,
                 )
                 .map_err(|error| format!("Failed to read the shell job output: {error}"))?;
             (range.rows, range.next_line)
         }
         (None, None) => (
             reader
-                .tail_rows(max_lines, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES)
+                .tail_rows_with_line_filter(
+                    max_lines,
+                    SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES,
+                    filter_log_line,
+                )
                 .map_err(|error| format!("Failed to read the shell job output: {error}"))?,
             None,
         ),
@@ -342,8 +352,8 @@ pub(crate) async fn service_read_shell_job_output(
     let rows = rows
         .into_iter()
         .filter(|row| row.kind != ShellJobRowKind::Separator)
-        .map(|row| shell_job_output_row(&context, row))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(shell_job_output_row)
+        .collect();
     Ok(ShellJobOutputPage {
         job_id: request.job_id,
         rows,
@@ -364,6 +374,7 @@ fn read_rows_before(
     reader: &ShellJobLogReader,
     before_line: u64,
     max_lines: usize,
+    filter: &impl Fn(&str) -> std::io::Result<String>,
 ) -> Result<Vec<ShellJobLineRow>, String> {
     if before_line <= 1 {
         return Ok(Vec::new());
@@ -372,7 +383,7 @@ fn read_rows_before(
     loop {
         let wanted = usize::try_from(before_line - first).unwrap_or(max_lines);
         let range = reader
-            .read_lines(first, wanted, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES)
+            .read_lines_with_filter(first, wanted, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES, filter)
             .map_err(|error| format!("Failed to read the shell job output: {error}"))?;
         let reached = range.next_line.is_none_or(|next| next >= before_line);
         if reached || first + 1 >= before_line {
@@ -382,21 +393,18 @@ fn read_rows_before(
     }
 }
 
-/// Converts one display row for the client, redacting its text.
-/// 为客户端转换一个显示行，并遮蔽其文本。
-fn shell_job_output_row(
-    context: &ShellJobSessionContext,
-    row: ShellJobLineRow,
-) -> Result<ShellJobOutputRow, String> {
-    Ok(ShellJobOutputRow {
+/// Projects one already filtered display row for the client.
+/// 将已过滤的显示行投影给客户端。
+fn shell_job_output_row(row: ShellJobLineRow) -> ShellJobOutputRow {
+    ShellJobOutputRow {
         line: row.line,
         kind: match row.kind {
             ShellJobRowKind::Gap => String::from("gap"),
             _ => String::from("text"),
         },
         continuation: row.continuation,
-        text: context.redact(&row.text)?,
-    })
+        text: row.text,
+    }
 }
 
 /// Stops one running job of a session.
