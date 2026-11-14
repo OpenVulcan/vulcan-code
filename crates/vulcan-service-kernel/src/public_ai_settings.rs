@@ -178,11 +178,13 @@ pub(super) use model_candidates::{
 pub(super) use model_selection::PublicAiModelSelectionRequest;
 #[cfg(test)]
 pub(crate) use model_selection::reconcile_missing_session_model_selections;
-pub(super) use model_selection::service_select_public_ai_model;
 use model_selection::{
     ensure_active_model_selection, first_enabled_model_selection,
     plan_reconciled_session_model_selections, preferred_replacement_model_selection,
     reconcile_disabled_connection_sessions, reconcile_explicitly_revoked_session_model_selections,
+};
+pub(super) use model_selection::{
+    service_create_reasoning_recovery_session, service_select_public_ai_model,
 };
 // Preserve model-settings RPC type paths while dispatch infers request contracts.
 // 分发层推导请求契约时保留模型设置 RPC 类型路径。

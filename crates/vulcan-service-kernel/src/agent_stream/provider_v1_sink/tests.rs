@@ -273,6 +273,7 @@ fn interrupted_tool_result_projects_in_complete_controller_state()
     // snapshot contains one durable failed tool result exactly as observed by Continue.
     // snapshot 包含 Continue 所观察到的一条可靠失败工具结果。
     let snapshot = SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         preparing_user_prompt_media_seqs: Vec::new(),
         compaction_frontier_seq: None,
         image_replay_from_seq: None,
@@ -352,6 +353,7 @@ fn complete_v1_history_projects_attachment_only_tail_without_transport_state()
     // snapshot spans prior user, assistant and tool-result history before the final attachment-only input.
     // snapshot 在最终仅附件输入前覆盖先前用户、助手与工具结果历史。
     let snapshot = SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         preparing_user_prompt_media_seqs: Vec::new(),
         compaction_frontier_seq: None,
         image_replay_from_seq: None,
@@ -451,6 +453,7 @@ fn prompt_media_frontier_rejects_non_exact_source_before_io()
         resource_ids: resources.clone(),
     };
     let mut snapshot = SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         current_compaction_id: None,
         preparing_user_prompt_media_seqs: vec![seq],
         compaction_frontier_seq: None,
@@ -506,6 +509,7 @@ fn user_input_source_resolves_exact_projected_controller_message_id()
         resource_ids: Vec::new(),
     };
     let snapshot = SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         preparing_user_prompt_media_seqs: Vec::new(),
         compaction_frontier_seq: None,
         image_replay_from_seq: None,
@@ -731,6 +735,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
     // resource_id 选择唯一已发布资源出现。
     let resource_id = resource_ids[0];
     let snapshot = SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         preparing_user_prompt_media_seqs: Vec::new(),
         compaction_frontier_seq: None,
         image_replay_from_seq: None,
@@ -3559,18 +3564,6 @@ fn deepseek_replay_route() -> V1ReplayRouteIdentity {
         route_fingerprint: String::from("https://provider.invalid/v1/responses"),
         protocol_profile_id: String::from("profile-1"),
         model_id: String::from("model-1"),
-        reasoning_replay_contract: Some(
-            vulcan_ai_contract::ReasoningReplayContract::DeepseekResponsesPlaintextV1,
-        ),
-    }
-}
-
-/// Builds the same frozen route identity without any declared replay contract.
-/// 构建同一冻结路由身份，但不声明任何回传契约。
-fn undeclared_replay_route() -> V1ReplayRouteIdentity {
-    V1ReplayRouteIdentity {
-        reasoning_replay_contract: None,
-        ..deepseek_replay_route()
     }
 }
 
@@ -3621,6 +3614,7 @@ fn projected_assistant_replay_prefers_durable_items_on_matching_route() {
     let (content, items) = resolve_projected_assistant_replay(
         durable_canonical_content(),
         Some(&envelope),
+        None,
         Some(&route),
         "v1-provider-message-1",
     )
@@ -3649,6 +3643,7 @@ fn projected_assistant_replay_keeps_matching_canonical_reasoning() {
     let (content, items) = resolve_projected_assistant_replay(
         durable_canonical_content(),
         Some(&envelope),
+        None,
         Some(&route),
         "matching-canonical",
     )
@@ -3668,7 +3663,7 @@ fn projected_assistant_replay_keeps_matching_canonical_reasoning() {
 fn projected_assistant_replay_preserves_plaintext_on_foreign_route() {
     // Cover targets with and without a declared reasoning contract.
     // 覆盖声明与未声明思考回传契约的目标。
-    for declared in [true, false] {
+    {
         // Every frozen identity dimension independently marks the history as foreign.
         // 冻结身份的每个维度都可独立标记该历史来自外路由。
         for field in ["provider", "connection", "endpoint", "protocol", "model"] {
@@ -3677,11 +3672,7 @@ fn projected_assistant_replay_preserves_plaintext_on_foreign_route() {
             let envelope = durable_reasoning_envelope();
             // Rebuild the target independently for each identity change.
             // 每次身份变化都独立构建目标。
-            let mut route = if declared {
-                deepseek_replay_route()
-            } else {
-                undeclared_replay_route()
-            };
+            let mut route = deepseek_replay_route();
             match field {
                 "provider" => route.provider_id.push_str("-changed"),
                 "connection" => route.connection_id.push_str("-changed"),
@@ -3736,6 +3727,7 @@ fn projected_assistant_replay_preserves_plaintext_on_foreign_route() {
             let (content, items) = resolve_projected_assistant_replay(
                 source,
                 Some(&envelope),
+                None,
                 Some(&route),
                 "v1-provider-message-1",
             )
@@ -3778,6 +3770,7 @@ fn projected_assistant_replay_excludes_foreign_opaque_only_reasoning() {
             text.clone(),
         ],
         Some(&envelope),
+        None,
         Some(&route),
         "foreign-encrypted",
     )
@@ -3795,6 +3788,7 @@ fn projected_assistant_replay_never_invents_a_route_for_state_only_fixtures() {
         durable_canonical_content(),
         Some(&envelope),
         None,
+        None,
         "v1-provider-message-1",
     )
     .expect("a state-only fixture must stay conservative");
@@ -3810,6 +3804,7 @@ fn projected_assistant_replay_reports_missing_envelope_distinctly() {
     let route = deepseek_replay_route();
     let error = resolve_projected_assistant_replay(
         durable_canonical_content(),
+        None,
         None,
         Some(&route),
         "v1-provider-message-27",
@@ -3842,6 +3837,7 @@ fn projected_assistant_replay_rejects_unusable_envelope() {
     let error = resolve_projected_assistant_replay(
         durable_canonical_content(),
         Some(&envelope),
+        None,
         Some(&route),
         "v1-provider-message-1",
     )
@@ -3861,6 +3857,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
     let facts = request_facts();
     let envelope = durable_reasoning_envelope();
     let snapshot = SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         preparing_user_prompt_media_seqs: Vec::new(),
         compaction_frontier_seq: None,
         image_replay_from_seq: None,

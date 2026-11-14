@@ -27,6 +27,7 @@ import {
   type StopConversationRunResponse,
 } from "@/service/conversation-actions-service";
 import {
+  createReasoningRecoverySession,
   listWorkbenchModelSecondaryRoutes,
   selectWorkbenchModel,
   selectWorkbenchModelSecondaryRoute,
@@ -34,6 +35,7 @@ import {
   selectWorkbenchThinkingDisplayMode,
   saveToolCollapseDefault,
 } from "@/service/settings-actions-service";
+import { BrowserServiceRpcError } from "@/service/browserTransport";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import { modelContextWindowOffer, showModelContextWindowOffer } from "./model-context-window-offer";
 import {
@@ -713,10 +715,10 @@ const handleReorderPendingPrompts = React.useCallback(async (
 // handleSelectWorkbenchModel persists one model picker choice through the shared service.
 // handleSelectWorkbenchModel 通过共享服务持久化单个模型筛选器选择。
 const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerChoice): Promise<boolean> => {
+  // conversationId binds both the attempted switch and its recovery action to the original session.
+  // conversationId 将本次切换及恢复操作绑定到原会话。
+  const conversationId = selectedDraftConversation ? null : selectedConversationId;
   try {
-    // conversationId scopes model persistence to an existing session; drafts update the global new-session default.
-    // conversationId 将模型持久化限定到既有会话；草稿则更新新会话使用的全局默认值。
-    const conversationId = selectedDraftConversation ? null : selectedConversationId;
     const selected = await selectWorkbenchModel(choice, conversationId);
     if (selected) {
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, selected.workbench));
@@ -748,13 +750,44 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
     }
     return true;
   } catch (nextError) {
+    if (conversationId && nextError instanceof BrowserServiceRpcError && nextError.code === "unreplayable_reasoning_history") {
+      toast(translate("conversationActions.reasoningReplayBlocked"), {
+        id: `reasoning-recovery:${conversationId}`,
+        description: translate("conversationActions.reasoningRecoveryDescription"),
+        duration: Infinity,
+        action: {
+          label: translate("conversationActions.reasoningRecoveryCreate"),
+          onClick: () => {
+            void createReasoningRecoverySession({
+              conversationId,
+              providerId: choice.providerId,
+              modelId: choice.modelId,
+              connectionId: choice.connectionId,
+            }).then(async (sessionId) => {
+              // Refresh the indexed conversation before selecting it so the composer loads its saved draft.
+              // 先刷新索引会话再选中它，以便输入区加载已保存的草稿。
+              const snapshot = await loadWorkbenchSnapshot();
+              setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+              if (selectedConversationIdRef.current === conversationId) {
+                setDraftConversation(null);
+                setSelectedConversationId(sessionId);
+              }
+            }).catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+          },
+        },
+      });
+      return false;
+    }
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
 }, [
   mergeWorkbenchWithLocalCaches,
   selectedConversationId,
+  selectedConversationIdRef,
   selectedDraftConversation,
+  setDraftConversation,
+  setSelectedConversationId,
   setWorkbenchState,
   translate,
 ]);

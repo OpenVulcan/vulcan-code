@@ -78,6 +78,7 @@ async fn native_read_fixture() -> Result<NativeReadFixture, Box<dyn std::error::
     // This projection is the authoritative V1 source, independent of pre-gate candidate messages.
     // 此投影是权威V1来源，独立于闸门前候选消息。
     let mut snapshot = SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         current_compaction_id: None,
         open_turn_id: None,
         child_business_execution_id: None,

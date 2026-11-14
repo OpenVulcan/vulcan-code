@@ -113,7 +113,7 @@ pub(crate) async fn service_select_public_ai_model(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: PublicAiModelSelectionRequest,
-) -> Result<PublicAiSettingsSnapshot, String> {
+) -> Result<PublicAiSettingsSnapshot, vulcan_service_api::WebuiServiceRpcError> {
     // conversation_id is the validated optional session scope for this selection.
     // conversation_id 是本次选择经过校验的可选会话作用域。
     let conversation_id = request
@@ -139,7 +139,7 @@ pub(crate) async fn service_select_public_ai_model(
                 .as_ref()
                 .is_some_and(|workspace| workspace.session_runtime_state.contains_key(&session_id));
             if !session_exists {
-                return Err(format!("Conversation `{session_id}` has no runtime state."));
+                return Err(format!("Conversation `{session_id}` has no runtime state.").into());
             }
             let runtime_state = guard
                 .workspace_snapshot
@@ -183,19 +183,21 @@ pub(crate) async fn service_select_public_ai_model(
         return Err(format!(
             "Connection `{}` does not belong to provider `{}`.",
             request.connection_id, request.provider_id
-        ));
+        )
+        .into());
     }
     if !current_configuration.connection_is_enabled(request.connection_id.as_str()) {
         return Err(format!(
             "Connection `{}` is disabled and cannot be selected.",
             request.connection_id
-        ));
+        )
+        .into());
     }
     if current_configuration.connection_is_pending_validation(request.connection_id.as_str()) {
         return Err(format!(
             "Connection `{}` is pending explicit model validation and cannot be selected for a conversation.",
             request.connection_id
-        ));
+        ).into());
     }
     if !runtime.model_is_enabled_for_connection(
         &current_configuration,
@@ -205,7 +207,8 @@ pub(crate) async fn service_select_public_ai_model(
         return Err(format!(
             "Provider `{}` model `{}` is disabled.",
             request.provider_id, request.model_id
-        ));
+        )
+        .into());
     }
     // selected_connection_exposes_model rejects mismatched account/model requests before mutation.
     // selected_connection_exposes_model 在修改前拒绝账号与模型不匹配的请求。
@@ -222,7 +225,8 @@ pub(crate) async fn service_select_public_ai_model(
         return Err(format!(
             "Connection `{}` does not expose model `{}`.",
             request.connection_id, request.model_id
-        ));
+        )
+        .into());
     }
     // selected_model is the exact target used to validate an existing session compression lock.
     // selected_model 是用于校验既有会话压缩锁定的精确目标。
@@ -232,6 +236,33 @@ pub(crate) async fn service_select_public_ai_model(
         request.provider_id.as_str(),
         request.model_id.as_str(),
     )?;
+    if let Some(handle) = session_handle.as_ref()
+        && handle
+            .read(|document| document.metadata.id_frontier.next_seq > 1)
+            .map_err(|error| error.to_string())?
+    {
+        // Check the exact history and target route before publishing any pending choice or account preference.
+        // 发布待生效选择或账号偏好之前，校验精确历史和目标路由。
+        let projection_handle = std::sync::Arc::clone(handle);
+        let (snapshot, active_api_started_seq) = tokio::task::spawn_blocking(move || {
+            projection_handle.capture_model_switch_projection()
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        match crate::agent_stream::precheck_projected_assistant_replay(
+            &snapshot, active_api_started_seq, &selected_model.route, &selected_model.model.id,
+        ) {
+            Ok(()) => {}
+            Err(error @ crate::session_runtime_registry_v1::SessionRuntimeError::UnreplayableReasoningHistory(_)) => {
+                tracing::warn!(session = %handle.session_id(), %error, "Rejected model switch before saving an unreplayable route");
+                return Err(vulcan_service_api::WebuiServiceRpcError::UnreplayableReasoningHistory(
+                    vulcan_service_api::WebuiLocalizedMessage::new("conversationActions.reasoningReplayBlocked"),
+                ));
+            }
+            Err(error) => return Err(error.to_string().into()),
+        }
+    }
     let target_context_limit = selected_model.model.capabilities.context_limit;
     if let Some(session_id) = conversation_id
         && let Some(target_context_limit) = target_context_limit
@@ -247,7 +278,7 @@ pub(crate) async fn service_select_public_ai_model(
         return Err(format!(
             "The current session context is about {} tokens, which reaches or exceeds the real context limit of target model `{}` ({} tokens); cannot switch to that model. Shorten the context or choose a model with enough capacity first.",
             current_budget.active_context_tokens, request.model_id, target_context_limit
-        ));
+        ).into());
     }
     // A session window that does not fit the target model falls back to following the model
     // together with this switch; a model without a declared window cannot hold any lock.
@@ -436,6 +467,162 @@ pub(crate) async fn service_select_public_ai_model(
         crate::emit_session_addons_changed_delta(&app, &state, session_id)?;
     }
     Ok(snapshot)
+}
+
+/// Creates a new idle session for the requested model using only the source session's visible text.
+/// 为所请求模型创建新的空闲会话，仅携带来源会话的可见文本。
+/// Returns the indexed session id; no Provider request is dispatched by this operation.
+/// 返回已索引会话标识；本操作不发出供应商请求。
+pub(crate) async fn service_create_reasoning_recovery_session(
+    state: SharedServiceBridgeState,
+    request: PublicAiModelSelectionRequest,
+) -> Result<String, String> {
+    // source_id is supplied by the blocked switch, never derived from the selected sidebar row.
+    // source_id 由受阻的切换提供，绝不从当前侧栏选择推断。
+    let source_id = request
+        .conversation_id
+        .as_deref()
+        .ok_or_else(|| String::from("Reasoning recovery requires a source conversation."))?
+        .parse::<crate::SessionId>()
+        .map_err(|error| error.to_string())?;
+    let source =
+        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, source_id).await?;
+    let (controller, registry) = {
+        let guard = state.lock().map_err(|error| error.to_string())?;
+        (
+            guard
+                .controller_runtime
+                .clone()
+                .ok_or_else(|| String::from("Controller runtime is unavailable."))?,
+            std::sync::Arc::clone(&guard.session_runtime_registry),
+        )
+    };
+    let draft = tokio::task::spawn_blocking(move || recovery_conversation_text(&source))
+        .await
+        .map_err(|error| error.to_string())??;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    let route = runtime.resolve_connection_model_selection(
+        &configuration,
+        &request.connection_id,
+        &request.provider_id,
+        &request.model_id,
+    )?;
+    let session_id = crate::session_v1_lifecycle::create_recovery_draft_session_v1(
+        &controller,
+        &registry,
+        &draft.project_id,
+        &draft.title,
+        draft.text,
+        ActiveAiModelSelection {
+            provider_id: route.route.provider.id.clone(),
+            model_id: route.model.id,
+            connection_id: route.route.connection.id.clone(),
+        },
+        crate::session_goal_lifecycle::current_v1_goal_unix_millis()?,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    drop(transaction);
+    crate::workbench_refresh::refresh_workbench_snapshot_for_selected_session(state, session_id)
+        .await?;
+    Ok(session_id.to_string())
+}
+
+/// Holds the source's project, display title, and text for an independent recovery draft.
+/// 保存独立恢复草稿所需的来源项目、展示标题和正文。
+struct ReasoningRecoveryDraft {
+    /// Indexed project that owns the new conversation.
+    /// 拥有新会话的已索引项目。
+    project_id: String,
+    /// Display title of the source at the captured revision.
+    /// 捕获修订中来源会话的展示标题。
+    title: String,
+    /// Editable transcript of text visible to the user.
+    /// 用户可见正文的可编辑问答。
+    text: String,
+}
+
+/// Reads the source's exact published history and prepares an editable plain-text transcript.
+/// 读取来源会话的精确已发布历史并准备可编辑的纯文本问答。
+/// Returns the source's project and title, together with only human prompts and assistant text.
+/// 返回来源项目与标题，以及仅包含人工提示词和助手正文的问答文本。
+fn recovery_conversation_text(
+    source: &crate::session_runtime_registry_v1::SessionHandle,
+) -> Result<ReasoningRecoveryDraft, String> {
+    use vulcan_session_core::v1::event::{EventBody, EventVisibility, UserInputSource};
+    use vulcan_session_core::v1::ids::Seq;
+    // Read display history independently of whether the original Provider projection is replayable.
+    // 独立读取展示历史，无论原供应商投影是否可以回放。
+    source.flush_if_dirty().map_err(|error| error.to_string())?;
+    let locator = source
+        .storage_locator()
+        .map_err(|error| error.to_string())?;
+    let (metadata, _, cleaned) = locator
+        .read_cleaned_history_snapshot()
+        .map_err(|error| error.to_string())?;
+    let events = if metadata.id_frontier.next_seq > 1 {
+        let events = locator
+            .load_event_range(
+                Seq::try_new(1).map_err(|error| error.to_string())?,
+                Seq::try_new(metadata.id_frontier.next_seq - 1)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+        if events.state.segment_generation != metadata.segment_generation
+            || events.state.document_revision != metadata.document_revision
+            || events.state.next_seq != metadata.id_frontier.next_seq
+        {
+            return Err(String::from(
+                "The source conversation changed while preparing recovery. Try again.",
+            ));
+        }
+        events.events
+    } else {
+        Vec::new()
+    };
+    // entries preserve the published display history and exclude the ledger rows it replaces.
+    // entries 保留已发布的展示历史，并排除由它替代的账本条目。
+    let mut entries = Vec::new();
+    for turn in cleaned.turns {
+        for input in turn.inputs {
+            if !input.text.trim().is_empty() {
+                entries.push(format!("User:\n{}", input.text));
+            }
+        }
+        if let Some(answer) = turn.answer
+            && !answer.text.trim().is_empty()
+        {
+            entries.push(format!("Assistant:\n{}", answer.text));
+        }
+    }
+    for event in events {
+        if event.visibility == EventVisibility::HostOnly
+            || metadata.cleaned_history.as_ref().is_some_and(|history| {
+                history
+                    .ranges
+                    .iter()
+                    .any(|range| range.from <= event.seq && event.seq <= range.through)
+            })
+        {
+            continue;
+        }
+        let (role, text) = match event.event {
+            EventBody::UserInput(input) if input.input_source != UserInputSource::AgentMessage => {
+                ("User", input.text)
+            }
+            EventBody::AssistantText(answer) => ("Assistant", answer.text),
+            _ => continue,
+        };
+        if !text.trim().is_empty() {
+            entries.push(format!("{role}:\n{text}"));
+        }
+    }
+    Ok(ReasoningRecoveryDraft {
+        project_id: locator.project_id().to_owned(),
+        title: metadata.title,
+        text: entries.join("\n\n"),
+    })
 }
 
 /// Durably clears a session window selection so the session follows its (new) model.

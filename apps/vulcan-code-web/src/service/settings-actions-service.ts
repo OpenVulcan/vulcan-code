@@ -534,15 +534,29 @@ export async function savePublicAiContextCompactionWindowNodes(
 
 // selectPublicAiModel persists one exact model and account selection.
 // selectPublicAiModel 持久化一个精确模型与账号选择。
-export async function selectPublicAiModel(request: {
+// PublicAiModelSelection names the exact provider, account, model and optional existing conversation.
+// PublicAiModelSelection 指定精确供应商、账号、模型和可选的现有会话。
+interface PublicAiModelSelection {
   providerId: string;
   modelId: string;
   connectionId: string;
   // conversationId scopes the choice to one persisted session; null updates the new-session default.
   // conversationId 将选择限定到一个持久化会话；null 则更新新会话默认值。
   conversationId?: string | null;
-}): Promise<PublicAiSettingsSnapshot> {
+}
+
+// Saves the selected model and returns the resulting settings snapshot.
+// 保存所选模型并返回更新后的设置快照。
+export async function selectPublicAiModel(request: PublicAiModelSelection): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_select_public_ai_model", { request });
+}
+
+// Creates an idle recovery session for the exact source and target supplied by the picker.
+// 为选择器提供的精确来源和目标创建空闲恢复会话。
+// Returns the new session id with the visible transcript prefilled in its composer.
+// 返回新会话标识，其输入区已预填可见问答。
+export function createReasoningRecoverySession(request: PublicAiModelSelection & { conversationId: string }): Promise<string> {
+  return serviceClient.request<string>("service_create_reasoning_recovery_session", { request });
 }
 
 // savePublicAiModelEnabled persists one provider-model conversation choice.

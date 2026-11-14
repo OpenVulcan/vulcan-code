@@ -818,6 +818,67 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
         .map_err(SessionV1LifecycleError::from)
 }
 
+/// Publishes an idle recovery session with a visible transcript draft and the chosen initial route.
+/// 发布空闲恢复会话，填入可见问答草稿并设置所选初始路由。
+/// Returns the registered session id; the next explicit user submission starts its first execution.
+/// 返回已注册的会话标识；下一次用户显式提交才启动首次执行。
+pub(crate) async fn create_recovery_draft_session_v1(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    project_id: &str,
+    title: &str,
+    draft_text: String,
+    selection: vulcan_provider_adapters::ActiveAiModelSelection,
+    now_ms: i64,
+) -> Result<SessionId, SessionV1LifecycleError> {
+    // session_id owns a completely new ledger, with no inherited Provider execution facts.
+    // session_id 拥有全新账本，不继承供应商执行记录。
+    let session_id = SessionId::new_v4();
+    let reservation = registry.reserve_creation(session_id)?;
+    let mut document = SessionDocument::new(session_id.to_string(), project_id, title, now_ms);
+    document.set_draft(draft_text, Vec::new(), now_ms)?;
+    document.set_pending_request(
+        vulcan_session_core::v1::config::PendingRequestConfig {
+            provider: Some(selection.provider_id),
+            model: Some(selection.model_id),
+            connection_id: Some(selection.connection_id),
+            thinking_level: None,
+            temperature: None,
+            set_at_ms: now_ms,
+        },
+        now_ms,
+    )?;
+    // An initial route has no predecessor and can be committed without a switch or input event.
+    // 初始路由没有前序路由，可以在不产生切换或输入事件的情况下提交。
+    document.promote_pending_request(None, now_ms)?;
+    // Publish the draft and route together so the sidebar never exposes a partially seeded session.
+    // 同时发布草稿与路由，避免侧边栏暴露只写入一部分的会话。
+    let candidate = document.prepare_flush_candidates()?.ok_or(
+        SessionV1LifecycleError::MissingInitialFlushCandidate(session_id),
+    )?;
+    let date_bucket = session_v1_date_bucket(now_ms)?;
+    let created = create_indexed_session_v1(
+        controller,
+        &CreateSessionV1Request {
+            cleaned_history: None,
+            project_id,
+            storage_partition: SESSION_V1_STORAGE_PARTITION,
+            date_bucket: &date_bucket,
+            metadata: &candidate.metadata,
+            runtime_lock: &candidate.runtime_lock,
+            compactions: &candidate.compactions,
+            events: &candidate.tail_events,
+        },
+    )
+    .await?;
+    document.apply_published_storage_metadata(&created.metadata)?;
+    document.advance_durable(candidate.revision)?;
+    let handle = SessionHandle::new(session_id, created.locator, document);
+    handle.initialize_root_usage(true, now_ms);
+    reservation.publish(handle)?;
+    Ok(session_id)
+}
+
 /// Creates one forked V1 session or returns the exact child from an identical retry.
 /// 创建一个分叉 V1 会话，或在精确重试时返回同一子会话。
 ///

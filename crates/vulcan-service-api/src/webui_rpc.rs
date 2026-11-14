@@ -214,6 +214,9 @@ pub enum WebuiServiceRpcError {
     /// A service rejected the request with a catalog-backed user-facing message.
     /// 服务以目录形式的面向用户消息拒绝请求。
     Localized(WebuiLocalizedMessage),
+    /// The selected model cannot consume the session's reasoning history.
+    /// 所选模型无法使用当前会话的历史推理。
+    UnreplayableReasoningHistory(WebuiLocalizedMessage),
     /// A service result could not be serialized.
     /// 服务结果无法序列化。
     Serialization(String),
@@ -227,6 +230,7 @@ impl WebuiServiceRpcError {
             Self::InvalidParams(_) => "invalid_params",
             Self::UnknownMethod(_) => "method_not_found",
             Self::Service(_) | Self::Localized(_) => "service_rpc_error",
+            Self::UnreplayableReasoningHistory(_) => "unreplayable_reasoning_history",
             Self::Serialization(_) => "response_serialization_failed",
         }
     }
@@ -235,7 +239,7 @@ impl WebuiServiceRpcError {
     /// 当失败携带目录消息时返回该消息。
     pub fn localized(&self) -> Option<&WebuiLocalizedMessage> {
         match self {
-            Self::Localized(message) => Some(message),
+            Self::Localized(message) | Self::UnreplayableReasoningHistory(message) => Some(message),
             _ => None,
         }
     }
@@ -268,7 +272,9 @@ impl std::fmt::Display for WebuiServiceRpcError {
             Self::UnknownMethod(method) => {
                 write!(formatter, "unknown service RPC method: {method}")
             }
-            Self::Localized(message) => std::fmt::Display::fmt(message, formatter),
+            Self::Localized(message) | Self::UnreplayableReasoningHistory(message) => {
+                std::fmt::Display::fmt(message, formatter)
+            }
         }
     }
 }

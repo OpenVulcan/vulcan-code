@@ -260,6 +260,9 @@ pub(crate) struct SessionProviderProjectionSnapshot {
     /// The same projection with exact durable source ranges for compaction planning.
     /// 供压缩规划使用、带精确可靠来源范围的同一投影。
     pub(crate) sourced_items: Vec<SourcedProjectedItem>,
+    /// Exact producing API requests for assistant groups that lack a replay envelope, keyed by source seq.
+    /// 缺少回放封套的助手组所对应的精确产出 API 请求，以来源序号索引。
+    pub(crate) unenveloped_assistant_requests: BTreeMap<Seq, ApiRequestSnapshot>,
     /// Exact project directory resolved by the validated SQLite locator.
     /// 由已校验 SQLite 定位器解析出的精确项目目录。
     pub(crate) project_directory: PathBuf,
@@ -722,6 +725,9 @@ pub(crate) enum SessionRuntimeError {
     /// One exact Provider projection or request reconstruction invariant failed.
     /// 一条精确 Provider 投影或请求重建不变量失败。
     ProviderProjectionInvariant(String),
+    /// Historical reasoning cannot be replayed by the selected request.
+    /// 当前所选请求无法回放历史推理。
+    UnreplayableReasoningHistory(String),
     /// Final request accounting requires compaction before a physical API can be committed.
     /// 最终请求记账要求在提交物理 API 前执行压缩。
     ProviderContextCompactionRequired(String),
@@ -874,6 +880,12 @@ impl fmt::Display for SessionRuntimeError {
             Self::ProviderProjectionRequiresStorageLocator => formatter
                 .write_str("V1 Provider projection requires an exact production storage locator"),
             Self::ProviderProjectionInvariant(detail) => {
+                write!(
+                    formatter,
+                    "V1 Provider projection invariant failed: {detail}"
+                )
+            }
+            Self::UnreplayableReasoningHistory(detail) => {
                 write!(
                     formatter,
                     "V1 Provider projection invariant failed: {detail}"
@@ -2234,6 +2246,17 @@ impl SessionHandle {
         self.capture_durable_projection(SessionProjectionPurpose::ProviderRequest)
     }
 
+    /// Captures the history and any still-running API boundary from the same durable revision.
+    /// 从同一持久修订捕获历史以及仍在运行的 API 边界。
+    pub(crate) fn capture_model_switch_projection(
+        &self,
+    ) -> Result<(SessionProviderProjectionSnapshot, Option<Seq>), SessionRuntimeError> {
+        self.capture_durable_projection_with(
+            SessionProjectionPurpose::ProviderRequest,
+            |document| Ok(document.active_api().map(|api| api.started_seq)),
+        )
+    }
+
     /// Captures the exact durable V1 Provider projection while publication is serialized.
     /// 在发布已串行化时捕获精确可靠的 V1 Provider 投影。
     fn capture_provider_projection_snapshot_with_publisher_locked(
@@ -2364,6 +2387,10 @@ impl SessionHandle {
             .iter()
             .map(|projected| projected.item.clone())
             .collect();
+        // Bind missing envelopes to their producing API start, before any history is discarded for dispatch.
+        // 在为派发裁剪历史之前，将缺封套条目绑定到产出它们的 API 起始记录。
+        let unenveloped_assistant_requests =
+            crate::agent_stream::unenveloped_assistant_requests(&range.events, &sourced_items);
         Ok(SessionProviderProjectionSnapshot {
             open_turn_id,
             child_business_execution_id,
@@ -2377,6 +2404,7 @@ impl SessionHandle {
             through_seq,
             items,
             sourced_items,
+            unenveloped_assistant_requests,
             project_directory: locator.project_directory(),
             provider_usage_budget_anchor: latest_provider_usage_budget_anchor(&range.events),
             initialized_locked_baseline,

@@ -1022,20 +1022,42 @@ struct V1ReplayRouteIdentity {
     /// Upstream model identifier of the frozen execution.
     /// 冻结执行的上游模型标识。
     model_id: String,
-    /// Frozen reasoning-replay contract of the route this request will dispatch to.
-    /// 本次请求将要派发到的路由所冻结的推理回传契约。
-    ///
-    /// # Remarks
-    /// 说明
-    /// The contract selects native plaintext reasoning versus ordinary historical text after a
-    /// route change. Neither branch transfers opaque signatures; missing source evidence remains
-    /// an error on a declared replay route.
-    /// 契约决定路由变化后使用原生明文推理还是普通历史文本。两种分支都不传递不透明签名；
-    /// 在已声明回放契约的路由上，缺少来源证据仍属于错误。
-    reasoning_replay_contract: Option<vulcan_ai_contract::ReasoningReplayContract>,
 }
 
 impl V1ReplayRouteIdentity {
+    /// Copies the same frozen route and model identifiers used by dispatch.
+    /// 复制与派发相同的冻结路由和模型标识。
+    fn for_execution(
+        route: &vulcan_provider_adapters::execution::ProviderExecutionRoute,
+        model_id: &str,
+    ) -> Self {
+        Self {
+            provider_id: route.provider.id.clone(),
+            connection_id: route.connection.id.clone(),
+            route_fingerprint: route.request_url("/responses"),
+            protocol_profile_id: route.protocol_route.protocol_profile_id.clone(),
+            model_id: model_id.to_owned(),
+        }
+    }
+
+    /// Reports whether a durable API start proves a different route along a recorded identity dimension.
+    /// 判断可靠 API 起始记录是否在已记录的身份维度上证明属于不同路由。
+    fn proves_foreign_request(
+        &self,
+        request: &vulcan_session_core::v1::event::ApiRequestSnapshot,
+    ) -> bool {
+        request.provider != self.provider_id
+            || request.model != self.model_id
+            || request
+                .connection_id
+                .as_deref()
+                .is_some_and(|value| value != self.connection_id)
+            || request
+                .profile
+                .as_deref()
+                .is_some_and(|value| value != self.protocol_profile_id)
+    }
+
     /// Copies the frozen route identity from one validated preparation candidate.
     /// 从一个已校验的准备候选复制冻结路由身份。
     ///
@@ -1048,16 +1070,7 @@ impl V1ReplayRouteIdentity {
         // execution is the same frozen carrier validated before any V1 history rebuild.
         // execution 是 V1 历史重建前已经校验过的同一冻结载体。
         let execution = &candidate.media_context.as_ref()?.execution;
-        Some(Self {
-            provider_id: execution.route.provider.id.clone(),
-            connection_id: execution.route.connection.id.clone(),
-            // The producing adapter binds replay signatures with this exact `/responses` convention.
-            // 产生端适配器正是用这个 `/responses` 约定绑定重放签名。
-            route_fingerprint: execution.route.request_url("/responses"),
-            protocol_profile_id: execution.route.protocol_route.protocol_profile_id.clone(),
-            model_id: execution.model.id.clone(),
-            reasoning_replay_contract: execution.route.reasoning_replay_contract(),
-        })
+        Some(Self::for_execution(&execution.route, &execution.model.id))
     }
 
     /// Borrows this identity as the contract-level projection route.
@@ -1071,6 +1084,142 @@ impl V1ReplayRouteIdentity {
             model_id: &self.model_id,
         }
     }
+}
+
+/// Matches each unenveloped assistant group to the exact API that produced its first semantic event.
+/// 将每个缺封套助手组匹配到确切产出其首个语义事件的 API。
+pub(crate) fn unenveloped_assistant_requests(
+    events: &[vulcan_session_core::v1::event::ConversationEvent],
+    items: &[vulcan_session_core::v1::projection::SourcedProjectedItem],
+) -> std::collections::BTreeMap<Seq, vulcan_session_core::v1::event::ApiRequestSnapshot> {
+    use vulcan_session_core::v1::event::EventBody;
+    // Match by API id, never by the closest selected model or adjacent request.
+    // 按 API 标识匹配，绝不依据最近选择的模型或相邻请求。
+    let starts: std::collections::BTreeMap<_, _> = events
+        .iter()
+        .filter_map(|event| {
+            if let EventBody::ApiStarted(start) = &event.event {
+                Some((start.api_call_id, (event, start)))
+            } else {
+                None
+            }
+        })
+        .collect();
+    items
+        .iter()
+        .filter_map(|sourced| {
+            let ProjectedItem::AssistantText {
+                reasoning: Some(reasoning),
+                provider_source,
+                ..
+            } = &sourced.item
+            else {
+                return None;
+            };
+            if reasoning.is_empty()
+                || provider_source
+                    .as_ref()
+                    .is_some_and(|source| source.replay.is_some())
+            {
+                return None;
+            }
+            // The projection range starts at the first assistant or tool semantic in this group.
+            // 投影范围始于该组的首个助手或工具语义事件。
+            let source_index = events
+                .binary_search_by_key(&sourced.source_from_seq, |event| event.seq)
+                .ok()?;
+            let event = &events[source_index];
+            let api_call_id = match &event.event {
+                EventBody::AssistantReasoning(body) => body.api_call_id,
+                EventBody::AssistantText(body) => body.api_call_id,
+                EventBody::ToolCall(body) => body.api_call_id,
+                _ => return None,
+            };
+            let (started, start) = starts.get(&api_call_id)?;
+            (started.seq < event.seq && started.turn_id == event.turn_id)
+                .then(|| (sourced.source_from_seq, start.request.clone()))
+        })
+        .collect()
+}
+
+/// Returns the proven originating request for one ordered projection item, if available.
+/// 返回一个有序投影条目有证据支持的原始请求。
+fn projected_assistant_request(
+    snapshot: &SessionProviderProjectionSnapshot,
+    index: usize,
+) -> Option<&vulcan_session_core::v1::event::ApiRequestSnapshot> {
+    let sourced = snapshot.sourced_items.get(index)?;
+    snapshot
+        .unenveloped_assistant_requests
+        .get(&sourced.source_from_seq)
+}
+
+/// Checks the target model against the same assistant replay policy used to assemble physical requests.
+/// 使用组装物理请求时相同的助手回放策略检查目标模型。
+pub(crate) fn precheck_projected_assistant_replay(
+    snapshot: &SessionProviderProjectionSnapshot,
+    active_api_started_seq: Option<Seq>,
+    route: &vulcan_provider_adapters::execution::ProviderExecutionRoute,
+    model_id: &str,
+) -> Result<(), SessionRuntimeError> {
+    // The pending model takes effect at a later request boundary, after the running API can seal its envelope.
+    // 待生效模型在后续请求边界生效，届时当前 API 可以先封口其封套。
+    let target = V1ReplayRouteIdentity::for_execution(route, model_id);
+    for (index, sourced) in snapshot.sourced_items.iter().enumerate() {
+        if active_api_started_seq.is_some_and(|started| sourced.source_from_seq > started) {
+            continue;
+        }
+        if let ProjectedItem::AssistantText {
+            reasoning,
+            provider_source,
+            ..
+        } = &sourced.item
+        {
+            assistant_replay_projection(
+                reasoning.as_ref().is_some_and(|value| !value.is_empty()),
+                provider_source
+                    .as_ref()
+                    .and_then(|source| source.replay.as_ref()),
+                projected_assistant_request(snapshot, index),
+                Some(&target),
+                &provider_projection_message_id(index),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Selects the replay result for one assistant group. An absent result keeps its canonical content.
+/// 选择单个助手组的回放结果。无结果时保留其规范内容。
+fn assistant_replay_projection(
+    has_reasoning: bool,
+    envelope: Option<&ProviderReplayEnvelope>,
+    origin: Option<&vulcan_session_core::v1::event::ApiRequestSnapshot>,
+    route: Option<&V1ReplayRouteIdentity>,
+    projected_item_id: &str,
+) -> Result<Option<ProviderReplayProjection>, SessionRuntimeError> {
+    if let Some(envelope) = envelope {
+        let projection = route.map_or(ProviderReplayProjection::RouteMismatch, |route| {
+            project_provider_replay(envelope, &route.as_route())
+        });
+        if let ProviderReplayProjection::Unusable(reason) = projection {
+            return Err(unreplayable_replay_runtime_error(format!(
+                "projected item {projected_item_id} holds an envelope this engine cannot replay: {reason:?}"
+            )));
+        }
+        return Ok(Some(projection));
+    }
+    if let Some(route) = route
+        && has_reasoning
+    {
+        if origin.is_some_and(|request| route.proves_foreign_request(request)) {
+            return Ok(Some(ProviderReplayProjection::RouteMismatch));
+        }
+        return Err(unreplayable_replay_runtime_error(format!(
+            "projected item {projected_item_id} has reasoning but no durable replay envelope"
+        )));
+    }
+    Ok(None)
 }
 
 /// Resolves the ordered assistant payload for one projected assistant group.
@@ -1095,21 +1244,21 @@ impl V1ReplayRouteIdentity {
 fn resolve_projected_assistant_replay(
     content: Vec<ContentItem>,
     envelope: Option<&ProviderReplayEnvelope>,
+    origin: Option<&vulcan_session_core::v1::event::ApiRequestSnapshot>,
     route: Option<&V1ReplayRouteIdentity>,
     projected_item_id: &str,
 ) -> Result<(Vec<ContentItem>, Vec<serde_json::Value>), SessionRuntimeError> {
-    let projection = envelope.map(|envelope| match route {
-        Some(route) => project_provider_replay(envelope, &route.as_route()),
-        // A state-only fixture has no frozen execution and must never match a real envelope.
-        // 仅状态夹具没有冻结执行，因此绝不能匹配真实封套。
-        None => ProviderReplayProjection::RouteMismatch,
-    });
-    // reasoningRequiresReplay distinguishes a real replay obligation from plain assistant text.
-    // reasoningRequiresReplay 区分真实推理回传义务与普通 assistant 正文。
-    let reasoning_requires_replay = content
-        .iter()
-        .any(|item| matches!(item, ContentItem::Reasoning { .. }))
-        && route.is_some_and(|route| route.reasoning_replay_contract.is_some());
+    // projection controls the current request only; stored messages and envelopes remain authoritative.
+    // projection 只控制当前请求；存储的消息和封套仍是权威记录。
+    let projection = assistant_replay_projection(
+        content
+            .iter()
+            .any(|item| matches!(item, ContentItem::Reasoning { .. })),
+        envelope,
+        origin,
+        route,
+        projected_item_id,
+    )?;
     match projection {
         // Provider items and canonical content are mutually exclusive so no tool call, no reasoning
         // segment and no body text can be written twice.
@@ -1144,16 +1293,7 @@ fn resolve_projected_assistant_replay(
                 .collect();
             Ok((content, Vec::new()))
         }
-        None => {
-            // Missing evidence is corruption, unlike a model switch with a durable source.
-            // 缺少证据属于损坏，与拥有持久化来源的模型切换不同。
-            if reasoning_requires_replay {
-                return Err(unreplayable_replay_runtime_error(format!(
-                    "projected item {projected_item_id} has reasoning but no durable replay envelope"
-                )));
-            }
-            Ok((content, Vec::new()))
-        }
+        None => Ok((content, Vec::new())),
     }
 }
 
@@ -1168,7 +1308,7 @@ fn resolve_projected_assistant_replay(
 /// 该文案只有一个归属处，使会话层、适配器层与 WebUI 层不会各自漂移；
 /// 技术原因只作为「缺失证据」附加，绝不含推理正文、签名、凭据或原始请求体。
 fn unreplayable_replay_runtime_error(technical_reason: impl fmt::Display) -> SessionRuntimeError {
-    provider_projection_runtime_error(format!(
+    SessionRuntimeError::UnreplayableReasoningHistory(format!(
         "{}\n{technical_reason}",
         vulcan_provider_adapters::REASONING_REPLAY_UNREPLAYABLE_MESSAGE
     ))
@@ -1362,6 +1502,7 @@ fn rebuild_provider_transport_candidate_with_compaction(
                     provider_source
                         .as_deref()
                         .and_then(|source| source.replay.as_ref()),
+                    projected_assistant_request(&snapshot, index),
                     replay_route.as_ref(),
                     provider_projection_message_id(index).as_str(),
                 )?;

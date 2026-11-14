@@ -639,6 +639,7 @@ mod tests {
     /// 返回仅用于无存储 IO 条目位置定位测试的无来源夹具。
     fn projection() -> SessionProviderProjectionSnapshot {
         SessionProviderProjectionSnapshot {
+            unenveloped_assistant_requests: Default::default(),
             current_compaction_id: None,
             open_turn_id: None,
             child_business_execution_id: None,

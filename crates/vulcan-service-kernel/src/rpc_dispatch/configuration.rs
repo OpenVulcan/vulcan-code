@@ -102,6 +102,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_model_context_window_default",
     "service_ack_public_ai_model_takeover_notices",
     "service_select_public_ai_model",
+    "service_create_reasoning_recovery_session",
     "service_save_public_ai_model_enabled",
     "service_save_public_ai_internal_model_enabled",
     "service_save_public_ai_model_set_enabled",
@@ -717,6 +718,13 @@ pub(super) async fn dispatch(
         "service_select_public_ai_model" => rpc_json_result(
             service_select_public_ai_model(app, state, rpc_required_param(params, "request")?)
                 .await,
+        ),
+        "service_create_reasoning_recovery_session" => rpc_json_result(
+            service_create_reasoning_recovery_session(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
         ),
         "service_save_public_ai_model_enabled" => rpc_json_result(
             service_save_public_ai_model_enabled(

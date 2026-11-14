@@ -2,6 +2,77 @@
 //! 实际提示词注册把待完成草稿关联到最终私有回执。
 
 use super::*;
+
+/// Verifies that recovery publishes an unsent, text-only draft with the chosen first-request route.
+/// 验证恢复操作发布带有指定首次请求路由且尚未发送的纯文本草稿。
+#[tokio::test]
+async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
+    // Use the real index and a second registry to exercise cold load.
+    // 使用真实索引和第二个注册表验证冷加载。
+    let fixture = LifecycleStorageFixture::start().await;
+    let registry = SessionRuntimeRegistry::default();
+    let selection = vulcan_provider_adapters::ActiveAiModelSelection {
+        provider_id: "deepseek".into(),
+        model_id: "deepseek-flash".into(),
+        connection_id: "deepseek-test".into(),
+    };
+    let transcript = "User:\nOriginal question\n\nAssistant:\nVisible answer";
+    let now_ms = 1_787_788_800_000;
+    let session_id = create_recovery_draft_session_v1(
+        &fixture.controller,
+        &registry,
+        "project-explicit",
+        "Recovered conversation",
+        transcript.into(),
+        selection.clone(),
+        now_ms,
+    )
+    .await
+    .unwrap();
+    let reload_registry = SessionRuntimeRegistry::default();
+    let reloaded = get_or_load_session_v1(&fixture.controller, &reload_registry, session_id)
+        .await
+        .unwrap();
+    reloaded
+        .read(|document| {
+            assert!(document.events().is_empty());
+            assert!(document.active_turn().is_none());
+            assert_eq!(document.metadata.input_state.draft.text, transcript);
+            assert!(document.metadata.input_state.draft.resource_ids.is_empty());
+        })
+        .unwrap();
+    let next = crate::session_request_config_v1::capture_next_request_config_v1(&reloaded).unwrap();
+    assert_eq!(
+        next.provider.as_deref(),
+        Some(selection.provider_id.as_str())
+    );
+    assert_eq!(
+        next.connection_id.as_deref(),
+        Some(selection.connection_id.as_str())
+    );
+    assert_eq!(next.model.as_deref(), Some(selection.model_id.as_str()));
+    reloaded
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("send-recovered-text").unwrap(),
+                transcript,
+                Vec::new(),
+            )
+            .with_bound_request_config(next),
+            now_ms + 1,
+        )
+        .unwrap();
+    reloaded
+        .read(|document| {
+            assert!(document.events().iter().any(|event| matches!(
+                &event.event,
+                EventBody::UserInput(input) if input.text == transcript
+            )));
+            assert!(document.active_api().is_none());
+        })
+        .unwrap();
+    fixture.shutdown().await;
+}
 use vulcan_agent_runtime::{
     attachment_asset_index::{
         AttachmentDraftMediaDelivery, AttachmentDraftMediaOrigin, acquire_staged_attachment_ref,

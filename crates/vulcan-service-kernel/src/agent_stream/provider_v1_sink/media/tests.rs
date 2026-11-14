@@ -639,6 +639,7 @@ fn snapshot(
         });
     }
     Ok(SessionProviderProjectionSnapshot {
+        unenveloped_assistant_requests: Default::default(),
         current_compaction_id: None,
         open_turn_id: None,
         child_business_execution_id: None,
