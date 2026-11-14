@@ -7,12 +7,11 @@
 //! 经过同样的工具结果脱敏。
 
 use super::*;
-use crate::agent_runtime::task_runtime::TaskRuntime;
 use vulcan_host_tools::shell_job::{
     SHELL_JOB_READ_DEFAULT_LINES, SHELL_JOB_READ_MAX_LINES, SHELL_JOB_SEARCH_MAX_CONTEXT_LINES,
     SHELL_JOB_SEARCH_MAX_MATCHES, SHELL_JOB_WAIT_DEFAULT_MS, SHELL_JOB_WAIT_MAX_MS,
-    SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobLogReader, ShellJobRuntime, ShellJobSummary,
-    ShellJobWaitOutcome, render_numbered_rows, snapshot_process_tree,
+    SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobLogReader, ShellJobLogRedaction, ShellJobRuntime,
+    ShellJobSummary, ShellJobWaitOutcome, render_numbered_rows, snapshot_process_tree,
 };
 
 /// Stable identifier of the shell job tool.
@@ -206,16 +205,16 @@ fn parse_shell_job_arguments(arguments: Value) -> Result<ShellJobToolArgs, Nativ
 async fn prepare_shell_job_redaction(
     session_id: Option<SessionId>,
     environment: Option<&NativeEnvironmentAccess>,
-) -> Result<Option<Arc<TaskRuntime>>, NativeToolError> {
+) -> Result<ShellJobLogRedaction, NativeToolError> {
     let Some(session_id) = session_id else {
-        return Ok(None);
+        return Ok(ShellJobLogRedaction::default());
     };
     let environment = environment
         .ok_or_else(|| NativeToolError::new("Shell job output redaction is not ready."))?;
     environment
         .prepare_historical_job_redaction(session_id)
         .await
-        .map(Some)
+        .and_then(|runtime| runtime.shell_job_log_redaction())
         .map_err(NativeToolError::new)
 }
 
@@ -247,7 +246,7 @@ pub(crate) async fn execute_shell_job_tool(
     // Stop prepares its filter only after termination; all read actions prepare it up front.
     // 停止操作结束进程后准备过滤器，所有读取操作提前准备。
     let redaction = if args.action == "stop" {
-        None
+        ShellJobLogRedaction::default()
     } else {
         prepare_redaction().await?
     };
@@ -309,9 +308,7 @@ pub(crate) async fn execute_shell_job_tool(
             let text = match args.start_line {
                 None => {
                     let tail = reader
-                        .tail_with_line_filter(SHELL_OUTPUT_TAIL_BUDGET_BYTES, |line| {
-                            filter_job_log_line(redaction.as_deref(), line)
-                        })
+                        .tail_with_redaction(SHELL_OUTPUT_TAIL_BUDGET_BYTES, &redaction)
                         .map_err(io_error)?;
                     let mut rows = tail.rows;
                     let lines_of_rows =
@@ -334,11 +331,11 @@ pub(crate) async fn execute_shell_job_tool(
                 }
                 Some(start_line) => {
                     let range = reader
-                        .read_lines_with_filter(
+                        .read_lines_with_redaction(
                             start_line,
                             max_lines,
                             SHELL_OUTPUT_TAIL_BUDGET_BYTES,
-                            |line| filter_job_log_line(redaction.as_deref(), line),
+                            &redaction,
                         )
                         .map_err(io_error)?;
                     let mut text = format!(
@@ -371,13 +368,13 @@ pub(crate) async fn execute_shell_job_tool(
             })?;
             let reader = open_reader(runtime, &owner, &jobs_dir, job_id)?;
             let found = reader
-                .search_with_line_filter(
+                .search_with_redaction(
                     &regex,
                     args.context_lines
                         .unwrap_or(SHELL_JOB_SEARCH_DEFAULT_CONTEXT_LINES),
                     args.max_matches.unwrap_or(SHELL_JOB_SEARCH_MAX_MATCHES),
                     SHELL_OUTPUT_TAIL_BUDGET_BYTES,
-                    |line| filter_job_log_line(redaction.as_deref(), line),
+                    &redaction,
                 )
                 .map_err(io_error)?;
             let mut text = format!("Job {job_id}: {} matching lines.", found.match_count);
@@ -423,7 +420,7 @@ pub(crate) async fn execute_shell_job_tool(
                 }
             };
             let mut text = format!("{note}\n{}", render_job_status(&job.summary()));
-            append_tail(&mut text, job.log_reader(), redaction.as_deref());
+            append_tail(&mut text, job.log_reader(), &redaction);
             (
                 text,
                 json!({
@@ -471,7 +468,7 @@ pub(crate) async fn execute_shell_job_tool(
                 outcome.status.as_str(),
                 render_job_status(&job.summary())
             );
-            append_tail(&mut text, job.log_reader(), redaction.as_deref());
+            append_tail(&mut text, job.log_reader(), &redaction);
             (
                 text,
                 json!({ "action": "stop", "job_id": job_id, "running": false, "status": outcome.status }),
@@ -572,13 +569,11 @@ fn unknown_job(job_id: &str) -> NativeToolError {
 fn append_tail(
     text: &mut String,
     reader: Option<ShellJobLogReader>,
-    redaction: Option<&TaskRuntime>,
+    redaction: &ShellJobLogRedaction,
 ) {
     let Some(tail) = reader.and_then(|reader| {
         reader
-            .tail_with_line_filter(SHELL_OUTPUT_TAIL_BUDGET_BYTES, |line| {
-                filter_job_log_line(redaction, line)
-            })
+            .tail_with_redaction(SHELL_OUTPUT_TAIL_BUDGET_BYTES, redaction)
             .ok()
     }) else {
         return;
@@ -592,19 +587,6 @@ fn append_tail(
         text.push_str("\n\n[output]\n");
     }
     text.push_str(render_numbered_rows(&tail.rows).trim_end());
-}
-
-/// Filters a complete display-source line using the invocation's registered secrets.
-/// 使用本次调用登记的密钥过滤待显示的完整逻辑行。
-/// Direct utility calls without a session keep their original text.
-/// 无会话的直接实用调用保留原始文本。
-fn filter_job_log_line(redaction: Option<&TaskRuntime>, line: &str) -> std::io::Result<String> {
-    match redaction {
-        Some(runtime) => runtime
-            .redact_sensitive_text(line)
-            .map_err(std::io::Error::other),
-        None => Ok(line.to_owned()),
-    }
 }
 
 /// One listing: running jobs, then the most recent finished ones.

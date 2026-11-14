@@ -14,12 +14,12 @@ use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use vulcan_agent_runtime::tooling::native::{
-    canonical_shell_job_session_id, shell_job_recent_lines_with_filter,
+    canonical_shell_job_session_id, shell_job_recent_lines_with_redaction,
 };
 use vulcan_host_tools::shell_job::{
     SHELL_JOB_READ_DEFAULT_LINES, SHELL_JOB_READ_MAX_LINES, SHELL_JOBS_DIRECTORY,
     SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobEventKind, ShellJobLineRow, ShellJobLogReader,
-    ShellJobOrigin, ShellJobRowKind, ShellJobRuntime, ShellJobSummary,
+    ShellJobLogRedaction, ShellJobOrigin, ShellJobRowKind, ShellJobRuntime, ShellJobSummary,
 };
 use vulcan_service_api::{
     ClearSessionActivityRequest, SessionActivityRequest, SessionActivityScope,
@@ -101,7 +101,10 @@ impl ShellJobSessionContext {
 
     /// Loads the owning environment before projecting persisted job text.
     /// 在投影持久化任务文本前，加载任务归属会话的环境。
-    async fn prepare_redaction(&self, state: &SharedServiceBridgeState) -> Result<(), String> {
+    async fn prepare_redaction(
+        &self,
+        state: &SharedServiceBridgeState,
+    ) -> Result<ShellJobLogRedaction, String> {
         let task_runtime = self
             .task_runtime
             .as_deref()
@@ -111,7 +114,8 @@ impl ShellJobSessionContext {
             &self.owner,
             task_runtime,
         )
-        .await
+        .await?;
+        task_runtime.shell_job_log_redaction()
     }
 }
 
@@ -161,7 +165,7 @@ pub(crate) async fn service_list_shell_jobs(
     request: ShellJobListRequest,
 ) -> Result<ShellJobList, String> {
     let context = shell_job_session_context(&state, &request.session_id).await?;
-    context.prepare_redaction(&state).await?;
+    let redaction = context.prepare_redaction(&state).await?;
     let marks = load_session_activity_marks(&context.host_runtime, &context.owner).await?;
     let runtime = ShellJobRuntime::global();
     let summaries = runtime
@@ -191,12 +195,12 @@ pub(crate) async fn service_list_shell_jobs(
     let mut jobs = Vec::with_capacity(running.len() + finished.len());
     for summary in running {
         let recent_lines = match runtime.job(&context.owner, &summary.job_id) {
-            Some(job) => {
-                shell_job_recent_lines_with_filter(&job, SHELL_JOB_ACTIVITY_RECENT_LINES, |line| {
-                    context.redact(line).map_err(std::io::Error::other)
-                })
-                .map_err(|error| format!("Failed to read the shell job output: {error}"))?
-            }
+            Some(job) => shell_job_recent_lines_with_redaction(
+                &job,
+                SHELL_JOB_ACTIVITY_RECENT_LINES,
+                &redaction,
+            )
+            .map_err(|error| format!("Failed to read the shell job output: {error}"))?,
             None => Vec::new(),
         };
         jobs.push(shell_job_view(&context, summary, recent_lines, false)?);
@@ -292,7 +296,7 @@ pub(crate) async fn service_read_shell_job_output(
     request: ShellJobOutputRequest,
 ) -> Result<ShellJobOutputPage, String> {
     let context = shell_job_session_context(&state, &request.session_id).await?;
-    context.prepare_redaction(&state).await?;
+    let redaction = context.prepare_redaction(&state).await?;
     let runtime = ShellJobRuntime::global();
     let reader = runtime
         .open_log(&context.owner, &context.jobs_dir, &request.job_id)
@@ -311,9 +315,6 @@ pub(crate) async fn service_read_shell_job_output(
         .job(&context.owner, &request.job_id)
         .is_some_and(|job| job.outcome().is_none());
     let total_lines = reader.stats().total_lines;
-    // Filter the logical line before wrapping so display boundaries cannot split a match.
-    // 在折行前过滤逻辑行，避免显示边界截断匹配。
-    let filter_log_line = |line: &str| context.redact(line).map_err(std::io::Error::other);
     let (rows, next_line) = match (request.before_line, request.from_line) {
         (Some(_), Some(_)) => {
             return Err(String::from(
@@ -321,27 +322,23 @@ pub(crate) async fn service_read_shell_job_output(
             ));
         }
         (Some(before_line), None) => (
-            read_rows_before(&reader, before_line, max_lines, &filter_log_line)?,
+            read_rows_before(&reader, before_line, max_lines, &redaction)?,
             Some(before_line).filter(|line| *line <= total_lines),
         ),
         (None, Some(from_line)) => {
             let range = reader
-                .read_lines_with_filter(
+                .read_lines_with_redaction(
                     from_line.max(1),
                     max_lines,
                     SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES,
-                    filter_log_line,
+                    &redaction,
                 )
                 .map_err(|error| format!("Failed to read the shell job output: {error}"))?;
             (range.rows, range.next_line)
         }
         (None, None) => (
             reader
-                .tail_rows_with_line_filter(
-                    max_lines,
-                    SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES,
-                    filter_log_line,
-                )
+                .tail_rows_with_redaction(max_lines, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES, &redaction)
                 .map_err(|error| format!("Failed to read the shell job output: {error}"))?,
             None,
         ),
@@ -374,7 +371,7 @@ fn read_rows_before(
     reader: &ShellJobLogReader,
     before_line: u64,
     max_lines: usize,
-    filter: &impl Fn(&str) -> std::io::Result<String>,
+    redaction: &ShellJobLogRedaction,
 ) -> Result<Vec<ShellJobLineRow>, String> {
     if before_line <= 1 {
         return Ok(Vec::new());
@@ -383,7 +380,7 @@ fn read_rows_before(
     loop {
         let wanted = usize::try_from(before_line - first).unwrap_or(max_lines);
         let range = reader
-            .read_lines_with_filter(first, wanted, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES, filter)
+            .read_lines_with_redaction(first, wanted, SHELL_JOB_OUTPUT_PAGE_BUDGET_BYTES, redaction)
             .map_err(|error| format!("Failed to read the shell job output: {error}"))?;
         let reached = range.next_line.is_none_or(|next| next >= before_line);
         if reached || first + 1 >= before_line {

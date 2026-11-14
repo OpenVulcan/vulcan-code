@@ -820,8 +820,8 @@ mod tests {
         let fixture = TestHostRuntimeRoot::new(root_id);
         let root = fixture.v1_storage_locator();
         let child_id = SessionId::new_v4();
-        use vulcan_session_core::v1::context::{RuntimeInitializationState, RuntimeLock};
         use vulcan_session_core::v1::config::MetadataDocument;
+        use vulcan_session_core::v1::context::{RuntimeInitializationState, RuntimeLock};
 
         let document = SessionDocument::new(child_id.to_string(), root.project_id(), "child", 1);
         let metadata = MetadataDocument::new(child_id.to_string(), root.project_id(), "child", 1);
@@ -872,6 +872,33 @@ mod tests {
         );
     }
 
+    /// Calls the WebUI RPC router and decodes the shell job page it returns to clients.
+    /// 调用 WebUI RPC 路由，解码它返回给客户端的 shell 任务输出页。
+    async fn read_shell_job_output_rpc(
+        state: SharedServiceBridgeState,
+        session_id: SessionId,
+        job_id: &str,
+        before_line: Option<u64>,
+        from_line: Option<u64>,
+        max_lines: Option<usize>,
+    ) -> vulcan_service_api::ShellJobOutputPage {
+        let page = Box::pin(crate::rpc_dispatch::dispatch_service_rpc(
+            crate::ServiceEventEmitter::new(Vec::new()),
+            state,
+            String::from("service_read_shell_job_output"),
+            Some(serde_json::json!({
+                "sessionId": session_id,
+                "jobId": job_id,
+                "beforeLine": before_line,
+                "fromLine": from_line,
+                "maxLines": max_lines,
+            })),
+        ))
+        .await
+        .unwrap();
+        serde_json::from_value(page).unwrap()
+    }
+
     /// Registers all stored same-name secrets on the first history read after startup.
     /// 重启后首次读取历史记录时，登记全部已存储的同名密钥。
     #[tokio::test]
@@ -904,13 +931,22 @@ mod tests {
         let locator = fixture.v1_storage_locator();
         save_session_environment(
             &locator,
-            &[SessionEnvironmentVariable {
-                name: String::from("VULCAN_ENV_FIXTURE"),
-                value: String::from("synthetic-history-value"),
-                kind: EnvironmentVariableKind::Secret,
-                description: String::new(),
-                updated_at_ms: 1,
-            }],
+            &[
+                SessionEnvironmentVariable {
+                    name: String::from("VULCAN_ENV_FIXTURE"),
+                    value: String::from("synthetic-history-value"),
+                    kind: EnvironmentVariableKind::Secret,
+                    description: String::new(),
+                    updated_at_ms: 1,
+                },
+                SessionEnvironmentVariable {
+                    name: String::from("VULCAN_ENV_MULTILINE"),
+                    value: String::from("synthetic-first-fragment\nsynthetic-second-fragment"),
+                    kind: EnvironmentVariableKind::Secret,
+                    description: String::new(),
+                    updated_at_ms: 1,
+                },
+            ],
         )
         .unwrap();
 
@@ -962,18 +998,19 @@ mod tests {
         // 将第一个合成值放在横跨显示行边界的位置。
         let prefix = "x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES - 5);
         let line = format!(
-            "{prefix}synthetic-history-value synthetic-project-history-value synthetic-global-history-value"
+            "{prefix}synthetic-history-value synthetic-project-history-value synthetic-global-history-value\nleft synthetic-first-fragment\nsynthetic-second-fragment right\n"
         );
+        std::fs::write(fixture.data_root().join("fixture.log"), line).unwrap();
         #[cfg(windows)]
         let mut child = {
             let mut command = tokio::process::Command::new("cmd.exe");
-            command.args(["/D", "/C", &format!("echo {line}")]);
+            command.args(["/D", "/C", "type fixture.log"]);
             command
         };
         #[cfg(not(windows))]
         let mut child = {
-            let mut command = tokio::process::Command::new("printf");
-            command.args(["%s\n", &line]);
+            let mut command = tokio::process::Command::new("cat");
+            command.arg("fixture.log");
             command
         };
         child.current_dir(fixture.data_root());
@@ -1006,26 +1043,40 @@ mod tests {
         let restarted = Arc::new(Mutex::new(restarted));
         // Both tail and explicit range are projected by the production WebUI service.
         // 尾部与显式范围均由生产 WebUI 服务投影。
-        for from_line in [None, Some(1)] {
-            let page = crate::session_activity_services::service_read_shell_job_output(
+        for (before_line, from_line, max_lines) in [
+            (None, None, None),
+            (None, Some(1), None),
+            (None, Some(3), Some(1)),
+            (Some(3), None, Some(1)),
+        ] {
+            let page = read_shell_job_output_rpc(
                 Arc::clone(&restarted),
-                vulcan_service_api::ShellJobOutputRequest {
-                    session_id: session_id.to_string(),
-                    job_id: job.id().to_owned(),
-                    before_line: None,
-                    from_line,
-                    max_lines: None,
-                },
+                session_id,
+                job.id(),
+                before_line,
+                from_line,
+                max_lines,
             )
-            .await
-            .unwrap();
+            .await;
+            assert!(!page.rows.is_empty());
             let observed: String = page.rows.iter().map(|row| row.text.as_str()).collect();
-            assert_eq!(
-                observed.trim(),
-                format!(
-                    "{prefix}[redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE]"
-                )
-            );
+            assert!(!observed.contains("synthetic-first-fragment"));
+            assert!(!observed.contains("synthetic-second-fragment"));
+            assert!(observed.contains("[redacted:VULCAN_ENV_MULTILINE]"));
+            if from_line == Some(1) || max_lines.is_none() {
+                let first: String = page
+                    .rows
+                    .iter()
+                    .filter(|row| row.line == 1)
+                    .map(|row| row.text.as_str())
+                    .collect();
+                assert_eq!(
+                    first.trim(),
+                    format!(
+                        "{prefix}[redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE] [redacted:VULCAN_ENV_FIXTURE]"
+                    )
+                );
+            }
         }
 
         // The model's host port must supply the same values, independently of the WebUI filter state.
@@ -1051,9 +1102,12 @@ mod tests {
         let effective = effective_environment_at(&restarted, &locator)
             .await
             .unwrap();
-        assert_eq!(effective.len(), 1);
-        assert_eq!(effective[0].layer, EnvironmentVariableLayer::Session);
-        assert_eq!(effective[0].value, "synthetic-history-value");
+        let effective = effective
+            .iter()
+            .find(|entry| entry.name == "VULCAN_ENV_FIXTURE")
+            .unwrap();
+        assert_eq!(effective.layer, EnvironmentVariableLayer::Session);
+        assert_eq!(effective.value, "synthetic-history-value");
     }
 
     /// Every layer key round-trips and unknown keys are refused.

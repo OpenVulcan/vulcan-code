@@ -292,7 +292,7 @@ pub(crate) use shell_command::*;
 pub use shell_command_live::{
     SHELL_COMMAND_LIVE_TAIL_LINES, ShellCommandLiveKey, ShellCommandLiveRun,
     canonical_shell_job_session_id, shell_command_live_run, shell_job_recent_lines,
-    shell_job_recent_lines_with_filter,
+    shell_job_recent_lines_with_redaction,
 };
 pub use shell_job::SHELL_JOB_TOOL_ID;
 pub(crate) use shell_job::build_shell_job_tool;

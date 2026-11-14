@@ -88,7 +88,13 @@ impl crate::tooling::native::NativeEnvironmentHost for HistoryRedactionHost {
         &self,
         _session_id: Uuid,
     ) -> Result<Vec<(String, String)>, String> {
-        Ok(vec![("FIXTURE".into(), "fixture-head-fixture-tail".into())])
+        Ok(vec![
+            ("FIXTURE".into(), "fixture-head-fixture-tail".into()),
+            (
+                "MULTILINE".into(),
+                "synthetic-first-fragment\r\nsynthetic-second-fragment".into(),
+            ),
+        ])
     }
 
     async fn set_session_variable(
@@ -127,17 +133,20 @@ async fn shell_job_filters_log_before_numbering_final_model_result() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = Arc::new(ShellJobRuntime::new());
     let prefix = "x".repeat(SHELL_OUTPUT_LINE_WRAP_BYTES - "fixture-head".len());
-    let line = format!("{prefix}fixture-head-fixture-tail");
+    let line = format!(
+        "{prefix}fixture-head-fixture-tail\nleft synthetic-first-fragment\r\nsynthetic-second-fragment right\n"
+    );
+    std::fs::write(directory.path().join("fixture.log"), line).unwrap();
     #[cfg(windows)]
     let mut child = {
         let mut command = tokio::process::Command::new("cmd.exe");
-        command.args(["/D", "/C", &format!("echo {line}")]);
+        command.args(["/D", "/C", "type fixture.log"]);
         command
     };
     #[cfg(not(windows))]
     let mut child = {
-        let mut command = tokio::process::Command::new("printf");
-        command.args(["%s\n", &line]);
+        let mut command = tokio::process::Command::new("cat");
+        command.arg("fixture.log");
         command
     };
     child.current_dir(directory.path());
@@ -165,10 +174,23 @@ async fn shell_job_filters_log_before_numbering_final_model_result() {
     // 候选工具提供测试存储，并复用原生动作与生产工具桥。
     let task_runtime = Arc::new(TaskRuntime::new());
     let bridge = shell_job_model_bridge(session_id, runtime, &task_runtime);
-    for (index, arguments) in [
-        json!({"action": "read", "job_id": job.id()}),
-        json!({"action": "read", "job_id": job.id(), "start_line": 1}),
-        json!({"action": "search", "job_id": job.id(), "pattern": "xxx"}),
+    for (index, (arguments, expected_line)) in [
+        (
+            json!({"action": "read", "job_id": job.id()}),
+            "3|[redacted:MULTILINE] right",
+        ),
+        (
+            json!({"action": "read", "job_id": job.id(), "start_line": 1}),
+            "2|left [redacted:MULTILINE]",
+        ),
+        (
+            json!({"action": "search", "job_id": job.id(), "pattern": "xxx"}),
+            "2|left [redacted:MULTILINE]",
+        ),
+        (
+            json!({"action": "read", "job_id": job.id(), "start_line": 3, "max_lines": 1}),
+            "3|[redacted:MULTILINE] right",
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -193,6 +215,14 @@ async fn shell_job_filters_log_before_numbering_final_model_result() {
         assert!(!result.is_error);
         assert!(!result.model_output.contains("fixture-head"));
         assert!(!result.model_output.contains("fixture-tail"));
+        assert!(!result.model_output.contains("synthetic-first-fragment"));
+        assert!(!result.model_output.contains("synthetic-second-fragment"));
+        assert!(
+            result
+                .model_output
+                .lines()
+                .any(|line| line == expected_line)
+        );
         // Remove display numbering before checking the full replacement across wrapped rows.
         // 去掉显示行号后，检查跨折行保留的完整替换文本。
         let output: String = result
@@ -202,7 +232,14 @@ async fn shell_job_filters_log_before_numbering_final_model_result() {
             .filter(|(marker, _)| marker.starts_with('1'))
             .map(|(_, text)| text)
             .collect();
-        assert_eq!(output.trim(), format!("{prefix}[redacted:FIXTURE]"));
+        if request
+            .arguments
+            .get("start_line")
+            .and_then(serde_json::Value::as_u64)
+            != Some(3)
+        {
+            assert_eq!(output.trim(), format!("{prefix}[redacted:FIXTURE]"));
+        }
     }
 }
 
