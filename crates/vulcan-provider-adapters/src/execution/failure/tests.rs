@@ -153,11 +153,11 @@ fn upstream_error_keeps_public_help_and_redacts_private_addresses() {
                 .count(),
             1
         );
-        assert_eq!(message.matches("<redacted-url>").count(), 3);
+        assert!(message.contains("<https://example.invalid/help>"));
+        assert_eq!(message.matches("<redacted-url>").count(), 2);
         for hidden in [
             "private-signature",
             "private-password",
-            "example.invalid",
             secret.expose_value(),
         ] {
             assert!(!message.contains(hidden));
@@ -169,9 +169,9 @@ fn upstream_error_keeps_public_help_and_redacts_private_addresses() {
 /// 验证发布的两个 HTTP 错误字段都能完整脱敏 URL，并保留帮助链接旁的句号。
 #[test]
 fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
-    // help_link is the public URL approved for this upstream error.
-    // help_link 是此上游错误获准展示的公开网址。
-    let help_link = UPSTREAM_ERROR_PUBLIC_HELP_LINKS[0];
+    // help_link is the public link returned with the upstream quota error.
+    // help_link 是上游配额错误返回的公开帮助链接。
+    let help_link = "https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit";
     // secret can appear inside a URL before the HTTP body undergoes URL redaction.
     // secret 可能出现在 URL 内部，且会先于 HTTP 正文的 URL 脱敏处理被替换。
     let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-request-key"))
@@ -183,6 +183,18 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
     let cases = [
         (format!("{help_link}."), format!("{help_link}.")),
         (format!("{help_link}。"), format!("{help_link}。")),
+        (
+            format!("{help_link}。（A&B 共享配额。）"),
+            format!("{help_link}。（A&B 共享配额。）"),
+        ),
+        (
+            String::from(
+                "Authorization: review the API key permissions at https://example.invalid/help?lang=zh-CN",
+            ),
+            String::from(
+                "Authorization: review the API key permissions at https://example.invalid/help?lang=zh-CN",
+            ),
+        ),
         (
             format!("{help_link}。请稍后重试。"),
             format!("{help_link}。请稍后重试。"),
@@ -289,11 +301,11 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
         ),
         (
             format!("{help_link}。suffix?sig=fixture-sas-value"),
-            String::from("<redacted-url>"),
+            format!("{help_link}。suffix?sig=fixture-sas-value"),
         ),
         (
             format!("{help_link}。suffix?%73ig=fixture-sas-value"),
-            String::from("<redacted-url>"),
+            format!("{help_link}。suffix?%73ig=fixture-sas-value"),
         ),
         (
             String::from("//blob.example.invalid/report?name=a\u{a0}b&sig=fixture-sas-value"),
@@ -320,7 +332,7 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
         ),
         (
             format!("{help_link}(fixture-fragment-suffix)。"),
-            String::from("<redacted-url>。"),
+            format!("{help_link}(fixture-fragment-suffix)。"),
         ),
         (
             String::from(

@@ -842,10 +842,12 @@ pub(crate) fn http_failure(
     let error_type = error
         .and_then(|value| value.get("error_type").and_then(Value::as_str))
         .or_else(|| error.and_then(|value| value.get("type").and_then(Value::as_str)));
+    // declared_message is the provider's human-readable error field.
+    // declared_message 是供应商声明的可读错误字段。
+    let declared_message = error.and_then(|value| value.get("message").and_then(Value::as_str));
     // upstream_message keeps plain-text provider bodies available to the shared retry classifier.
     // upstream_message 保留纯文本供应商响应，供共享重试分类器继续识别。
-    let upstream_message = error
-        .and_then(|value| value.get("message").and_then(Value::as_str))
+    let upstream_message = declared_message
         .map(str::to_string)
         .or_else(|| (!body.trim().is_empty()).then(|| body.trim().to_string()));
     // Official Codex overload codes remain authoritative when a proxy reports a generic error type.
@@ -905,9 +907,15 @@ pub(crate) fn http_failure(
     let public_field = |value: String| {
         crate::provider_tool_execution::sanitize_provider_diagnostic_text(value.as_str())
     };
-    let public_upstream_message = upstream_message
-        .as_deref()
-        .map(sanitize_upstream_error_message);
+    // An unstructured JSON body can contain fields beyond the human-readable message contract.
+    // 整段 JSON 响应可能包含可读错误字段契约之外的内容。
+    let public_upstream_message = upstream_message.as_deref().map(|message| {
+        if parsed.is_some() && declared_message.is_none() {
+            crate::provider_tool_execution::sanitize_provider_diagnostic_text(message)
+        } else {
+            sanitize_upstream_error_message(message)
+        }
+    });
     ProviderExecutionFailure {
         host_http_message: None,
         error: Box::new(AiExecutionError {
@@ -1077,20 +1085,81 @@ pub(crate) fn sanitize_ai_execution_error(
         sanitize_upstream_error_message(&redact_exact_credential(&error.message, secret));
 }
 
-/// Exact public help links verified for display in upstream error messages.
-/// 已核验、可在上游错误消息中展示的精确公开帮助链接。
-const UPSTREAM_ERROR_PUBLIC_HELP_LINKS: &[&str] =
-    &["https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit"];
-
-/// Returns a credential-screened upstream message while preserving verified public help links.
-/// 返回经凭据筛查的上游消息，并保留已核验的公开帮助链接。
+/// Returns a bounded upstream message with credential-bearing URLs replaced in place.
+/// 返回限长的上游错误消息，就地替换携带凭据的网址。
 /// `message` is provider text after the physical request's exact credential is removed.
 /// `message` 是移除了实际请求精确凭据后的供应商文本。
 fn sanitize_upstream_error_message(message: &str) -> String {
-    crate::provider_tool_execution::sanitize_provider_diagnostic_text_with_public_links(
-        message,
-        UPSTREAM_ERROR_PUBLIC_HELP_LINKS,
-    )
+    use crate::provider_tool_execution::{
+        bound_provider_diagnostic_field, diagnostic_url_closing_wrapper,
+        provider_diagnostic_key_is_sensitive, provider_diagnostic_url_start,
+    };
+
+    // public_message retains every part of the upstream text outside confirmed credential URLs.
+    // public_message 保留上游原文中已确认携带凭据的网址之外的所有内容。
+    let mut public_message = String::with_capacity(message.len());
+    // remaining is the unchecked tail of the original message.
+    // remaining 是原始消息中尚未检查的尾部。
+    let mut remaining = message;
+    while let Some((url_start, authority_start)) = provider_diagnostic_url_start(remaining) {
+        // word_end keeps ASCII URL punctuation and embedded tabs intact for URL parsing.
+        // word_end 保留 ASCII 网址标点和内部制表符，交由 URL 解析器处理。
+        let word_end = remaining[authority_start..]
+            .find(' ')
+            .map_or(remaining.len(), |offset| authority_start + offset);
+        // token is the original address candidate, which may end in prose punctuation.
+        // token 是原始地址候选片段，末尾可能包含正文标点。
+        let token = &remaining[url_start..word_end];
+        // url excludes a matching external wrapper without rewriting any public text.
+        // url 去掉配对的外部包裹符，保留公开文本的原始写法。
+        let url = token.trim_end_matches(|character: char| {
+            character == '.'
+                || (!character.is_ascii()
+                    && !character.is_alphanumeric()
+                    && !character.is_whitespace())
+        });
+        // An ASCII wrapper can occur inside an address, so only its matching final character is excluded.
+        // ASCII 包裹符可能在地址内部出现，因此仅去掉匹配的末尾闭符号。
+        let url = remaining[..url_start]
+            .chars()
+            .next_back()
+            .and_then(diagnostic_url_closing_wrapper)
+            .and_then(|closing| url.strip_suffix(closing))
+            .unwrap_or(url);
+        // parsed uses the same URL parser as HTTP dispatch, including percent-decoded query keys.
+        // parsed 复用 HTTP 分派使用的 URL 解析器，包括对查询键的百分号解码。
+        let parsed = if url.starts_with("//") {
+            reqwest::Url::parse(&format!("https:{url}"))
+        } else {
+            reqwest::Url::parse(url)
+        };
+        // private_url checks URL components rather than words in the surrounding error text.
+        // private_url 根据 URL 组成部分判断凭据，不根据周围错误正文中的词汇判断。
+        let private_url = url
+            .contains(crate::provider_tool_execution::REDACTED_PROVIDER_CREDENTIAL)
+            || parsed.is_ok_and(|url| {
+                !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.query_pairs().any(|(key, _)| {
+                        key.eq_ignore_ascii_case("sig")
+                            || key.eq_ignore_ascii_case("ossaccesskeyid")
+                            || provider_diagnostic_key_is_sensitive(&key)
+                    })
+            });
+        if private_url {
+            public_message.push_str(&remaining[..url_start]);
+            public_message.push_str("<redacted-url>");
+            public_message.push_str(&token[url.len()..]);
+            remaining = &remaining[word_end..];
+        } else {
+            // Resume at the authority to find a later address adjacent to localized prose in the same token.
+            // 从主机部分继续扫描，以识别同一片段中紧接本地化正文的后续地址。
+            public_message.push_str(&remaining[..authority_start]);
+            remaining = &remaining[authority_start..];
+        }
+    }
+    public_message.push_str(remaining);
+    bound_provider_diagnostic_field(&public_message)
 }
 
 #[cfg(test)]

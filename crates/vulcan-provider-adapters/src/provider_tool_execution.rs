@@ -3826,7 +3826,7 @@ pub(crate) fn bound_provider_diagnostic_field(value: &str) -> String {
 /// 返回值
 /// `true` only for explicit credential/signing names or their conventional suffixes.
 /// 仅对显式凭据、签名名称或其常规后缀返回 `true`。
-fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
+pub(crate) fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
     // lowercase makes the closed comparison independent from provider key casing.
     // lowercase 使封闭比较不受供应商键名大小写影响。
     let lowercase = key.to_ascii_lowercase();
@@ -3875,9 +3875,9 @@ fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
 ///
 /// # Returns
 /// 返回值
-/// Returns text with all URL runs replaced except exact matches in the trusted `public_links` list.
-/// 返回替换网址后的文本，仅保留与可信 `public_links` 列表精确匹配的网址。
-fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String {
+/// Returns text with every URL run replaced for technical diagnostics.
+/// 返回已替换所有网址片段的技术诊断文本。
+fn redact_provider_diagnostic_urls(value: &str) -> String {
     let mut redacted = String::with_capacity(value.len());
     let mut remaining = value;
     // url_start includes the scheme when one is present and authority_start follows both slashes.
@@ -3895,18 +3895,6 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
         // token 包含完整的 URL 以及可能紧随其后的句末标点或配对包裹字符。
         let token = &remaining[url_start..url_end];
         redacted.push_str(prefix);
-        // An exact ASCII help URL may be followed directly by localized prose. Check only URI syntax before the next URL.
-        // 精确匹配的 ASCII 帮助地址后可直接跟本地化正文，仅检查下一个 URL 之前的 URI 语法。
-        if let Some((prose_start, _)) = token
-            .char_indices()
-            .find(|(_, character)| !character.is_ascii())
-            && public_links.contains(&&token[..prose_start])
-            && !has_provider_diagnostic_url_suffix(&token[prose_start..])
-        {
-            redacted.push_str(&token[..prose_start]);
-            remaining = &remaining[url_start + prose_start..];
-            continue;
-        }
         // Only terminal prose punctuation is restored after a private URL has been fully consumed.
         // 私密地址被完整扫描后，只恢复末尾的正文标点。
         let url = token.trim_end_matches(|character: char| {
@@ -3923,11 +3911,7 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
             .and_then(diagnostic_url_closing_wrapper)
             .and_then(|closing| url.strip_suffix(closing))
             .unwrap_or(url);
-        redacted.push_str(if public_links.contains(&url) {
-            url
-        } else {
-            "<redacted-url>"
-        });
+        redacted.push_str("<redacted-url>");
         redacted.push_str(&token[url.len()..]);
         remaining = &remaining[url_end..];
     }
@@ -3935,24 +3919,9 @@ fn redact_provider_diagnostic_urls(value: &str, public_links: &[&str]) -> String
     redacted
 }
 
-/// Detects URI suffix syntax in `tail` after an approved ASCII URL and before any separate address.
-/// 检测 `tail` 中位于已核验 ASCII 地址之后、下一个独立地址之前的 URI 后缀语法。
-/// Returns true when query, fragment, user-info or percent-escape syntax makes the boundary ambiguous.
-/// 查询、片段、用户信息或百分号编码语法导致边界不明确时返回 true。
-fn has_provider_diagnostic_url_suffix(tail: &str) -> bool {
-    // suffix excludes any later URL, which will go through its own redaction pass.
-    // suffix 排除后续独立 URL，该 URL 会在后续扫描中单独脱敏。
-    let suffix =
-        &tail[..provider_diagnostic_url_start(tail).map_or(tail.len(), |(start, _)| start)];
-    suffix.contains(['?', '&', '=', '@', '#'])
-        || suffix.as_bytes().windows(3).any(|bytes| {
-            bytes[0] == b'%' && bytes[1].is_ascii_hexdigit() && bytes[2].is_ascii_hexdigit()
-        })
-}
-
 /// Returns the matching closing character for an ASCII opening wrapper, or `None` for other characters.
 /// 返回 ASCII 包裹开符号对应的闭符号，其他字符返回 `None`。
-fn diagnostic_url_closing_wrapper(opening: char) -> Option<char> {
+pub(crate) fn diagnostic_url_closing_wrapper(opening: char) -> Option<char> {
     Some(match opening {
         '(' => ')',
         '[' => ']',
@@ -3967,7 +3936,7 @@ fn diagnostic_url_closing_wrapper(opening: char) -> Option<char> {
 /// 查找供应商诊断 `value` 中首个 URL 及其主机部分的字节偏移。
 /// Both scheme URLs and standalone network-path references are recognized. Returns `None` when neither occurs.
 /// 识别包含协议的 URL 及独立的无协议网络路径，两者均不存在时返回 `None`。
-fn provider_diagnostic_url_start(value: &str) -> Option<(usize, usize)> {
+pub(crate) fn provider_diagnostic_url_start(value: &str) -> Option<(usize, usize)> {
     // slashes is the byte offset of the authority separator for either form of URL.
     // slashes 是两种 URL 共用的授权部分分隔符的字节偏移。
     value.match_indices("//").find_map(|(slashes, _)| {
@@ -4020,20 +3989,9 @@ fn provider_diagnostic_url_start(value: &str) -> Option<(usize, usize)> {
 /// remaining text still carries a credential shape.
 /// 返回 URL 已就地替换的有界值；剩余文本仍带凭据形态时返回稳定脱敏标记。
 pub(crate) fn sanitize_provider_diagnostic_text(value: &str) -> String {
-    sanitize_provider_diagnostic_text_with_public_links(value, &[])
-}
-
-/// Sanitizes a diagnostic while allowing explicitly verified complete public URLs.
-/// 清理诊断文字，同时允许已明确核验的完整公开网址。
-/// `value` is provider text and `public_links` contains only host-owned exact URLs. Returns bounded, credential-screened text.
-/// `value` 是供应商文本，`public_links` 仅包含宿主指定的精确网址。返回经限长和凭据筛查的文本。
-pub(crate) fn sanitize_provider_diagnostic_text_with_public_links(
-    value: &str,
-    public_links: &[&str],
-) -> String {
     // url_safe keeps the diagnostic words around each URL, such as a transport failure reason.
     // url_safe 保留每个 URL 周围的诊断文字，例如传输失败原因。
-    let url_safe = redact_provider_diagnostic_urls(value, public_links);
+    let url_safe = redact_provider_diagnostic_urls(value);
     // lowercase and trimmed expose credential shapes without changing retained safe text.
     // lowercase 与 trimmed 在不改变保留安全文本的前提下暴露凭据形态。
     let lowercase = url_safe.to_ascii_lowercase();
