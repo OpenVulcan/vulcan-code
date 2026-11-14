@@ -77,7 +77,7 @@
 .vk-ask-index { color: var(--vk-ink-3); font-variant-numeric: tabular-nums; line-height: 1.45; }
 .vk-ask-label-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; }
 .vk-ask-label { font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
-.vk-ask-info { display: inline-grid; flex: none; place-items: center; width: 14px; height: 14px; border: var(--vk-bw) solid var(--vk-line-strong); color: var(--vk-ink-3); }
+.vk-ask-info { display: inline-grid; flex: none; place-items: center; width: 14px; height: 14px; color: var(--vk-ink-3); }
 .vk-ask-tail { display: inline-flex; align-items: center; gap: 2px; min-width: 1.75rem; color: var(--vk-ink-3); }
 .vk-ask-tail > svg[data-selected] { margin-right: calc(var(--vk-u) * 1); color: var(--vk-ask-tone); }
 /* The custom answer edits inline: a bare textarea that grows with its rows. */
