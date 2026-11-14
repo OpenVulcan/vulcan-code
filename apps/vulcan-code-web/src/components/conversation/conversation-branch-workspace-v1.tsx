@@ -16,6 +16,8 @@ import {
 } from "@/components/conversation/conversation-branch-presentation-v1";
 import { createConversationRenderItemsProjector } from "@/components/conversation/conversation-transcript";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
+import { activeConversationCompaction, ConversationCompactionOverlay } from "@/components/conversation/conversation-compaction-overlay";
+import { MarkdownImageWorkspacePathProvider } from "@/components/conversation/conversation-markdown";
 import { ConversationHistoryCleanup } from "@/components/conversation/conversation-history-cleanup";
 import { useConversationCleanedHistory } from "@/components/conversation/conversation-cleaned-history";
 import { DedicatedTranscriptMemoryProvider } from "@/components/conversation/dedicated-transcript-memory";
@@ -211,6 +213,12 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // events preserves the exact controller order and never falls back to legacy messages.
   // events 保留控制器精确顺序，并且绝不回退到旧消息。
   const events = ownerReady ? props.snapshot.events : [];
+  // Only the open request of this visible session can own its floating compaction preview.
+  // 只有此可见会话未结束的请求才能拥有它的压缩浮层预览。
+  const activeCompaction = React.useMemo(
+    () => ownerReady && props.sessionRunning ? activeConversationCompaction(events) : null,
+    [events, ownerReady, props.sessionRunning],
+  );
   // dedicatedMemory keeps its identity while streaming deltas leave the memory facts unchanged.
   // dedicatedMemory 在流式增量未改变记忆事实时保持身份。
   // reviewTurnId is the Turn the review panel's last-turn source shows for this transcript.
@@ -440,6 +448,15 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       transientReasoningStatus={props.transientReasoningStatus}
       workspacePath={props.workspacePath}
     />
+    {activeCompaction && streamOwner ? (
+      <MarkdownImageWorkspacePathProvider value={props.workspacePath}>
+        <ConversationCompactionOverlay
+          key={`${streamOwner.session_id}:${serviceEpoch}:${streamOwner.window_generation}:${activeCompaction.apiCallId}`}
+          conversationId={props.sessionId}
+          compaction={activeCompaction}
+        />
+      </MarkdownImageWorkspacePathProvider>
+    ) : null}
     </TurnChangeReviewTargetContext.Provider>
     </DedicatedTranscriptMemoryProvider>
     </ConversationCollaborationStateContext.Provider>

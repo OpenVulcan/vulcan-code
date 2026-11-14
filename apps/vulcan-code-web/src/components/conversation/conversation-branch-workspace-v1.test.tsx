@@ -769,7 +769,22 @@ describe("ConversationBranchWorkspaceV1", () => {
     store.applyEnvelope({ generation: 1, delta: { kind: "contextCompactionPreviewChanged",
       payload: { conversationId: "session-branch-v1", apiCallId: 9, text: "live-preview-text" } } });
     store.flushNotifications();
-    expect(renderWorkspace(events, "inline_output", [], true, undefined, store)).toContain("live-preview-text");
+    // The long preview belongs to a sibling of the transcript and cannot grow its scroll height.
+    // 长预览位于会话转录的同级节点，无法撑高其滚动区域。
+    const running = new DOMParser().parseFromString(renderWorkspace(events, "inline_output", [], true, undefined, store), "text/html");
+    expect(running.querySelector('.vk-compaction-float[data-dock="center"]')?.textContent).toContain("live-preview-text");
+    expect(running.querySelector(".vk-transcript")?.textContent).not.toContain("live-preview-text");
+    expect(running.querySelector(".vk-compaction-body")).toBeNull();
+
+    // Intermediate stats belong to the ongoing request and cannot create a finished record.
+    // 中间统计属于正在运行的请求，不能创建已结束的压缩记录。
+    const inProgress = eventSummary(3, { kind: "api_stats", api_call_id: 9, purpose: "compaction",
+      provider: "test", model: "test", usage: {}, status: "in_progress",
+      continuation_eligibility: "forbidden", timing: {} });
+    const progressing = new DOMParser().parseFromString(
+      renderWorkspace([...events, inProgress], "inline_output", [], true, undefined, store), "text/html");
+    expect(progressing.querySelector(".vk-compaction-float")?.textContent).toContain("live-preview-text");
+    expect(progressing.querySelector('.vk-transcript .vk-compaction')?.getAttribute("data-state")).toBe("running");
     // A preview for another API never leaks into this card.
     // 其他 API 的预览绝不会泄漏到当前卡片。
     const otherStore = new ConversationLiveStreamStore();
@@ -780,6 +795,17 @@ describe("ConversationBranchWorkspaceV1", () => {
     const durable = renderWorkspace(events, "inline_output", [], true, undefined, store);
     expect(durable).toContain("durable-summary-text");
     expect(durable).not.toContain("live-preview-text");
+
+    // A continuing turn keeps the transcript mounted while the compaction request itself settles.
+    // 压缩请求结束时，继续执行的回合使会话转录保持挂载。
+    events.push(eventSummary(4, { kind: "api_stats", api_call_id: 9, purpose: "compaction",
+      provider: "test", model: "test", usage: {}, status: "completed",
+      continuation_eligibility: "forbidden", timing: { completed_at_ms: 1_004 } }));
+    const finished = new DOMParser().parseFromString(renderWorkspace(events, "inline_output", [], true, undefined, store), "text/html");
+    expect(finished.querySelector(".vk-compaction-float")).toBeNull();
+    expect(finished.querySelector('.vk-transcript .vk-compaction[data-state="completed"] button')?.getAttribute("aria-expanded"))
+      .toBe("false");
+    expect(finished.querySelector(".vk-transcript")?.textContent).not.toContain("durable-summary-text");
   });
   it("binds drafts to their exact API and removes them on durable handoff or failure", () => {
     // A draft cannot invent an API or use another API's Turn.

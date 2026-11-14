@@ -116,6 +116,13 @@ function latestStreamingReasoningBlock(
     ) {
       continue;
     }
+    // Compaction reasoning is displayed by the compaction surface and must not enter this popup's exit timer.
+    // 压缩思考由压缩浮层展示，不能进入普通思考浮层的退场计时。
+    const apiCallId = summary.event.api_call_id;
+    if (events.some(({ event }) => (event.kind === "api_started" || event.kind === "api_stats")
+      && event.api_call_id === apiCallId && event.purpose === "compaction")) {
+      return null;
+    }
     // Sequence and revision can repeat across sessions and regenerated windows, so include both scopes.
     // 序号与修订号可在不同会话和重生成窗口中重复，因此包含两层归属。
     return {

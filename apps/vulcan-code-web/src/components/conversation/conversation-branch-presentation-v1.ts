@@ -20,6 +20,7 @@ import type {
   ResourceId,
   StatBucket,
 } from "@/service/conversation-event-window-store";
+import { isTerminalApiStatsStatus } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import {
   collaborationEventIsUserVisible, collaborationNotificationId, collaborationTaskMessageId, requestConfigChangeKind,
@@ -669,6 +670,7 @@ function compactionMessageForV1Event(
   const event = summary.event;
   if (event.kind !== "api_started" && event.kind !== "api_stats"
     && event.kind !== "assistant_text" && event.kind !== "assistant_reasoning") return null;
+  if (event.kind === "api_stats" && !isTerminalApiStatsStatus(event.status)) return null;
   // role and state follow API lifecycle; completed text alone does not claim a completed API.
   // role 与 state 遵循 API 生命周期；正文完成本身不代表 API 已完成。
   const role = event.kind === "api_started" ? "start" : event.kind === "api_stats" ? "end"

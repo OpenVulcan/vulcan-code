@@ -28,7 +28,6 @@ import {
   metadataValue,
   numberMetadata,
 } from "@/components/conversation/conversation-metadata";
-import { useConversationContextCompactionPreview } from "@/state/conversation-live-stream-context";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 import { TurnStatsTooltipCard } from "@/components/conversation/conversation-turn-stats-card";
 import { parseCompactionProviderError } from "./conversation-system-error-card";
@@ -86,8 +85,10 @@ export interface ConversationDisplayBlock {
   rawMetadata?: unknown;
 }
 
-// ContextCompactionBlock renders the original compacted context status section as one collapsible row.
-// ContextCompactionBlock 将原本的上下文压缩状态分段渲染为单个可折叠行。
+/** Renders one compact status marker with expandable details after the request ends.
+ * 渲染单行压缩状态，并在请求结束后提供可展开的详情。
+ * @param props projected blocks, their session, and the media opener. 投影块、所属会话及媒体打开回调。
+ * @returns the transcript's compaction record. 会话转录中的压缩记录。 */
 export function ContextCompactionBlock(props: {
   // Section blocks contain start, optional body, and optional end rows.
   // 分段块包含开始、可选正文和可选结束行。
@@ -110,55 +111,50 @@ export function ContextCompactionBlock(props: {
   const state = endBlock?.compactionState ?? bodyBlock?.compactionState ?? startBlock?.compactionState ?? "running";
   const running = state === "running";
   const displayStatus = running ? "running" : state === "failed" ? "failed" : "completed";
-  const sectionIdRef = React.useRef(startBlock?.compactionSectionId ?? startBlock?.id ?? "");
   const collapseId = `context-compaction:${startBlock?.compactionSectionId ?? startBlock?.id ?? "unknown"}`;
-  const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, running);
-
-  React.useEffect(() => {
-    const sectionId = startBlock?.compactionSectionId ?? startBlock?.id ?? "";
-    if (sectionIdRef.current !== sectionId) {
-      sectionIdRef.current = sectionId;
-      setExpanded(running, { manual: false });
-      return;
-    }
-    if (!running) {
-      setExpanded(false, { manual: false });
-    }
-  }, [running, setExpanded, startBlock?.compactionSectionId, startBlock?.id]);
+  // Only an explicit expansion of the finished record can add detail to transcript layout.
+  // 只有显式展开已结束的记录才会让详情占用转录布局空间。
+  const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, false);
+  // A running marker stays closed even when detail expansion was remembered during history navigation.
+  // 即使历史导航记住了详情展开，运行中的状态行也始终关闭。
+  const detailsOpen = !running && expanded;
 
   const title = displayStatus === "failed"
     ? t("contextCompaction.title.failed")
     : running
       ? t("contextCompaction.title.running")
       : t("contextCompaction.title.completed");
-  // apiCallId is the typed V1 identity of this compaction request; it keys the live summary preview.
-  // apiCallId 是本次压缩请求的强类型 V1 身份，用作实时摘要预览的键。
-  const apiCallIdValue = metadataValue(startBlock?.rawMetadata, ["api_call_id"]);
-  const apiCallId = typeof apiCallIdValue === "number" ? apiCallIdValue : null;
-  // livePreview streams the summary while it is generated; the durable body replaces it afterwards.
-  // livePreview 在摘要生成期间流式显示；持久正文随后替换它。
-  const livePreview = useConversationContextCompactionPreview(running ? props.conversationId : null, apiCallId);
-  const durableBody = bodyBlock?.body?.trim() ?? "";
-  const previewBody = !durableBody && livePreview ? livePreview : "";
-  const detailBody = durableBody || previewBody || (displayStatus === "failed" ? contextCompactionFailedDetail(endBlock, t) : "");
+  if (running) {
+    return (
+      <section className="vk-compaction" data-state={displayStatus}>
+        <div className="vk-compaction-head">
+          <ScrollText aria-hidden="true" />
+          <span>{title}</span>
+        </div>
+      </section>
+    );
+  }
+
+  // The transcript keeps the durable summary and any failure detail available after the popup closes.
+  // 浮层关闭后，会话转录保留持久化摘要和失败详情。
+  const detailBody = bodyBlock?.body.trim() || (displayStatus === "failed" ? contextCompactionFailedDetail(endBlock, t) : "");
   const shouldShowProgress = progressBlocks.length > 0 && thinkingBlocks.length === 0 && !detailBody;
-  const hasExpandedContent = shouldShowProgress || thinkingBlocks.length > 0 || Boolean(detailBody);
 
   return (
-    <section className="vk-compaction" data-state={displayStatus} data-open={expanded || undefined}>
+    <section className="vk-compaction" data-state={displayStatus} data-open={detailsOpen || undefined}>
       <button
-        aria-expanded={expanded}
+        aria-expanded={detailsOpen}
         className="vk-compaction-head"
         onClick={() => {
-          setExpanded(!expanded);
+          setExpanded(!detailsOpen);
         }}
         type="button"
       >
         <ScrollText aria-hidden="true" />
-        <span className={running ? "vk-shimmer-text" : undefined}>{title}</span>
+        <span>{title}</span>
         <ChevronRight aria-hidden="true" className="vk-compaction-chev" />
       </button>
-      <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
+      <ConversationMeasuredCollapse collapseId={collapseId} expanded={detailsOpen}>
         <div className="vk-compaction-body">
           {shouldShowProgress ? progressBlocks.map((block) => {
             // content keeps progress rendering stable when the record is still being appended.
@@ -178,17 +174,13 @@ export function ContextCompactionBlock(props: {
                 block={block}
                 conversationId={props.conversationId}
                 key={block.id}
-                sessionRunning={running}
-                streaming={running}
+                sessionRunning={false}
+                streaming={false}
                 onOpenMedia={props.onOpenMedia}
               />
             );
           })}
-          {detailBody ? (
-            <MarkdownMessage content={detailBody} streaming={Boolean(previewBody)} onOpenMedia={props.onOpenMedia} />
-          ) : !hasExpandedContent ? (
-            <span className="vk-shimmer-text">{t("contextCompaction.generating")}</span>
-          ) : null}
+          {detailBody ? <MarkdownMessage content={detailBody} onOpenMedia={props.onOpenMedia} /> : null}
         </div>
       </ConversationMeasuredCollapse>
     </section>
