@@ -85,6 +85,18 @@ let dialogResultCount = 0;
 // dialogClicks distinguishes a missed pointer from a missed CDP dialog event.
 // dialogClicks 区分未命中指针与未捕获 CDP 对话框事件。
 let dialogClicks = 0;
+// Hold popup image responses until the test observes the cached stylesheet in both clients.
+// 暂缓弹窗图片响应，直到测试在两个客户端中观察到已缓存的样式。
+const slowPopupImages = new Set();
+// Finish all held image responses so Chromium can complete the initial load.
+// 完成已暂缓的图片响应，使 Chromium 能结束初始加载。
+function finishSlowPopupImages() {
+  for (const response of slowPopupImages) {
+    response.writeHead(200, { 'content-type': 'image/svg+xml' })
+      .end('<svg xmlns="http://www.w3.org/2000/svg" width="23" height="23"/>');
+  }
+  slowPopupImages.clear();
+}
 // fixture serves a deterministic local page and records actual page click callbacks.
 // fixture 提供确定性的本地页面并记录真实页面点击回调。
 const fixture = createServer((request, response) => {
@@ -115,6 +127,7 @@ const fixture = createServer((request, response) => {
       <a id="projected-download" href="/projection-download" style="position:fixed;left:500px;top:100px">Download projection fixture</a>
       <img id="projected-blob">
       <a id="popup" style="position:fixed;left:250px;top:0;width:180px;height:60px" target="_blank" rel="noopener" href="/popup">Open popup</a>
+      <a id="popup-slow" style="position:fixed;left:500px;top:0;width:180px;height:60px" target="_blank" rel="noopener" href="/popup?slow=1">Open slow popup</a>
       <div style="position:fixed;left:90px;top:215px">
         <projection-widget>Slotted label</projection-widget>
         <div id="hover-target" style="height:55px">Hover target <span id="hover-menu">Hover menu</span></div>
@@ -163,9 +176,14 @@ const fixture = createServer((request, response) => {
       'content-disposition': 'attachment; filename="projection-fixture.txt"' }).end('projection fixture');
     return;
   }
-  if (request.url === '/popup') {
+  if (request.url === '/popup' || request.url === '/popup?slow=1') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end('<title>Projection popup</title><link rel="stylesheet" href="/popup-styles"><main>Popup reached</main>');
+    response.end('<title>Projection popup</title><link rel="stylesheet" href="/popup-styles"><main>Popup reached</main>'
+      + (request.url === '/popup?slow=1' ? '<img id="slow-popup-image" src="/popup-slow.svg"><script>void 0</script>' : ''));
+    return;
+  }
+  if (request.url === '/popup-slow.svg') {
+    slowPopupImages.add(response);
     return;
   }
   if (request.url === '/popup-styles') {
@@ -261,7 +279,7 @@ async function until(observe, timeout = 60_000) {
 
 // Mount the real BrowserArea in two regular Chromium clients over the authenticated Core transport.
 // 通过已鉴权的 Core 传输，在两个普通 Chromium 客户端中挂载实际 BrowserArea。
-async function verifyDomViewers(discovery, sessionId) {
+async function verifyDomViewers(discovery, sessionId, rpc) {
   const webRoot = path.join(repository, 'apps/vulcan-code-web');
   const webRequire = createRequire(path.join(webRoot, 'package.json'));
   const { createServer: createVite } = await import(pathToFileURL(webRequire.resolve('vite')).href);
@@ -320,14 +338,19 @@ async function verifyDomViewers(discovery, sessionId) {
   const browser = await chromium.launch({ executablePath: path.join(assetRoot, runtimeLayout.chromiumExecutable),
     channel: 'chromium', headless: true });
   try {
-    // Attach after load to force the popup resource-tree path regardless of machine timing.
-    // 在加载完成后附加，无论机器时序如何都覆盖弹窗资源树补采路径。
+    // Attach after CSS has loaded but before the held image can complete.
+    // 在 CSS 已加载但暂缓图片尚未完成时附加。
     const bootstrapContext = await browser.newContext();
     try {
       const projection = new DomProjection();
       projection.observeContext(bootstrapContext);
       const popup = await bootstrapContext.newPage();
-      await popup.goto(new URL('/popup', pageUrl).href, { waitUntil: 'load' });
+      await popup.goto(new URL('/popup?slow=1', pageUrl).href, { waitUntil: 'domcontentloaded' });
+      await until(async () => {
+        assert.equal(await popup.locator('main').evaluate(element => getComputedStyle(element).color), 'rgb(23, 54, 91)');
+        assert.ok(slowPopupImages.size);
+        return true;
+      }, 5_000);
       await projection.trackPage(popup, await bootstrapContext.newCDPSession(popup));
       await until(async () => {
         const snapshot = await projection.snapshot(popup, null);
@@ -337,9 +360,17 @@ async function verifyDomViewers(discovery, sessionId) {
         const style = assets.find(asset => asset.chunk?.mimeType === 'text/css');
         assert.ok(image && style);
         assert.deepEqual(style.chunk.dependencies, [image.id]);
+        assert.match(snapshot.html, /id="slow-popup-image" src="data:,"/);
+        return true;
+      }, 5_000);
+      finishSlowPopupImages();
+      await until(async () => {
+        const snapshot = await projection.snapshot(popup, null);
+        assert.match(snapshot?.html, /id="slow-popup-image" src="vulcan-resource:/);
         return true;
       }, 5_000);
     } finally {
+      finishSlowPopupImages();
       await bootstrapContext.close();
     }
     await vite.listen(18_723);
@@ -463,7 +494,7 @@ async function verifyDomViewers(discovery, sessionId) {
         if (selector === '#projection-rich') assert.equal(await observed.textContent(), text);
         else if (selector === '#projection-password') {
           assert.equal(await observed.getAttribute('value'), null);
-          assert.equal(await observed.inputValue(), '');
+          assert.equal(await observed.inputValue(), '•'.repeat(text.length));
           assert.equal(await frame(observer).locator('#password-length').textContent(), String(text.length));
         } else assert.equal(await observed.getAttribute('value'), text);
         return true;
@@ -507,6 +538,44 @@ async function verifyDomViewers(discovery, sessionId) {
       assert.equal(await frame(observer).locator('#projection-password').inputValue(), '');
       return true;
     }, 10_000);
+    // Read the wire and both rendered masks across a lease handoff with an existing password and selection.
+    // 在已有密码和选区的情况下交接租约，校验投影协议与两端显示的掩码。
+    const handoffPassword = 'fixture-handoff';
+    const passwordView = client => frame(client).locator('#projection-password').evaluate(field => ({
+      masked: /^•*$/.test(field.value), length: field.value.length,
+      start: field.selectionStart, end: field.selectionEnd, markupValue: field.getAttribute('value'),
+    }));
+    const originalPage = (await rpc('browser.pages.list', { sessionId })).find(page => page.url === new URL('/projection', pageUrl).href);
+    assert.ok(originalPage);
+    await cdp.send('Input.insertText', { text: handoffPassword });
+    await password.press('Home');
+    await password.press('Shift+ArrowRight');
+    await until(async () => {
+      const expected = { masked: true, length: handoffPassword.length, start: 0, end: 1, markupValue: null };
+      assert.deepEqual(await passwordView(controller), expected);
+      assert.deepEqual(await passwordView(observer), expected);
+      const snapshot = await rpc('browser.dom.snapshot', { sessionId, pageId: originalPage.pageId, revision: null });
+      assert.equal(JSON.stringify(snapshot).includes(handoffPassword), false);
+      assert.ok(snapshot.result.passwords.some(([, length, start, end]) => length === handoffPassword.length && start === 0 && end === 1));
+      return true;
+    }, 10_000);
+    await controller.getByRole('button', { name: 'Release control' }).click();
+    await observer.bringToFront();
+    await observer.getByRole('button', { name: 'Take control' }).click();
+    await observer.getByRole('button', { name: 'Release control' }).waitFor();
+    const takenPassword = frame(observer).locator('#projection-password');
+    await takenPassword.press('Backspace');
+    await until(async () => {
+      const expected = { masked: true, length: handoffPassword.length - 1, start: 0, end: 0, markupValue: null };
+      assert.equal(await frame(controller).locator('#password-length').textContent(), String(handoffPassword.length - 1));
+      assert.deepEqual(await passwordView(controller), expected);
+      assert.deepEqual(await passwordView(observer), expected);
+      return true;
+    }, 10_000);
+    await observer.getByRole('button', { name: 'Release control' }).click();
+    await controller.bringToFront();
+    await controller.getByRole('button', { name: 'Take control' }).click();
+    await controller.getByRole('button', { name: 'Release control' }).waitFor();
     await cdp.detach();
     assert.equal(originRequests, 0, 'Neither client may fetch source resources, including inside Shadow DOM.');
     console.log('Both viewers verified committed IME insertion and replacement, including password redaction.');
@@ -528,7 +597,7 @@ async function verifyDomViewers(discovery, sessionId) {
     // Explicitly refocus the controller before activating the link in another browser tab.
     // 在另一个浏览器标签页激活链接前，先显式聚焦控制端。
     await controller.bringToFront();
-    await frame(controller).locator('#popup').click({ timeout: 5_000 });
+    await frame(controller).locator('#popup-slow').click({ timeout: 5_000 });
     for (const client of clients) {
       await until(async () => {
         const popup = frame(client).getByText('Popup reached');
@@ -538,8 +607,17 @@ async function verifyDomViewers(discovery, sessionId) {
         });
         assert.equal(view.color, 'rgb(23, 54, 91)');
         assert.match(view.image, /^url\("blob:/);
+        assert.equal(await frame(client).locator('#slow-popup-image').evaluate(image => image.naturalWidth), 0);
         return true;
       }, 15_000);
+    }
+    assert.ok(slowPopupImages.size);
+    finishSlowPopupImages();
+    for (const client of clients) {
+      await until(async () => {
+        assert.equal(await frame(client).locator('#slow-popup-image').evaluate(image => image.naturalWidth), 23);
+        return true;
+      }, 10_000);
     }
     assert.equal(originRequests, 0, 'Neither popup client may fetch the stylesheet or its relative assets.');
     // The active viewport is a shared Core value confirmed by both rendered DOM surfaces.
@@ -616,6 +694,7 @@ async function verifyDomViewers(discovery, sessionId) {
     console.log('Viewport presets, custom dimensions, and one-shot fitting passed in two clients.');
     console.log('Both DOM viewers followed the new Playwright tab.');
   } finally {
+    finishSlowPopupImages();
     await browser.close().catch(() => {});
     vite.httpServer?.closeAllConnections();
     await vite.close();
@@ -725,12 +804,12 @@ try {
   // Acquire a fresh sender sequence before exercising the independent legacy stream.
   // 在独立验证旧画面流之前获取新的发送序列。
   await rpc('browser.lease.release', { sessionId: session.sessionId, leaseSecret: lease.leaseSecret });
-  await verifyDomViewers(discovery, session.sessionId);
+  await verifyDomViewers(discovery, session.sessionId, rpc);
   // Retire the popup created by the WebUI before running the remaining independent cases.
   // 运行其余独立用例之前关闭 WebUI 创建的弹窗。
   Object.assign(lease, await rpc('browser.lease.acquire', { sessionId: session.sessionId, holder: 'w09-acceptance' }));
   const viewerPopup = (await rpc('browser.pages.list', { sessionId: session.sessionId }))
-    .find(candidate => candidate.url === new URL('/popup', pageUrl).href);
+    .find(candidate => candidate.url === new URL('/popup?slow=1', pageUrl).href);
   assert.ok(viewerPopup);
   await rpc('browser.page.close', { ...projectionParams, pageId: viewerPopup.pageId, leaseSecret: lease.leaseSecret });
   // Restore the original size for the legacy fixtures that use fixed click coordinates.

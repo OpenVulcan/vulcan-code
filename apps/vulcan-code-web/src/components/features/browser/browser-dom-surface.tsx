@@ -15,6 +15,9 @@ const ADOPTED_STYLE_MARKER = "data-vulcan-adopted";
 // Keep the last serialized styles for each live scope so hover snapshots reuse the same sheets.
 // 记录每个活跃作用域上次序列化的样式，使悬停快照复用已有样式表。
 const adoptedStyleRevisions = new WeakMap<Document | ShadowRoot, string>();
+// Password placeholders preserve native caret offsets without keeping committed characters in this frame.
+// 密码占位符保留原生光标偏移，使本框架无需保留已提交字符。
+const PASSWORD_PLACEHOLDER = "•";
 
 // The parent supplies the projected revision, current control grant and ordered input queue.
 // 父组件提供投影修订、当前控制授权与有序输入队列。
@@ -32,6 +35,23 @@ type SurfaceProps = {
 // 只在候选词或已提交编辑仍在处理时保留本地编辑器状态。
 type Field = HTMLElement;
 type Editor = { field: Field; before: string | null };
+
+// Identify a password control in the frame's realm by its HTML element and input type.
+// 依据 HTML 元素及输入类型，在框架自身的域中识别密码框。
+function isPasswordField(field: Element | null | undefined): field is HTMLInputElement {
+  return field?.tagName === "INPUT" && (field as HTMLInputElement).type === "password";
+}
+
+// Set the masked value and selection reported by the source, or mask a just-completed local insertion.
+// 应用源端报告的掩码与选区，或遮蔽刚完成的本地插入。
+function maskPassword(field: HTMLInputElement, length: number, start: number, end: number,
+  direction: "forward" | "backward" | "none"): void {
+  const masked = PASSWORD_PLACEHOLDER.repeat(length);
+  if (field.value !== masked) field.value = masked;
+  if (field.selectionStart !== start || field.selectionEnd !== end || field.selectionDirection !== direction) {
+    field.setSelectionRange(start, end, direction);
+  }
+}
 
 // Resolve a native text field or the nearest rich-text editing host from an event target.
 // 从事件目标解析原生文本框或最近的富文本编辑宿主。
@@ -225,6 +245,9 @@ export function BrowserDomSurface(props: SurfaceProps) {
 
   React.useLayoutEffect(() => {
     if (!frameDocument) return;
+    // Control loss discards an uncommitted password candidate before the authoritative mask is restored.
+    // 失去控制权时先丢弃未提交的密码候选词，再恢复源端掩码。
+    if (!props.ownsControl && isPasswordField(composition.current?.field)) composition.current = null;
     const source = new DOMParser().parseFromString(snapshot.html, "text/html");
     reconcileAdoptedStyles(frameDocument, source.head);
     // The frame's CSP is installed by srcdoc. Match it as the first head element on every patch.
@@ -252,14 +275,21 @@ export function BrowserDomSurface(props: SurfaceProps) {
     if (viewport && (viewport.scrollX !== snapshot.windowScroll[0] || viewport.scrollY !== snapshot.windowScroll[1])) {
       viewport.scrollTo(...snapshot.windowScroll);
     }
-    if (document.activeElement === iframe.current && snapshot.focused
+    if (props.ownsControl && document.activeElement === iframe.current && snapshot.focused
       && !composition.current && !pending.current.size && !props.heldPointer.current) {
       const focused = elements.get(snapshot.focused) as HTMLElement | undefined;
       let currentFocus = frameDocument.activeElement;
       while (currentFocus?.shadowRoot?.activeElement) currentFocus = currentFocus.shadowRoot.activeElement;
       if (focused && focused !== currentFocus) focused.focus({ preventScroll: true });
     }
-  }, [frameDocument, snapshot, props.heldPointer, refusedEdits]);
+    for (const [id, length, start, end, direction] of snapshot.passwords) {
+      const field = elements.get(id);
+      if (isPasswordField(field) && field !== composition.current?.field
+        && (!props.ownsControl || !pending.current.has(field))) {
+        maskPassword(field, length, start, end, direction);
+      }
+    }
+  }, [frameDocument, snapshot, props.heldPointer, props.ownsControl, refusedEdits]);
 
   React.useEffect(() => {
     if (!frameDocument) return;
@@ -285,6 +315,14 @@ export function BrowserDomSurface(props: SurfaceProps) {
         if (before === after) return;
         operation = current.queueInput("textEdit", { ...target, before, ...textDelta(before, after) });
       } else if (text) {
+        if (isPasswordField(field)) {
+          // Use only the committed event text for dispatch, then replace the editable value with placeholders.
+          // 仅派发提交事件中的文本，随后用占位符替换编辑框内容。
+          const { selectionStart, selectionEnd, selectionDirection } = field;
+          if (selectionStart !== null && selectionEnd !== null && selectionDirection !== null) {
+            maskPassword(field, field.value.length, selectionStart, selectionEnd, selectionDirection);
+          }
+        }
         operation = current.queueInput("textCommit", { ...target, text });
       } else {
         return;
@@ -309,6 +347,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
       if (editor) {
         beforeValues.delete(editor.field);
         if (event.data) commit(editor, event.data);
+        else if (isPasswordField(editor.field)) setRefusedEdits(value => value + 1);
       }
     }, options);
     doc.addEventListener("beforeinput", event => {
@@ -391,14 +430,14 @@ export function BrowserDomSurface(props: SurfaceProps) {
       const selectAll = (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a";
       const caretKey = ["Home", "End", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key);
       const nativeSelection = field && (selectAll || caretKey);
-      // Password values are never reconciled from snapshots, so deletion must run in both browsers.
-      // 密码值从不通过快照回填，因此删除必须在两个浏览器中都执行。
-      const passwordDeletion = field?.tagName === "INPUT" && (field as HTMLInputElement).type === "password"
+      // Chromium deletes against the true password, including word and grapheme boundaries.
+      // 由 Chromium 根据真实密码执行删除，包括单词和字素边界。
+      const passwordDeletion = isPasswordField(field)
         && (event.key === "Backspace" || event.key === "Delete");
       if (field && ((!selectAll && event.key.length === 1) || (supportsRange(field)
         && (nativeSelection || event.key === "Backspace" || event.key === "Delete"
           || (field.tagName === "TEXTAREA" && event.key === "Enter"))))) return;
-      if (!nativeSelection && !passwordDeletion) event.preventDefault();
+      if (!nativeSelection) event.preventDefault();
       if (event.repeat && !passwordDeletion) return;
       current.heldKeys.current.add(event.key);
       void current.queueInput("key", { type: "down", key: event.key });

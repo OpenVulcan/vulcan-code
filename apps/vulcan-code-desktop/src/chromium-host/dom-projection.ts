@@ -31,6 +31,9 @@ type PageAssets = { requests: Map<string, CapturedAsset>; loader: string; publis
 // 一个网络响应归属一个加载器及其重定向别名。
 type ResourceRequest = { loader: string; urls: string[]; kind: string; sequence: number; mimeType?: string };
 type SourceNodes = { id: string; ids: WeakMap<Element, string>; next: number };
+// Password geometry uses only native UTF-16 length and selection offsets.
+// 密码框几何信息仅包含原生 UTF-16 长度与选区偏移。
+type PasswordGeometry = [id: string, length: number, start: number, end: number, direction: 'forward' | 'backward' | 'none'];
 
 // Stable element identities survive repeated snapshots of the same document.
 // 稳定的元素标识在同一文档的多次快照中保持不变。
@@ -47,6 +50,9 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
   const nodes = scope.__vulcanProjectionNodes ??= { id: documentId, ids: new WeakMap(), next: 0 };
   const copy = root.cloneNode(false) as Element;
   const scroll: [string, number, number][] = [];
+  // Viewers reconstruct placeholders from this metadata without receiving password characters.
+  // 查看端仅通过这些元数据重建占位符，不接收密码字符。
+  const passwords: PasswordGeometry[] = [];
   const blobImages = new Set<string>();
   const known = new Set(knownBlobs.documentId === nodes.id ? knownBlobs.urls : []);
   const hover = new Set<Element>(Array.from(document.querySelectorAll(':hover')));
@@ -82,7 +88,15 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
     if (element.scrollLeft || element.scrollTop) scroll.push([id, element.scrollLeft, element.scrollTop]);
     if (element === focus) focused = id;
     if (element instanceof HTMLInputElement) {
-      if (element.type === 'password' || element.type === 'file') mirror.removeAttribute('value');
+      if (element.type === 'password') {
+        mirror.removeAttribute('value');
+        // Read the native selection for this control while the renderer owns its value.
+        // 在渲染器持有密码值期间读取控件的原生选区。
+        const { selectionStart, selectionEnd, selectionDirection } = element;
+        if (selectionStart !== null && selectionEnd !== null && selectionDirection !== null) {
+          passwords.push([id, element.value.length, selectionStart, selectionEnd, selectionDirection]);
+        }
+      } else if (element.type === 'file') mirror.removeAttribute('value');
       else mirror.setAttribute('value', element.value);
       mirror.toggleAttribute('checked', element.checked);
     } else if (element instanceof HTMLTextAreaElement) {
@@ -163,7 +177,7 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
     } catch { /* The page can revoke an object URL between the DOM read and the Blob read.
                页面可能在读取 DOM 与读取 Blob 之间撤销对象 URL。 */ }
   }
-  return { documentId: nodes.id, base, html, width, height, scroll, windowScroll, focused, blobs };
+  return { documentId: nodes.id, base, html, width, height, scroll, windowScroll, focused, passwords, blobs };
 }
 
 // Normalize an HTTP resource URL while preserving the fragment used by the viewer.
@@ -341,47 +355,51 @@ export class DomProjection {
     if (!rootFrame) commit(frameTree.frame);
     await cdp.send('Network.enable', { maxTotalBufferSize: STORE_LIMIT, maxResourceBufferSize: ASSET_LIMIT });
 
-    // A popup can start requests before CDP attaches. The load boundary includes those still in flight at registration.
-    // 弹窗可能在 CDP 附加前发起请求。页面加载完成后补采登记时仍在途的请求。
+    // Read cached resources immediately, then pick up requests that were still in flight at attachment.
+    // 立即读取已缓存的资源，之后再补采附加时仍在途的请求。
     const initialLoader = state.loader;
-    void this.seedInitialResources(page, cdp, state, initialLoader).catch(() => {
-      // A page can close or leave its initial document before it finishes loading.
-      // 页面可能在完成加载前关闭或离开初始文档。
-    });
+    await this.seedInitialResources(page, cdp, state, initialLoader);
+    // Pre-attachment styles may finish while the parser waits for them and before a slow image completes.
+    // 附加前开始的样式可能在解析器等待期间完成，早于慢图片加载完成。
+    void (async () => {
+      await page.waitForLoadState('domcontentloaded');
+      await this.seedInitialResources(page, cdp, state, initialLoader);
+      await page.waitForLoadState('load');
+      await this.seedInitialResources(page, cdp, state, initialLoader);
+    })()
+      .catch(() => {
+        // The initial document may close or time out while waiting for its remaining resources.
+        // 首个文档可能在等待剩余资源期间关闭或超时。
+      }).finally(() => { state.initialStylesheetRedirects = null; });
   }
 
   // Seed the initial committed loader from Chromium's cache without making new requests.
   // 从 Chromium 缓存补采初次提交的加载器资源，不发出新的网络请求。
   private async seedInitialResources(page: Page, cdp: CDPSession, state: PageAssets, initialLoader: string): Promise<void> {
-    try {
-      await page.waitForLoadState('load');
-      if (state.loader !== initialLoader || page.isClosed()) return;
-      const tree = await cdp.send('Page.getResourceTree').catch(() => null);
-      if (!tree) return;
-      const loaded = tree.frameTree;
-      if (loaded.frame.loaderId !== initialLoader || state.loader !== initialLoader) return;
-      const index = state.requests;
-      // Read cached bodies in sequence to bound peak CDP response memory on resource-heavy pages.
-      // 依次读取缓存正文，限制资源密集页面的 CDP 响应峰值内存。
-      for (const resource of loaded.resources.slice(0, ASSET_COUNT_LIMIT)) {
-        if (state.loader !== initialLoader || page.isClosed()) break;
-        const kind = resourceKind(resource.type, resource.mimeType);
-        if (!kind || (resource.contentSize !== undefined && resource.contentSize > ASSET_LIMIT)
-          || index.has(resource.url)) continue;
-        try {
-          const data = await cdp.send('Page.getResourceContent', { frameId: loaded.frame.id, url: resource.url });
-          if (state.loader === initialLoader && !page.isClosed()) {
-            // The resource tree uses the request alias; resolve CSS relative URLs against the final response.
-            // 资源树使用请求别名；CSS 相对地址以最终响应为基准解析。
-            const base = state.initialStylesheetRedirects?.get(resource.url) ?? resource.url;
-            this.storeResponse(index, [resource.url, base], base, kind, resource.mimeType, 0,
-              Buffer.from(data.content, data.base64Encoded ? 'base64' : 'utf8'));
-          }
-        } catch { /* A resource can leave Chromium's cache during the initial scan.
-                   初始化扫描期间，资源可能离开 Chromium 缓存。 */ }
-      }
-    } finally {
-      state.initialStylesheetRedirects = null;
+    if (state.loader !== initialLoader || page.isClosed()) return;
+    const tree = await cdp.send('Page.getResourceTree').catch(() => null);
+    if (!tree) return;
+    const loaded = tree.frameTree;
+    if (loaded.frame.loaderId !== initialLoader || state.loader !== initialLoader) return;
+    const index = state.requests;
+    // Read cached bodies in sequence to bound peak CDP response memory on resource-heavy pages.
+    // 依次读取缓存正文，限制资源密集页面的 CDP 响应峰值内存。
+    for (const resource of loaded.resources.slice(0, ASSET_COUNT_LIMIT)) {
+      if (state.loader !== initialLoader || page.isClosed()) break;
+      const kind = resourceKind(resource.type, resource.mimeType);
+      if (!kind || resource.failed || resource.canceled
+        || (resource.contentSize !== undefined && resource.contentSize > ASSET_LIMIT) || index.has(resource.url)) continue;
+      try {
+        const data = await cdp.send('Page.getResourceContent', { frameId: loaded.frame.id, url: resource.url });
+        if (state.loader === initialLoader && !page.isClosed()) {
+          // The resource tree uses the request alias; resolve CSS relative URLs against the final response.
+          // 资源树使用请求别名；CSS 相对地址以最终响应为基准解析。
+          const base = state.initialStylesheetRedirects?.get(resource.url) ?? resource.url;
+          this.storeResponse(index, [resource.url, base], base, kind, resource.mimeType, 0,
+            Buffer.from(data.content, data.base64Encoded ? 'base64' : 'utf8'));
+        }
+      } catch { /* An in-flight resource may not be readable until the follow-up scan.
+                 在途资源可能需要等后续扫描才能读取。 */ }
     }
   }
 

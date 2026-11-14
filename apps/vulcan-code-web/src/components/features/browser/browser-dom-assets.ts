@@ -20,6 +20,9 @@ export type BrowserDomRevision = {
   scroll: [string, number, number][];
   windowScroll: [number, number];
   focused: string | null;
+  // Only the UTF-16 length and native selection of password inputs cross the projection wire.
+  // 密码框只有 UTF-16 长度和原生选区经过投影协议。
+  passwords: [id: string, length: number, start: number, end: number, direction: "forward" | "backward" | "none"][];
   width: number;
   height: number;
 };

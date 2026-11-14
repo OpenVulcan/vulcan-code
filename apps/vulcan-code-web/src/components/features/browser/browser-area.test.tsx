@@ -729,7 +729,7 @@ function domReply(pageId: string) {
   return { pageId, pageGeneration: "1", viewportGeneration: "1", result: {
     revision: pageId, documentId: pageId, width: 1280, height: 800,
     html: "<html><head></head><body><main data-vulcan-node='1'>Projected page</main></body></html>",
-    assets: [], scroll: [], windowScroll: [0, 0], focused: null,
+    assets: [], scroll: [], windowScroll: [0, 0], focused: null, passwords: [],
   } };
 }
 
