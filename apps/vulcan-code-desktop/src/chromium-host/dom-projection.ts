@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseHtml, serialize, type DefaultTreeAdapterTypes } from 'parse5';
 import { generate, parse as parseCss, walk } from 'css-tree';
-import type { CDPSession, Page } from 'playwright-core';
+import type { BrowserContext, CDPSession, Page } from 'playwright-core';
 
 // Bound response capture, projection memory and each RPC message independently.
 // 分别限制响应捕获、投影内存和每条 RPC 消息的大小。
@@ -25,7 +25,8 @@ type CapturedAsset = { id: string; kind: string; url: string; sequence: number }
 // Keep assets separated by committed loader and retain recent loader indexes for history restores.
 // 按已提交的加载器隔离资源，并保留近期加载器的索引以支持历史恢复。
 type PageAssets = { requests: Map<string, CapturedAsset>; loader: string; published: Set<string>;
-  markup: Map<string, string>; documentId: string | null; blobs: Map<string, string> };
+  markup: Map<string, string>; documentId: string | null; blobs: Map<string, string>;
+  initialStylesheetRedirects: Map<string, string> | null };
 // A network response belongs to one loader and its redirect aliases.
 // 一个网络响应归属一个加载器及其重定向别名。
 type ResourceRequest = { loader: string; urls: string[]; kind: string; sequence: number; mimeType?: string };
@@ -53,12 +54,13 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
   while (focus?.shadowRoot?.activeElement) focus = focus.shadowRoot.activeElement;
   let focused: string | null = null;
 
-  // Append constructed styles after regular styles to preserve their cascade order.
-  // 在常规样式后附加构造样式表，以保持层叠顺序。
+  // Serialize constructed sheets as marked styles for the viewer to adopt into the original scope.
+  // 将构造样式表序列化为带标记的样式，供查看端在原作用域内采纳。
   function appendAdopted(source: Document | ShadowRoot, destination: Node): void {
     for (const sheet of source.adoptedStyleSheets) {
       if (sheet.disabled) continue;
       const style = document.createElement('style');
+      style.setAttribute('data-vulcan-adopted', '');
       style.media = sheet.media.mediaText;
       style.textContent = Array.from(sheet.cssRules, rule => rule.cssText).join('\n').replace(/<\/style/gi, '\\3c /style');
       destination.appendChild(style);
@@ -74,6 +76,7 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
       nodes.ids.set(element, id);
     }
     mirror.removeAttribute('data-vulcan-shadow');
+    mirror.removeAttribute('data-vulcan-adopted');
     mirror.toggleAttribute('data-vulcan-hover', hover.has(element));
     mirror.setAttribute('data-vulcan-node', id);
     if (element.scrollLeft || element.scrollTop) scroll.push([id, element.scrollLeft, element.scrollTop]);
@@ -236,6 +239,26 @@ export class DomProjection {
   private bytes = 0;
   private sequence = 0;
 
+  // Remember real stylesheet redirect destinations while a new page is being registered.
+  // 新页面登记期间记录样式表的真实重定向终点。
+  observeContext(context: BrowserContext): void {
+    context.on('response', response => {
+      const request = response.request();
+      if (request.resourceType() !== 'stylesheet' || !request.redirectedFrom() || !response.ok()) return;
+      // Worker requests are not associated with a frame; only the projected top frame is eligible.
+      // Worker 请求没有所属框架，仅接收投影顶层框架的响应。
+      if (request.serviceWorker()) return;
+      const frame = request.frame();
+      const page = frame.page();
+      if (page.isClosed() || frame !== page.mainFrame()) return;
+      const redirects = this.pageAssets(page).initialStylesheetRedirects;
+      if (!redirects) return;
+      for (let alias = request.redirectedFrom(); alias && redirects.size < ASSET_COUNT_LIMIT; alias = alias.redirectedFrom()) {
+        redirects.set(alias.url(), response.url());
+      }
+    });
+  }
+
   // Observe one Chromium target using loader IDs. Only a committed top-level document changes the active index.
   // 使用加载器标识观察一个 Chromium 目标。只有顶层文档提交才切换活动索引。
   async trackPage(page: Page, cdp: CDPSession): Promise<void> {
@@ -318,29 +341,47 @@ export class DomProjection {
     if (!rootFrame) commit(frameTree.frame);
     await cdp.send('Network.enable', { maxTotalBufferSize: STORE_LIMIT, maxResourceBufferSize: ASSET_LIMIT });
 
-    // A popup can complete its initial requests before Playwright exposes the target. Prime from its loaded resources.
-    // 弹窗可能在 Playwright 暴露目标前完成初始请求。从该页面已加载资源中补齐。
+    // A popup can start requests before CDP attaches. The load boundary includes those still in flight at registration.
+    // 弹窗可能在 CDP 附加前发起请求。页面加载完成后补采登记时仍在途的请求。
     const initialLoader = state.loader;
-    const tree = await cdp.send('Page.getResourceTree').catch(() => null);
-    if (!tree) return;
-    const loaded = tree.frameTree;
-    if (loaded.frame.loaderId !== initialLoader || state.loader !== initialLoader) return;
-    const index = state.requests;
-    // Read cached bodies in sequence to bound peak CDP response memory on resource-heavy pages.
-    // 依次读取缓存正文，限制资源密集页面的 CDP 响应峰值内存。
-    for (const resource of loaded.resources.slice(0, ASSET_COUNT_LIMIT)) {
-      if (state.loader !== initialLoader || page.isClosed()) break;
-      const kind = resourceKind(resource.type, resource.mimeType);
-      if (!kind || (resource.contentSize !== undefined && resource.contentSize > ASSET_LIMIT)
-        || index.has(resource.url)) continue;
-      try {
-        const data = await cdp.send('Page.getResourceContent', { frameId: loaded.frame.id, url: resource.url });
-        if (state.loader === initialLoader && !page.isClosed()) {
-          this.storeResponse(index, [resource.url], resource.url, kind, resource.mimeType, 0,
-            Buffer.from(data.content, data.base64Encoded ? 'base64' : 'utf8'));
-        }
-      } catch { /* A resource can leave Chromium's cache during the initial scan.
-                 初始化扫描期间，资源可能离开 Chromium 缓存。 */ }
+    void this.seedInitialResources(page, cdp, state, initialLoader).catch(() => {
+      // A page can close or leave its initial document before it finishes loading.
+      // 页面可能在完成加载前关闭或离开初始文档。
+    });
+  }
+
+  // Seed the initial committed loader from Chromium's cache without making new requests.
+  // 从 Chromium 缓存补采初次提交的加载器资源，不发出新的网络请求。
+  private async seedInitialResources(page: Page, cdp: CDPSession, state: PageAssets, initialLoader: string): Promise<void> {
+    try {
+      await page.waitForLoadState('load');
+      if (state.loader !== initialLoader || page.isClosed()) return;
+      const tree = await cdp.send('Page.getResourceTree').catch(() => null);
+      if (!tree) return;
+      const loaded = tree.frameTree;
+      if (loaded.frame.loaderId !== initialLoader || state.loader !== initialLoader) return;
+      const index = state.requests;
+      // Read cached bodies in sequence to bound peak CDP response memory on resource-heavy pages.
+      // 依次读取缓存正文，限制资源密集页面的 CDP 响应峰值内存。
+      for (const resource of loaded.resources.slice(0, ASSET_COUNT_LIMIT)) {
+        if (state.loader !== initialLoader || page.isClosed()) break;
+        const kind = resourceKind(resource.type, resource.mimeType);
+        if (!kind || (resource.contentSize !== undefined && resource.contentSize > ASSET_LIMIT)
+          || index.has(resource.url)) continue;
+        try {
+          const data = await cdp.send('Page.getResourceContent', { frameId: loaded.frame.id, url: resource.url });
+          if (state.loader === initialLoader && !page.isClosed()) {
+            // The resource tree uses the request alias; resolve CSS relative URLs against the final response.
+            // 资源树使用请求别名；CSS 相对地址以最终响应为基准解析。
+            const base = state.initialStylesheetRedirects?.get(resource.url) ?? resource.url;
+            this.storeResponse(index, [resource.url, base], base, kind, resource.mimeType, 0,
+              Buffer.from(data.content, data.base64Encoded ? 'base64' : 'utf8'));
+          }
+        } catch { /* A resource can leave Chromium's cache during the initial scan.
+                   初始化扫描期间，资源可能离开 Chromium 缓存。 */ }
+      }
+    } finally {
+      state.initialStylesheetRedirects = null;
     }
   }
 
@@ -372,7 +413,7 @@ export class DomProjection {
     let state = this.pages.get(page);
     if (!state) {
       state = { requests: new Map(), loader: '', published: new Set(), markup: new Map(),
-        documentId: null, blobs: new Map() };
+        documentId: null, blobs: new Map(), initialStylesheetRedirects: new Map() };
       this.pages.set(page, state);
     }
     return state;

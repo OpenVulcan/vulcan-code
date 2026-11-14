@@ -9,6 +9,12 @@ const NODE_ID = "data-vulcan-node";
 // Templates carry sanitized open shadow trees over the projection wire.
 // 模板在投影协议中携带清理后的开放 Shadow DOM。
 const SHADOW_MARKER = "data-vulcan-shadow";
+// Adopted styles travel as inert markup and are installed in their original cascade position.
+// 构造样式表以惰性标记传输，并在原有层叠位置生效。
+const ADOPTED_STYLE_MARKER = "data-vulcan-adopted";
+// Keep the last serialized styles for each live scope so hover snapshots reuse the same sheets.
+// 记录每个活跃作用域上次序列化的样式，使悬停快照复用已有样式表。
+const adoptedStyleRevisions = new WeakMap<Document | ShadowRoot, string>();
 
 // The parent supplies the projected revision, current control grant and ordered input queue.
 // 父组件提供投影修订、当前控制授权与有序输入队列。
@@ -82,6 +88,29 @@ function nodeId(node: Node | null): string | null {
   return node?.nodeType === Node.ELEMENT_NODE ? (node as Element).getAttribute(NODE_ID) : null;
 }
 
+// Move wire styles from the detached markup into the document or shadow root's adopted sheet list.
+// 将离线标记中的样式表移入文档或 Shadow Root 的 adopted 样式列表。
+function reconcileAdoptedStyles(scope: Document | ShadowRoot, source: ParentNode): void {
+  const styles = Array.from(source.children).filter((child): child is HTMLStyleElement =>
+    child.tagName === "STYLE" && child.hasAttribute(ADOPTED_STYLE_MARKER));
+  // Remove transport nodes so they cannot affect structural selectors or the normal stylesheet order.
+  // 移除传输节点，避免改变结构选择器的匹配结果和常规样式表顺序。
+  for (const style of styles) style.remove();
+  const revision = JSON.stringify(styles.map(style => [style.media, style.textContent]));
+  if (revision === adoptedStyleRevisions.get(scope)) return;
+  const owner = scope.nodeType === Node.DOCUMENT_NODE ? scope as Document : (scope as ShadowRoot).ownerDocument;
+  const realm = owner.defaultView as (Window & typeof globalThis) | null;
+  if (!realm) return;
+  scope.adoptedStyleSheets = styles.map(style => {
+    // Construct in the frame's realm; Chromium rejects sheets created in a different document.
+    // 在框架自身的域中构造样式表，Chromium 会拒绝来自其他文档的样式表。
+    const sheet = new realm.CSSStyleSheet({ media: style.media });
+    sheet.replaceSync(style.textContent ?? "");
+    return sheet;
+  });
+  adoptedStyleRevisions.set(scope, revision);
+}
+
 // Synchronize the live tree without remounting fields or pointer targets on every revision.
 // 同步实时树，在各次修订间保留输入框和指针目标。
 function reconcile(target: Node, source: Node, preserve: (element: Element) => boolean): void {
@@ -107,6 +136,7 @@ function reconcile(target: Node, source: Node, preserve: (element: Element) => b
     const root = element.shadowRoot ?? element.attachShadow({
       mode: "open", delegatesFocus: shadow.getAttribute(SHADOW_MARKER) === "delegates-focus",
     });
+    reconcileAdoptedStyles(root, shadow.content);
     reconcileChildren(root, shadow.content, preserve);
   }
   reconcileChildren(element, desired, preserve, shadow);
@@ -196,6 +226,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
   React.useLayoutEffect(() => {
     if (!frameDocument) return;
     const source = new DOMParser().parseFromString(snapshot.html, "text/html");
+    reconcileAdoptedStyles(frameDocument, source.head);
     // The frame's CSP is installed by srcdoc. Match it as the first head element on every patch.
     // 框架的 CSP 由 srcdoc 安装。每次更新都将它作为第一个 head 元素匹配。
     const policy = frameDocument.head.querySelector('meta[http-equiv="Content-Security-Policy"]');
@@ -250,7 +281,8 @@ export function BrowserDomSurface(props: SurfaceProps) {
       const id = field.getAttribute(NODE_ID);
       const target = { id, documentId: current.snapshot.documentId };
       let operation: Promise<boolean>;
-      if (before !== null && after !== null && before !== after) {
+      if (before !== null && after !== null) {
+        if (before === after) return;
         operation = current.queueInput("textEdit", { ...target, before, ...textDelta(before, after) });
       } else if (text) {
         operation = current.queueInput("textCommit", { ...target, text });
@@ -359,11 +391,15 @@ export function BrowserDomSurface(props: SurfaceProps) {
       const selectAll = (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a";
       const caretKey = ["Home", "End", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key);
       const nativeSelection = field && (selectAll || caretKey);
+      // Password values are never reconciled from snapshots, so deletion must run in both browsers.
+      // 密码值从不通过快照回填，因此删除必须在两个浏览器中都执行。
+      const passwordDeletion = field?.tagName === "INPUT" && (field as HTMLInputElement).type === "password"
+        && (event.key === "Backspace" || event.key === "Delete");
       if (field && ((!selectAll && event.key.length === 1) || (supportsRange(field)
         && (nativeSelection || event.key === "Backspace" || event.key === "Delete"
           || (field.tagName === "TEXTAREA" && event.key === "Enter"))))) return;
-      if (!nativeSelection) event.preventDefault();
-      if (event.repeat) return;
+      if (!nativeSelection && !passwordDeletion) event.preventDefault();
+      if (event.repeat && !passwordDeletion) return;
       current.heldKeys.current.add(event.key);
       void current.queueInput("key", { type: "down", key: event.key });
     }, options);

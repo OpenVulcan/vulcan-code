@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
+import { DomProjection } from '../dist/chromium-host/dom-projection.js';
 
 // repository identifies the authoritative package root relative to this fixture.
 // repository 根据本夹具位置标识权威发行根。
@@ -120,7 +121,9 @@ const fixture = createServer((request, response) => {
         <input type="email" id="projection-email" autocomplete="off">
         <input type="password" id="projection-password" autocomplete="off">
         <output id="password-length">0</output>
+        <span id="cascade-order">Cascade order</span>
       </div>
+      <style>#cascade-order { color:rgb(91,23,54) }</style>
       <script>
         document.querySelector('#edit').addEventListener('input', e => document.body.dataset.edited = e.target.value);
         document.querySelector('#projected-blob').src = URL.createObjectURL(new Blob(
@@ -128,7 +131,8 @@ const fixture = createServer((request, response) => {
           { type: 'image/svg+xml' }
         ));
         const layout = new CSSStyleSheet();
-        layout.replaceSync('#hover-menu { visibility:hidden } #hover-target:hover #hover-menu { visibility:visible; color:rgb(23,54,91) }');
+        layout.replaceSync('#hover-menu { visibility:hidden } #hover-target:hover #hover-menu { visibility:visible; color:rgb(23,54,91) }'
+          + '#cascade-order { color:rgb(23,54,91) }');
         document.adoptedStyleSheets = [layout];
         const host = document.querySelector('projection-widget');
         const root = host.attachShadow({ mode:'open' });
@@ -161,7 +165,21 @@ const fixture = createServer((request, response) => {
   }
   if (request.url === '/popup') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end('<title>Projection popup</title><main>Popup reached</main>');
+    response.end('<title>Projection popup</title><link rel="stylesheet" href="/popup-styles"><main>Popup reached</main>');
+    return;
+  }
+  if (request.url === '/popup-styles') {
+    response.writeHead(302, { location: '/popup-assets/popup.css' }).end();
+    return;
+  }
+  if (request.url === '/popup-assets/popup.css') {
+    response.writeHead(200, { 'content-type': 'text/css' })
+      .end('main { color:rgb(23,54,91); background-image:url("popup.svg") }');
+    return;
+  }
+  if (request.url === '/popup-assets/popup.svg') {
+    response.writeHead(200, { 'content-type': 'image/svg+xml' })
+      .end('<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><rect width="18" height="18" fill="green"/></svg>');
     return;
   }
   if (request.url === '/clicked' && request.method === 'POST') {
@@ -302,6 +320,28 @@ async function verifyDomViewers(discovery, sessionId) {
   const browser = await chromium.launch({ executablePath: path.join(assetRoot, runtimeLayout.chromiumExecutable),
     channel: 'chromium', headless: true });
   try {
+    // Attach after load to force the popup resource-tree path regardless of machine timing.
+    // 在加载完成后附加，无论机器时序如何都覆盖弹窗资源树补采路径。
+    const bootstrapContext = await browser.newContext();
+    try {
+      const projection = new DomProjection();
+      projection.observeContext(bootstrapContext);
+      const popup = await bootstrapContext.newPage();
+      await popup.goto(new URL('/popup', pageUrl).href, { waitUntil: 'load' });
+      await projection.trackPage(popup, await bootstrapContext.newCDPSession(popup));
+      await until(async () => {
+        const snapshot = await projection.snapshot(popup, null);
+        assert.ok(snapshot?.assets);
+        const assets = snapshot.assets.map(id => ({ id, chunk: projection.asset(popup, id, 0) }));
+        const image = assets.find(asset => asset.chunk?.mimeType === 'image/svg+xml');
+        const style = assets.find(asset => asset.chunk?.mimeType === 'text/css');
+        assert.ok(image && style);
+        assert.deepEqual(style.chunk.dependencies, [image.id]);
+        return true;
+      }, 5_000);
+    } finally {
+      await bootstrapContext.close();
+    }
     await vite.listen(18_723);
     const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
     const url = new URL(viewerPath, origin);
@@ -378,6 +418,7 @@ async function verifyDomViewers(discovery, sessionId) {
       assert.equal(await button.evaluate(element => getComputedStyle(element).color), 'rgb(16, 85, 142)');
       assert.match(await button.evaluate(element => getComputedStyle(element).backgroundImage), /^url\("blob:/);
       assert.equal(await frame(client).locator('slot').evaluate(slot => slot.assignedNodes()[0].textContent), 'Slotted label');
+      assert.equal(await frame(client).locator('#cascade-order').evaluate(element => getComputedStyle(element).color), 'rgb(23, 54, 91)');
     }
     await frame(controller).locator('#hover-target').hover();
     for (const client of clients) await frame(client).locator('#hover-menu').waitFor({ state: 'visible' });
@@ -397,6 +438,14 @@ async function verifyDomViewers(discovery, sessionId) {
     // Drive Chromium's composition protocol while observing the other authenticated WebUI client.
     // 通过 Chromium 合成输入协议录入文字，同时观察另一个已鉴权的 WebUI 客户端。
     const cdp = await controller.context().newCDPSession(controller);
+    // Observe routed edits so an unchanged composition cannot pass by checking before a delayed replay.
+    // 观察已路由的编辑，避免未变化的输入在延迟回放前检查而误报通过。
+    let projectedEdits = 0;
+    controller.on('request', request => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/rpc') return;
+      const { method, params } = request.postDataJSON();
+      if (method === 'browser.input.dispatch' && ['textEdit', 'textCommit'].includes(params.kind)) projectedEdits++;
+    });
     for (const [selector, text, replace] of [
       ['#edit', '输入法 vulcancode', false],
       ['#edit', '替换文本', true],
@@ -420,6 +469,44 @@ async function verifyDomViewers(discovery, sessionId) {
         return true;
       }, 10_000);
     }
+    // Repeat the same text over a local selection with both insertion and composition.
+    // 分别通过普通插入和输入法组合，以相同文本替换本地选区。
+    const edit = frame(controller).locator('#edit');
+    await edit.click();
+    const priorEdits = projectedEdits;
+    await controller.keyboard.press('Control+a');
+    await cdp.send('Input.insertText', { text: '替换文本' });
+    await controller.keyboard.press('Control+a');
+    await cdp.send('Input.imeSetComposition', { text: '候选', selectionStart: 2, selectionEnd: 2 });
+    await cdp.send('Input.insertText', { text: '替换文本' });
+    // Wait for a later real edit to reach the observer before comparing queue traffic.
+    // 等待后续真实编辑到达观察端，再比较队列中的编辑请求。
+    await controller.keyboard.press('End');
+    await cdp.send('Input.insertText', { text: '✓' });
+    await until(async () => {
+      assert.equal(await frame(observer).locator('#edit').getAttribute('value'), '替换文本✓');
+      return true;
+    }, 10_000);
+    assert.equal(projectedEdits, priorEdits + 1);
+    // Check both native deletion directions using lengths only across the password boundary.
+    // 仅比较长度，验证密码框两种原生删除方向在两端一致。
+    const password = frame(controller).locator('#projection-password');
+    await password.click();
+    await password.press('End');
+    await password.press('Backspace');
+    await until(async () => {
+      assert.equal(await frame(observer).locator('#password-length').textContent(), '1');
+      assert.equal(await password.evaluate(element => element.value.length), 1);
+      return true;
+    }, 10_000);
+    await password.press('Home');
+    await password.press('Delete');
+    await until(async () => {
+      assert.equal(await frame(observer).locator('#password-length').textContent(), '0');
+      assert.equal(await password.evaluate(element => element.value.length), 0);
+      assert.equal(await frame(observer).locator('#projection-password').inputValue(), '');
+      return true;
+    }, 10_000);
     await cdp.detach();
     assert.equal(originRequests, 0, 'Neither client may fetch source resources, including inside Shadow DOM.');
     console.log('Both viewers verified committed IME insertion and replacement, including password redaction.');
@@ -443,8 +530,18 @@ async function verifyDomViewers(discovery, sessionId) {
     await controller.bringToFront();
     await frame(controller).locator('#popup').click({ timeout: 5_000 });
     for (const client of clients) {
-      await frame(client).getByText('Popup reached').waitFor({ timeout: 15_000 });
+      await until(async () => {
+        const popup = frame(client).getByText('Popup reached');
+        const view = await popup.evaluate(element => {
+          const style = getComputedStyle(element);
+          return { color: style.color, image: style.backgroundImage };
+        });
+        assert.equal(view.color, 'rgb(23, 54, 91)');
+        assert.match(view.image, /^url\("blob:/);
+        return true;
+      }, 15_000);
     }
+    assert.equal(originRequests, 0, 'Neither popup client may fetch the stylesheet or its relative assets.');
     // The active viewport is a shared Core value confirmed by both rendered DOM surfaces.
     // 当前视口是共享的 Core 值，由两个 DOM 投影界面共同确认。
     async function expectViewport(expected) {

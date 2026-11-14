@@ -902,6 +902,7 @@ class ChromiumHost {
         channel: 'chromium', headless: true, acceptDownloads: true,
         viewport: this.viewport,
       });
+      this.domProjection.observeContext(this.context);
       // Chromium permits a trusted CDP client to navigate directly to file: URLs. Intercept every
       // routable local-file request before a page can read Core-machine files.
       // Chromium 允许受信 CDP 客户端直接导航 file:；在页面读取 Core 本机文件前拦截全部可路由文件请求。
