@@ -426,8 +426,14 @@ async fn execute_shell_job_tool(
                 .job(&owner, job_id)
                 .filter(|job| job.outcome().is_none())
             else {
-                prepare_redaction().await?;
                 let summary = find_summary(runtime, &owner, &jobs_dir, job_id)?;
+                if let Err(error) = prepare_redaction().await {
+                    return summary
+                        .outcome
+                        .as_ref()
+                        .map(|outcome| shell_job_stop_state(job_id, outcome.status))
+                        .ok_or(error);
+                }
                 return Ok(shell_job_result(
                     format!("The job is not running.\n{}", render_job_status(&summary)),
                     json!({ "action": "stop", "job_id": job_id, "running": false, "purpose": summary.purpose }),
@@ -439,13 +445,7 @@ async fn execute_shell_job_tool(
             // Returning stop state is safe even when the stored text cannot be redacted.
             // 即使存储文本无法脱敏，也可以安全返回停止状态。
             if prepare_redaction().await.is_err() {
-                return Ok(shell_job_result(
-                    format!(
-                        "The job ended with status {}. Job details are unavailable.",
-                        outcome.status.as_str()
-                    ),
-                    json!({"action": "stop", "job_id": job_id, "running": false, "status": outcome.status.as_str()}),
-                ));
+                return Ok(shell_job_stop_state(job_id, outcome.status));
             }
             let mut text = format!(
                 "The job ended with status {}.\n{}",
@@ -473,6 +473,21 @@ async fn execute_shell_job_tool(
         payload["purpose"] = Value::String(summary.purpose);
     }
     Ok(shell_job_result(text, payload))
+}
+
+/// Reports a verified terminal state without stored command or output details.
+/// 返回已确认的终态，不附带存储的命令或输出详情。
+fn shell_job_stop_state(
+    job_id: &str,
+    status: vulcan_host_tools::shell_job::ShellJobStatus,
+) -> VulcanToolInvocationResult {
+    shell_job_result(
+        format!(
+            "The job ended with status {}. Job details are unavailable.",
+            status.as_str()
+        ),
+        json!({"action": "stop", "job_id": job_id, "running": false, "status": status.as_str()}),
+    )
 }
 
 /// Wraps text and a host payload into a tool result.
@@ -722,9 +737,17 @@ mod tests {
             "action": "stop", "job_id": job.id(),
         }));
         request.session_id = Some(session_id);
-        let result = execute_shell_job_tool(request, &runtime)
+        let result = execute_shell_job_tool(request.clone(), &runtime)
             .await
             .expect("stop without loading details");
+        let retried = execute_shell_job_tool(request, &runtime)
+            .await
+            .expect("return the same safe state after a stop retry");
+        assert_eq!(retried.model_output, result.model_output);
+        assert_eq!(
+            retried.host_result.unwrap().payload,
+            result.host_result.as_ref().unwrap().payload,
+        );
         let outcome = job.outcome().expect("job actually stopped");
         assert_eq!(
             outcome.status,
