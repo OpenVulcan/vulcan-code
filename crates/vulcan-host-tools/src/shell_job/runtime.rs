@@ -1552,7 +1552,7 @@ fn new_job_id() -> String {
 
 /// True for identities this runtime could have issued; guards paths built from model input.
 /// 对本运行时可能签发的身份返回 true；保护由模型输入构建的路径。
-pub(crate) fn valid_job_id(job_id: &str) -> bool {
+pub fn valid_job_id(job_id: &str) -> bool {
     job_id
         .strip_prefix("job_")
         .is_some_and(|rest| rest.len() == 12 && rest.bytes().all(|byte| byte.is_ascii_hexdigit()))

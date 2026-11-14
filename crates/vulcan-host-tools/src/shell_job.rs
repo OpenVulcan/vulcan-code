@@ -25,7 +25,7 @@ pub use runtime::{
     ShellJob, ShellJobCapturedStreams, ShellJobDirectoryResolver, ShellJobEvent, ShellJobEventKind,
     ShellJobFinal, ShellJobForeground, ShellJobNotice, ShellJobOrigin, ShellJobRuntime,
     ShellJobSpawn, ShellJobSpawnError, ShellJobState, ShellJobStatus, ShellJobSummary,
-    ShellJobWaitOutcome,
+    ShellJobWaitOutcome, valid_job_id,
 };
 pub use text::{
     ShellJobLineRow, ShellJobRowKind, ShellJobTail, render_numbered_rows, render_plain_rows,

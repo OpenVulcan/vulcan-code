@@ -447,9 +447,15 @@ pub(crate) async fn execute_shell_job_tool(
                         .map(|outcome| shell_job_stop_state(job_id, outcome.status))
                         .ok_or(error);
                 }
+                let mut payload = json!({
+                    "action": "stop", "job_id": job_id, "running": false, "purpose": summary.purpose,
+                });
+                if let Some(outcome) = summary.outcome.as_ref() {
+                    payload["status"] = json!(outcome.status);
+                }
                 return Ok(shell_job_result(
                     format!("The job is not running.\n{}", render_job_status(&summary)),
-                    json!({ "action": "stop", "job_id": job_id, "running": false, "purpose": summary.purpose }),
+                    payload,
                 ));
             };
             job.request_stop("Stopped with shell_job.");
@@ -468,7 +474,7 @@ pub(crate) async fn execute_shell_job_tool(
             append_tail(&mut text, job.log_reader(), redaction.as_deref());
             (
                 text,
-                json!({ "action": "stop", "job_id": job_id, "running": false }),
+                json!({ "action": "stop", "job_id": job_id, "running": false, "status": outcome.status }),
             )
         }
         other => {
@@ -490,7 +496,7 @@ pub(crate) async fn execute_shell_job_tool(
 
 /// Reports a verified terminal state without stored command or output details.
 /// 返回已确认的终态，不附带存储的命令或输出详情。
-fn shell_job_stop_state(
+pub(crate) fn shell_job_stop_state(
     job_id: &str,
     status: vulcan_host_tools::shell_job::ShellJobStatus,
 ) -> VulcanToolInvocationResult {
