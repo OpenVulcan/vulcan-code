@@ -189,12 +189,24 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
         ),
         (
             format!(
+                "{help_link}。（请查看输入/输出限制。），详见「//owner:fixture-password@blob.example.invalid/report?sig=fixture-sas-value」"
+            ),
+            format!("{help_link}。（请查看输入/输出限制。），详见「<redacted-url>」"),
+        ),
+        (
+            format!("{help_link}。请查看输入/输出限制。"),
+            format!("{help_link}。请查看输入/输出限制。"),
+        ),
+        (
+            format!(
                 "{help_link}。请参考 https://blob.example.invalid/report?sig=fixture-sas-value"
             ),
             format!("{help_link}。请参考 <redacted-url>"),
         ),
         (format!("({help_link})."), format!("({help_link}).")),
         (format!("'{help_link}'"), format!("'{help_link}'")),
+        (format!("<{help_link}>"), format!("<{help_link}>")),
+        (format!("\"{help_link}\""), format!("\"{help_link}\"")),
         (
             String::from("`https://blob.example.invalid/report?name=a`b&sig=fixture-sas-value`"),
             String::from("`<redacted-url>`"),
@@ -204,10 +216,38 @@ fn upstream_error_preserves_help_punctuation_and_redacts_complete_url_tokens() {
             String::from("<redacted-url>"),
         ),
         (
+            String::from("<https://blob.example.invalid/report?name=a`<b>&sig=fixture-sas-value>"),
+            String::from("<<redacted-url>>"),
+        ),
+        (
+            String::from(
+                "\"https://blob.example.invalid/report?name=a`\"b&sig=fixture-sas-value\"",
+            ),
+            String::from("\"<redacted-url>\""),
+        ),
+        (
+            String::from(
+                "https://owner:a`\"fixture-password@blob.example.invalid/report?sig=fixture-sas-value",
+            ),
+            String::from("<redacted-url>"),
+        ),
+        (
             String::from(
                 "//owner:fixture-password@blob.example.invalid/report?sig=fixture-sas-value",
             ),
             String::from("<redacted-url>"),
+        ),
+        (
+            String::from(
+                "「//owner:fixture-password@blob.example.invalid/report?sig=fixture-sas-value」",
+            ),
+            String::from("「<redacted-url>」"),
+        ),
+        (
+            String::from(
+                "“//owner:fixture-password@blob.example.invalid/report?sig=fixture-sas-value”",
+            ),
+            String::from("“<redacted-url>”"),
         ),
         (
             String::from(
