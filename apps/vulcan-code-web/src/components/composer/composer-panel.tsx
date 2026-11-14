@@ -65,7 +65,7 @@ import { useComposerSlashCommands } from "@/components/composer/composer-panel/u
 import { useComposerShortcutHint } from "@/components/composer/composer-panel/use-composer-shortcut-hint";
 import { useComposerTypingRedirect } from "@/components/composer/composer-panel/use-composer-typing-redirect";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
-import { useComposerDroppedFiles } from "@/components/composer/composer-panel/use-composer-dropped-files";
+import { useComposerDroppedAssetConversion, useComposerDroppedFiles } from "@/components/composer/composer-panel/use-composer-dropped-files";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-answer-mode";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
@@ -298,8 +298,7 @@ export function ComposerPanel(props: {
     attachmentInputAccept,
     openAttachmentPicker,
     handleAttachmentInputChange,
-    handleComposerPaste,
-    stageComposerFiles,
+    stageComposerFiles, stageApprovedComposerFiles,
     removeComposerAttachment,
     clearForSubmission,
     restoreFailedSubmission,
@@ -412,8 +411,10 @@ export function ComposerPanel(props: {
   const routePlanningRevision = activeProviderModelSummary?.model.routeRevision?.trim() ?? "";
   // routeSelectionPending closes the optimistic-selection window before any upload plan is issued.
   // routeSelectionPending 在签发任何上传计划前封闭乐观选择窗口。
-  const routeSelectionPending = modelSelectionPersistencePending
-    || secondaryRoutePersistencePending;
+  const routeSelectionPending = modelSelectionPersistencePending || secondaryRoutePersistencePending;
+  // Preserve the source path when the existing compression flow installs a derivative.
+  // 既有压缩流程安装派生文件时保留原始路径。
+  const { remapSources, installWithSources } = useComposerDroppedAssetConversion(installConvertedAttachments);
   // attachmentPreparation owns draft upload, retry, cancellation, and send-barrier state.
   // attachmentPreparation 管理草稿上传、重试、取消与发送屏障状态。
   const attachmentPreparation = useComposerAttachmentPreparation({
@@ -424,7 +425,7 @@ export function ComposerPanel(props: {
     routePlanningRevision,
     routeSelectionPending,
     attachments,
-    onConvertedAttachments: installConvertedAttachments,
+    onConvertedAttachments: installWithSources,
   });
   // removePreparedAttachment binds asynchronous removal to the exact draft owner and object.
   // removePreparedAttachment 将异步移除绑定到精确草稿所有者与对象。
@@ -545,8 +546,9 @@ export function ComposerPanel(props: {
   const droppedFiles = useComposerDroppedFiles({
     draftSlotKey, projectId: props.projectId, conversationId: props.conversationId, modelSelection: activeModelSelection,
     attachments, projectAttachments: attachmentPreparation.projectForSubmission, routeRevision: routePlanningRevision,
-    setDraftInput, setDragOver: setIsAttachmentDragOver, flushRoute: flushComposerRouteSelections,
+    stageApprovedFiles: stageApprovedComposerFiles, pendingAttachmentCount, setDragOver: setIsAttachmentDragOver, flushRoute: flushComposerRouteSelections,
   });
+  remapSources.current = droppedFiles.remapAssets;
   // Keep shortcuts visible in the placeholder or the note under a populated running draft.
   // 在占位提示或运行中已有内容的草稿下方显示快捷键。
   const { placeholder, note: shortcutNote } = useComposerShortcutHint(props.isConversationRunning, draftInput.length > 0, t);
@@ -822,7 +824,7 @@ export function ComposerPanel(props: {
             保留所属附件条的空状态挂载以恢复焦点；空状态不渲染空白区域。 */}
         <ComposerPanelAttachmentPreviewStrip
           key={draftSlotKey}
-          attachments={attachments}
+          attachments={attachments} localTiles={droppedFiles.preview}
           preparations={attachmentPreparation.preparations}
           progresses={attachmentPreparation.progresses}
           onOpenMedia={setComposerMediaPlayer}
@@ -832,7 +834,6 @@ export function ComposerPanel(props: {
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           compression={attachmentPreparation.compression}
         />
-        {droppedFiles.preview}
         {slashPanelVisible && !isPendingPromptEditing ? (
           <ComposerSlashCommandPanel
             id={listboxIds.slash}
@@ -859,7 +860,7 @@ export function ComposerPanel(props: {
             onChange={(event) => { handleDraftInputChange(event.currentTarget.value); pathMention.trackCaret(event.currentTarget); }}
             onKeyDown={handleTextareaKeyDown}
             onSelect={(event) => pathMention.trackCaret(event.currentTarget)}
-            onPaste={isPendingPromptEditing ? undefined : handleComposerPaste}
+            onPaste={isPendingPromptEditing ? undefined : event => void droppedFiles.paste(event)}
             placeholder={placeholder}
             ref={composerTextareaRef}
             value={draftInput}
@@ -933,7 +934,7 @@ export function ComposerPanel(props: {
             ) : null}
           </div>
           <ComposerPanelToolbarRight
-            attachmentCount={attachments.length + droppedFiles.count}
+            attachmentCount={attachments.length + droppedFiles.localCount}
             contextUsage={props.contextUsage}
             draftSlotKey={draftSlotKey}
             sessionProviderUsage={props.sessionProviderUsage}

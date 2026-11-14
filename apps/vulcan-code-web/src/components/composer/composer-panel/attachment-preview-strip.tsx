@@ -17,6 +17,9 @@ export interface ComposerPanelAttachmentPreviewStripProps {
   // Attachments currently staged in the composer.
   // 当前在输入区暂存的附件。
   attachments: ComposerAttachmentSummary[];
+  // Local tiles displayed next to managed attachments without entering the attachment DTO.
+  // 与托管附件一起展示、无需进入附件 DTO 的本地预览块。
+  localTiles?: React.ReactNode[];
   // Draft preparation states indexed by stable attachment identity.
   // 按稳定附件身份索引的草稿准备状态。
   preparations: Readonly<Record<string, ComposerAttachmentPreparationSummary>>;
@@ -49,6 +52,7 @@ export function ComposerPanelAttachmentPreviewStrip(props: ComposerPanelAttachme
   return (
     <ComposerAttachmentStrip
       attachments={props.attachments}
+      localTiles={props.localTiles}
       preparations={props.preparations}
       progresses={props.progresses}
       resolvePreview={(attachment): ComposerAttachmentPreviewMedia | null => {

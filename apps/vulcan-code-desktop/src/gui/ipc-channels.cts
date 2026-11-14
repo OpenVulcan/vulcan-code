@@ -128,12 +128,15 @@ export const WINDOW_COMMAND_CHANNELS = {
   close: 'vulcan:window:close',
 } as const;
 
-// Clipboard channels expose only plain text to the owning workbench frame.
-// 剪贴板通道仅向所属工作台框架开放纯文本。
+// Clipboard channels expose text and native file references to the owning workbench frame.
+// 剪贴板通道向所属工作台框架开放纯文本及原生文件引用。
 export const CLIPBOARD_CHANNELS = {
   // Reads the current plain-text clipboard contents.
   // 读取当前剪贴板纯文本内容。
   readText: 'vulcan:clipboard:read-text',
+  // Reads the current clipboard's native file and directory references.
+  // 读取当前剪贴板的原生文件与目录引用。
+  readFileReferences: 'vulcan:clipboard:read-file-references',
   // Writes plain text provided by the current workbench.
   // 写入当前工作台提供的纯文本。
   writeText: 'vulcan:clipboard:write-text',

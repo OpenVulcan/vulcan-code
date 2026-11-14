@@ -2,8 +2,9 @@ import React from "react";
 import { ArrowUp, Check, Copy, Square } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { ComposerAttachmentStrip } from "@/components/composer/composer-attachment-controls";
-import { composerAttachmentMedia, inferComposerAttachmentKindFromFile } from "@/components/composer/composer-attachment-media";
+import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 import { useComposerAttachments } from "@/components/composer/composer-attachments";
+import { useComposerDroppedFiles } from "@/components/composer/composer-panel/use-composer-dropped-files";
 import { ComposerTextContextMenu } from "@/components/composer/composer-text-context-menu";
 import { composerAttachmentForResource } from "@/components/conversation/conversation-branch-presentation-v1";
 import { runConversationControlAction } from "@/components/conversation/conversation-control-feedback";
@@ -20,13 +21,11 @@ import { formatDurationSeconds, formatTokenCount } from "@/lib/usage-format";
 import { createClientOwnedActionId } from "@/notifications/client-identity";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
-  fetchModelAttachmentCapabilities,
   reconcileComposerAttachmentDraftLease,
   stageComposerAttachmentBytes,
   stopConversationRun,
   submitConversationPrompt,
 } from "@/service/conversation-actions-service";
-import type { ConversationSessionConfigV1 } from "@/service/conversation-event-window-client";
 import { useConversationSessionEventWindowOwnerV1 } from "@/state/conversation-session-event-window-owner-v1";
 import { useConversationSessionResourcesV1 } from "@/state/conversation-session-resources-v1";
 import type { ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary } from "@/types";
@@ -36,9 +35,14 @@ import { projectAssistantLastTurn, type AssistantReplyStep, type AssistantUsage 
 /** Unsent input per assistant, kept while the user switches between assistants.
  * 每个助手尚未发送的输入，在用户切换助手时保留。 */
 const assistantDrafts = new Map<string, string>();
-/** Staged but unsent attachments per assistant, kept alongside the text draft.
- * 每个助手已暂存但未发送的附件，与文字草稿一同保留。 */
+
+// Retain the assistant's staged draft while switching between assistants.
+// 在不同助手间切换时保留已暂存的助手草稿。
 const assistantAttachmentDrafts = new Map<string, ComposerAttachmentSummary[]>();
+
+// Core preflight is the admission authority for this input, which has no file picker.
+// 此输入区没有文件选择器，Core 预检是准入权威。
+const assistantPickerCapabilities: ComposerAttachmentCapabilitySummary[] = [];
 
 /** Compact live view of one assistant: only its last turn plus an input; the session keeps everything.
  * 单个助手的精简实时视图：只显示最后一轮与输入框；完整内容保留在会话中。 */
@@ -96,9 +100,8 @@ export function AssistantConversation(props: { assistant: AssistantEntry }) {
       ) : null}
       <AssistantComposer
         assistant={props.assistant}
-        onOpenMedia={setMediaPlayer}
         running={running}
-        sessionConfig={snapshot.session_config}
+        onOpenMedia={setMediaPlayer}
       />
       {mediaPlayer ? <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} /> : null}
     </div>
@@ -109,15 +112,19 @@ export function AssistantConversation(props: { assistant: AssistantEntry }) {
  * 复用主输入区的附件块；未提供 `onRemove` 时为只读。 */
 function AssistantAttachmentStrip(props: {
   attachments: ComposerAttachmentSummary[];
-  onOpenMedia: (media: GeneratedMediaAttachment) => void;
+  onOpenMedia?: (media: GeneratedMediaAttachment) => void;
   onRemove?: (index: number) => void;
+  // Local previews share the same strip as uploaded attachments.
+  // 本地预览与已上传附件共用附件栏。
+  localTiles?: React.ReactNode[];
 }) {
   return (
     <ComposerAttachmentStrip
       attachments={props.attachments}
+      localTiles={props.localTiles}
       onOpenMedia={(attachment) => {
         const media = composerAttachmentMedia(attachment);
-        if (media) props.onOpenMedia(media);
+        if (media) props.onOpenMedia?.(media);
       }}
       onRemove={props.onRemove}
       resolvePreview={(attachment) => {
@@ -130,81 +137,6 @@ function AssistantAttachmentStrip(props: {
       }}
     />
   );
-}
-
-/** Attachment gates of the assistant's model route; a tool-less assistant accepts only what the model reads natively.
- * 助手模型路线的附件门控；无工具助手只接受模型原生可读的素材。
- *
- * @param sessionConfig hydrated session configuration, or null before hydration.
- *                      已水合的会话配置；水合前为 null。
- * @returns accepted gates; empty until the route is known and its gates are read. */
-function useAssistantAttachmentCapabilities(
-  sessionConfig: ConversationSessionConfigV1 | null,
-): ComposerAttachmentCapabilitySummary[] {
-  const request = sessionConfig?.current_request;
-  const providerId = request?.provider ?? null;
-  const connectionId = request?.connection_id ?? null;
-  const modelId = request?.model ?? null;
-  const nativeOnly = sessionConfig?.dedicated?.tool_access === "none";
-  const [capabilities, setCapabilities] = React.useState<ComposerAttachmentCapabilitySummary[]>([]);
-  React.useEffect(() => {
-    setCapabilities([]);
-    if (!providerId || !connectionId || !modelId) return;
-    let current = true;
-    fetchModelAttachmentCapabilities(providerId, connectionId, modelId).then(
-      (next) => { if (current) setCapabilities(next); },
-      (reason: unknown) => { if (current) toast.error(reason instanceof Error ? reason.message : String(reason)); },
-    );
-    return () => { current = false; };
-  }, [connectionId, modelId, providerId]);
-  return React.useMemo(
-    () => (nativeOnly ? capabilities.filter((capability) => capability.native) : capabilities),
-    [capabilities, nativeOnly],
-  );
-}
-
-/** Keeps the session's composer-draft lease equal to the staged attachments, as the main composer does;
- * submission rejects staged media whose draft slot holds no lease.
- * 使会话的输入区草稿租约与已暂存附件保持一致（与主输入框相同）；提交会拒绝草稿槽未持有租约的暂存素材。
- *
- * @param assistant the session that owns the `conversation:` draft slot.
- *                  持有 `conversation:` 草稿槽的会话。
- * @param attachments the canonical staged set; an empty set needs no lease.
- *                    规范已暂存集合；空集合无需租约。
- * @returns `ready` once this exact set is leased, and `release`, which leases the set without one attachment. */
-function useAssistantDraftLease(assistant: AssistantEntry, attachments: ComposerAttachmentSummary[]) {
-  const { id, projectId } = assistant;
-  // queueRef orders replacements so an older request cannot re-lease a removed attachment.
-  // queueRef 串行化替换，避免较早请求重新租用已移除的附件。
-  const queueRef = React.useRef<Promise<unknown>>(Promise.resolve());
-  const [leased, setLeased] = React.useState<ComposerAttachmentSummary[] | null>(null);
-  const reconcile = React.useCallback((next: ComposerAttachmentSummary[]) => {
-    const request = () => reconcileComposerAttachmentDraftLease(projectId, id, `conversation:${id}`, next);
-    const result = queueRef.current.then(request, request);
-    queueRef.current = result.catch(() => undefined);
-    return result;
-  }, [id, projectId]);
-  React.useEffect(() => {
-    if (!attachments.length) return;
-    let current = true;
-    reconcile(attachments).then(
-      () => { if (current) setLeased(attachments); },
-      (reason: unknown) => { if (current) reportLeaseError(reason); },
-    );
-    return () => { current = false; };
-  }, [attachments, reconcile]);
-  const release = React.useCallback(
-    (attachment: ComposerAttachmentSummary, from: ComposerAttachmentSummary[]) =>
-      reconcile(from.filter((candidate) => candidate !== attachment)),
-    [reconcile],
-  );
-  return { ready: attachments.length === 0 || leased === attachments, release };
-}
-
-/** Shows a failed draft-lease update; the input stays blocked until a later change succeeds.
- * 显示草稿租约更新失败；输入保持阻止直到后续变更成功。 */
-function reportLeaseError(reason: unknown) {
-  toast.error(reason instanceof Error ? reason.message : String(reason));
 }
 
 /** Characters of streaming thinking kept for the one-line ticker; far wider than any assistant window.
@@ -344,72 +276,92 @@ function AssistantUsageLine(props: {
 export function AssistantComposer(props: {
   assistant: AssistantEntry;
   running: boolean;
-  sessionConfig: ConversationSessionConfigV1 | null;
-  onOpenMedia: (media: GeneratedMediaAttachment) => void;
+  // Opens a staged media attachment in the conversation's existing viewer.
+  // 在会话的现有查看器打开已暂存媒体附件。
+  onOpenMedia?: (media: GeneratedMediaAttachment) => void;
 }) {
   const { t } = useI18n();
   const { assistant } = props;
   const [text, setText] = React.useState(() => assistantDrafts.get(assistant.id) ?? "");
   const [pending, setPending] = React.useState(false);
+  // Serialize removal with sending and file admission for this compact draft.
+  // 在此紧凑草稿中让移除、发送和文件准入互斥。
+  const [removing, setRemoving] = React.useState(false);
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null);
-  const capabilities = useAssistantAttachmentCapabilities(props.sessionConfig);
+  // The compact and full composers submit to the same V1 draft owner.
+  // 紧凑输入区与完整输入区向同一个 V1 草稿所有者提交。
+  const slot = `conversation:${assistant.id}`;
+  // Reuse managed staging and preview generation for originals admitted by Core.
+  // 对 Core 准入的原件复用托管暂存和预览生成。
   const staging = useComposerAttachments({
-    attachmentCapabilities: capabilities,
+    attachmentCapabilities: assistantPickerCapabilities,
+    projectId: assistant.projectId,
     conversationId: assistant.id,
     initialAttachments: assistantAttachmentDrafts.get(assistant.id),
     onStageAttachmentBytes: stageComposerAttachmentBytes,
-    projectId: assistant.projectId,
   });
+  // Use the exact managed set when preflighting new files or freezing a send.
+  // 新文件预检和冻结发送时使用准确的托管集合。
   const { attachments } = staging;
-  const lease = useAssistantDraftLease(assistant, attachments);
-  React.useEffect(() => {
-    if (text) assistantDrafts.set(assistant.id, text);
-    else assistantDrafts.delete(assistant.id);
-  }, [assistant.id, text]);
+  const pastedFiles = useComposerDroppedFiles({
+    draftSlotKey: slot,
+    storageKey: `assistant:${assistant.id}`,
+    conversationId: assistant.id,
+    projectId: assistant.projectId,
+    modelSelection: null,
+    routeRevision: "",
+    attachments,
+    projectAttachments: attachments => attachments,
+    stageApprovedFiles: staging.stageApprovedComposerFiles,
+    pendingAttachmentCount: staging.pendingAttachmentCount,
+    recheckManagedAtSend: true,
+    setDragOver: () => undefined,
+    flushRoute: async () => !pending && !removing,
+  });
   React.useEffect(() => {
     if (attachments.length) assistantAttachmentDrafts.set(assistant.id, attachments);
     else assistantAttachmentDrafts.delete(assistant.id);
   }, [assistant.id, attachments]);
-  // paste leaves plain text to the textarea; files the assistant cannot take are reported, not silently dropped.
-  // 粘贴时纯文本交给输入框；助手无法接收的文件会提示，而不是静默丢弃。
-  const paste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    staging.handleComposerPaste(event);
-    if (event.defaultPrevented) return;
-    const hasMedia = Array.from(event.clipboardData.items ?? []).some((item) => {
-      const file = item.kind === "file" ? item.getAsFile() : null;
-      return file !== null && inferComposerAttachmentKindFromFile(file) !== null;
-    });
-    if (hasMedia) {
-      event.preventDefault();
-      toast.info(props.sessionConfig?.dedicated?.tool_access === "none"
-        ? t("assistantDock.attachmentNativeOnly")
-        : t("composer.attachment.unsupported"));
-    }
-  };
-  const blocked = props.running || pending || staging.pendingAttachmentCount > 0 || !lease.ready;
+  React.useEffect(() => {
+    if (text) assistantDrafts.set(assistant.id, text);
+    else assistantDrafts.delete(assistant.id);
+  }, [assistant.id, text]);
+  const blocked = props.running || pending || removing || pastedFiles.checking || staging.pendingAttachmentCount > 0;
   const send = async () => {
     const sentText = text;
     const prompt = sentText.trim();
-    if ((!prompt && attachments.length === 0) || blocked || staging.hasPendingAttachmentStaging()) return;
+    if ((!prompt && !pastedFiles.count && !attachments.length) || blocked) return;
     setPending(true);
+    // Keep the pending originals on rejection and release only this attempt's staged lease.
+    // 提交被拒绝时保留待发原件，仅释放此尝试的暂存租约。
+    let prepared: Awaited<ReturnType<typeof pastedFiles.prepare>> = null;
+    let accepted = false;
     try {
+      if (pastedFiles.count) {
+        prepared = await pastedFiles.prepare(prompt, attachments);
+        if (!prepared) return;
+      }
       const ack = await submitConversationPrompt(
         createClientOwnedActionId(),
         assistant.projectId,
         assistant.id,
-        `conversation:${assistant.id}`,
-        prompt,
+        slot,
+        prepared?.prompt ?? prompt,
         undefined,
-        attachments,
+        prepared?.attachments ?? attachments,
         "build",
         null,
         null,
         null,
+        prepared?.planId,
       );
       if (!ack) {
         toast.info(t("conversationActions.previewCannotSend"));
         return;
       }
+      accepted = true;
+      prepared?.complete();
+      staging.setAttachments([]);
       if (ack.queuedTurnDispatch === "waiting") {
         toast.info(t("conversationActions.acceptedAwaitingDispatch"));
       } else if (ack.queuedTurnDispatch === "failed") {
@@ -418,10 +370,10 @@ export function AssistantComposer(props: {
       // The input stays editable while the receipt is pending, so only what was sent is cleared.
       // 等待回执期间输入框仍可编辑，因此只清除已发送的内容。
       setText((current) => (current === sentText ? "" : current));
-      staging.setAttachments((current) => current.filter((attachment) => !attachments.includes(attachment)));
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      if (!accepted) await prepared?.rollback();
       setPending(false);
     }
   };
@@ -433,13 +385,23 @@ export function AssistantComposer(props: {
     }
   };
   return (
-    <div className="assistant-composer">
+    <div className="assistant-composer" onDragOver={pending || removing ? undefined : pastedFiles.dragOver}
+      onDrop={pending || removing ? undefined : event => void pastedFiles.drop(event)}>
       <AssistantAttachmentStrip
         attachments={attachments}
+        localTiles={pastedFiles.preview}
         onOpenMedia={props.onOpenMedia}
         onRemove={(index) => {
+          if (pending || removing || pastedFiles.checking) return;
+          // Keep the current tile until Core has released exactly this draft reference.
+          // 在 Core 释放此草稿引用前，保持当前附件块。
           const attachment = attachments[index];
-          if (attachment) void lease.release(attachment, attachments).then(() => staging.removeComposerAttachment(attachment), reportLeaseError);
+          setRemoving(true);
+          void reconcileComposerAttachmentDraftLease(assistant.projectId, assistant.id, slot,
+            attachments.filter(item => item !== attachment)).then(
+            () => staging.removeComposerAttachment(attachment),
+            (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
+          ).finally(() => setRemoving(false));
         }}
       />
       <div className="assistant-composer-row">
@@ -457,7 +419,7 @@ export function AssistantComposer(props: {
             aria-label={formatMessage(t("assistantDock.placeholder"), { name: assistant.name })}
             className="assistant-composer-input"
             onChange={(event) => setText(event.target.value)}
-            onPaste={paste}
+            onPaste={pending || removing ? undefined : event => void pastedFiles.paste(event)}
             onKeyDown={(event) => {
               if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
               event.preventDefault();
@@ -476,7 +438,7 @@ export function AssistantComposer(props: {
         ) : (
           <Button
             aria-label={t("assistantDock.send")}
-            disabled={(!text.trim() && attachments.length === 0) || blocked}
+            disabled={(!text.trim() && !pastedFiles.count && !attachments.length) || blocked}
             onClick={() => void send()}
             size="icon-sm"
             type="button"

@@ -32,6 +32,9 @@ const WINDOW_COMMAND_CHANNELS = {
 // 剪贴板通道与主进程允许列表一致，不暴露原始 Electron IPC。
 const CLIPBOARD_CHANNELS = {
   readText: 'vulcan:clipboard:read-text',
+  // Channel for native paths and directory flags from the clipboard.
+  // 用于获取剪贴板原生路径及目录标记的通道。
+  readFileReferences: 'vulcan:clipboard:read-file-references',
   writeText: 'vulcan:clipboard:write-text',
   paste: 'vulcan:clipboard:paste',
 } as const;
@@ -241,4 +244,9 @@ const localFile = {
   // showInFolder 在请求文件管理器选中该路径后完成。
   showInFolder: (filePath: string): Promise<void> => ipcRenderer.invoke(LOCAL_FILE_CHANNELS.showInFolder, filePath),
 };
-contextBridge.exposeInMainWorld('vulcanDesktop', { desktop, service, startup, localBrowser, localFile });
+// Returns the path, name and directory flag for each copied native item.
+// 返回每个复制的原生项目的路径、名称及目录标记。
+const readClipboardFileReferences = (): Promise<Array<{ path: string; name: string; directory: boolean }>> =>
+  ipcRenderer.invoke(CLIPBOARD_CHANNELS.readFileReferences);
+
+contextBridge.exposeInMainWorld('vulcanDesktop', { desktop, service, startup, localBrowser, localFile, readClipboardFileReferences });

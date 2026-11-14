@@ -78,12 +78,14 @@ export interface UseComposerAttachmentsState {
   // handleAttachmentInputChange stages files selected through the hidden input.
   // handleAttachmentInputChange 暂存通过隐藏输入框选择的文件。
   handleAttachmentInputChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
-  // handleComposerPaste gives file and image clipboard payloads priority over plain text.
-  // handleComposerPaste 让文件与图片剪贴板载荷优先于普通文本处理。
-  handleComposerPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   // stageComposerFiles validates and stages files another surface hands to the composer.
   // stageComposerFiles 校验并暂存其他界面交给输入区的文件。
   stageComposerFiles: (files: File[]) => Promise<void>;
+  // Installs Core-admitted originals through their preflight staging callback and returns the installed summaries.
+  // 通过预检暂存回调安装 Core 已准入的原件，并返回已安装的摘要。
+  stageApprovedComposerFiles: (
+    files: File[], stage: (file: File) => Promise<ComposerAttachmentSummary>,
+  ) => Promise<ComposerAttachmentSummary[]>;
   // handleComposerDragOver highlights the composer only when dragged files are acceptable.
   // handleComposerDragOver 仅在拖入文件可接受时高亮输入区。
   handleComposerDragOver: (event: React.DragEvent<HTMLElement>) => void;
@@ -152,22 +154,26 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     ? enabledAttachmentCapabilities.find((capability) => capability.kind === attachmentPickerKind)?.accept ?? ""
     : composerAttachmentAccept(enabledAttachmentCapabilities);
 
-  // stageComposerFiles validates and stages files selected, dropped, or pasted into the composer.
-  // stageComposerFiles 校验并暂存通过选择、拖拽或粘贴进入输入区的文件。
-  const stageComposerFiles = React.useCallback(async (files: File[], preferredKind?: string | null) => {
+  // Stages picker or preflight-approved files; returns the managed summaries adopted by the draft.
+  // 暂存用户选取或通过预检的文件，返回草稿接收的托管摘要。
+  const stageFiles = React.useCallback(async (
+    files: File[],
+    preferredKind?: string | null,
+    stage?: (file: File) => Promise<ComposerAttachmentSummary>,
+  ): Promise<ComposerAttachmentSummary[]> => {
     const stagingGeneration = stagingGenerationRef.current;
-    const candidates = files.filter((file) => {
+    const candidates = stage ? files : files.filter((file) => {
       const kind = inferComposerAttachmentKindFromFile(file);
       return Boolean(kind && (!preferredKind || kind === preferredKind) && enabledAttachmentKinds.has(kind));
     });
     if (!candidates.length) {
       toast.info(t("composer.attachment.unsupported"));
-      return;
+      return [];
     }
     const availableSlots = MAX_COMPOSER_ATTACHMENTS - attachmentsRef.current.length - pendingStagingRef.current;
     if (availableSlots <= 0) {
       toast.info(formatComposerAttachmentTranslation(t, "composer.attachment.maxLimit", { count: String(MAX_COMPOSER_ATTACHMENTS) }));
-      return;
+      return [];
     }
     const acceptedFiles = candidates.slice(0, availableSlots);
     if (candidates.length > acceptedFiles.length) {
@@ -177,57 +183,58 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     pendingStagingRef.current += acceptedFiles.length;
     setPendingAttachmentCount(pendingStagingRef.current);
     try {
-    for (const file of acceptedFiles) {
-      if (stagingGeneration !== stagingGenerationRef.current) {
-        return;
-      }
-      try {
-        let attachment = await args.onStageAttachmentBytes(args.projectId, args.conversationId, file);
+      for (const file of acceptedFiles) {
         if (stagingGeneration !== stagingGenerationRef.current) {
-          return;
+          return [];
         }
-        if (attachment) {
-          const previewFile = await createComposerImagePreviewFile(file);
-          if (stagingGeneration !== stagingGenerationRef.current) return;
-          if (previewFile && attachment.assetId) {
-            try {
-              // previewLocalPath points at a sidecar of the canonical asset and never creates a second attachment index record.
-              // previewLocalPath 指向规范资产的旁路文件，绝不会创建第二条附件索引记录。
-              const previewLocalPath = await stageComposerAttachmentPreviewBytes(
-                args.projectId,
-                args.conversationId,
-                attachment.assetId,
-                previewFile,
-              );
-              attachment = { ...attachment, previewLocalPath };
-            } catch (error) {
-              if (stagingGeneration === stagingGenerationRef.current) toast.error(error instanceof Error ? error.message : String(error));
+        try {
+          // Core-approved files use the exact RPC envelope checked by preflight.
+          // Core 已准入的文件使用预检校验过的精确 RPC 请求体。
+          let attachment = stage ? await stage(file) : await args.onStageAttachmentBytes(args.projectId, args.conversationId, file);
+          if (stagingGeneration !== stagingGenerationRef.current) return [];
+          if (attachment) {
+            const previewFile = await createComposerImagePreviewFile(file);
+            if (stagingGeneration !== stagingGenerationRef.current) return [];
+            if (previewFile && attachment.assetId) {
+              try {
+                // previewLocalPath points at a sidecar of the canonical asset and never creates a second attachment index record.
+                // previewLocalPath 指向规范资产的旁路文件，绝不会创建第二条附件索引记录。
+                const previewLocalPath = await stageComposerAttachmentPreviewBytes(
+                  args.projectId,
+                  args.conversationId,
+                  attachment.assetId,
+                  previewFile,
+                );
+                attachment = { ...attachment, previewLocalPath };
+              } catch (error) {
+                if (stagingGeneration === stagingGenerationRef.current) toast.error(error instanceof Error ? error.message : String(error));
+              }
             }
+            staged.push(attachment);
           }
-          staged.push(attachment);
+        } catch (error) {
+          if (stagingGeneration === stagingGenerationRef.current) toast.error(error instanceof Error ? error.message : String(error));
         }
-      } catch (error) {
-        if (stagingGeneration === stagingGenerationRef.current) toast.error(error instanceof Error ? error.message : String(error));
       }
-    }
-    if (!staged.length) {
-      return;
-    }
-    if (stagingGeneration !== stagingGenerationRef.current) {
-      return;
-    }
-    setAttachments((current) => {
-      const seen = new Set(current.map((attachment) => `${attachment.localPath}\n${attachment.fileName}`));
-      const unique = staged.filter((attachment) => {
-        const key = `${attachment.localPath}\n${attachment.fileName}`;
-        if (seen.has(key)) {
-          return false;
-        }
-        seen.add(key);
-        return true;
+      if (!staged.length || stagingGeneration !== stagingGenerationRef.current) return [];
+      // Preserve the existing deduplication and expose which assets are actually present after installation.
+      // 保留既有去重，并返回安装后实际存在的资产。
+      setAttachments((current) => {
+        const seen = new Set(current.map((attachment) => `${attachment.localPath}\n${attachment.fileName}`));
+        const unique = staged.filter((attachment) => {
+          const key = `${attachment.localPath}\n${attachment.fileName}`;
+          if (seen.has(key)) {
+            return false;
+          }
+          seen.add(key);
+          return true;
+        });
+        return [...current, ...unique].slice(0, MAX_COMPOSER_ATTACHMENTS);
       });
-      return [...current, ...unique].slice(0, MAX_COMPOSER_ATTACHMENTS);
-    });
+      // A duplicate whose canonical identity is already installed also has a normal preview tile.
+      // 已安装同一规范身份的重复文件也已有正常预览块。
+      const installedIds = new Set(attachmentsRef.current.map(attachment => attachment.assetId));
+      return staged.filter(attachment => installedIds.has(attachment.assetId));
     } finally {
       if (stagingGeneration === stagingGenerationRef.current) {
         pendingStagingRef.current -= acceptedFiles.length;
@@ -242,6 +249,19 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     enabledAttachmentKinds,
     t,
   ]);
+
+  // Stages regular picker files using enabled kinds, returning when their draft update is queued.
+  // 按已启用类型暂存常规选取的文件，草稿更新排入队列后返回。
+  const stageComposerFiles = React.useCallback(async (files: File[], preferredKind?: string | null): Promise<void> => {
+    await stageFiles(files, preferredKind);
+  }, [stageFiles]);
+
+  // Stages only the given preflight positions and installs them through the same draft and preview pipeline.
+  // 仅暂存给定预检位置，并通过同一草稿和预览流程安装附件。
+  const stageApprovedComposerFiles = React.useCallback(
+    (files: File[], stage: (file: File) => Promise<ComposerAttachmentSummary>) => stageFiles(files, null, stage),
+    [stageFiles],
+  );
 
   // openAttachmentPicker opens the browser file picker with a kind-specific accept filter.
   // openAttachmentPicker 使用类型特定 accept 过滤器打开浏览器文件选择器。
@@ -259,28 +279,6 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       void stageComposerFiles(files, attachmentPickerKind);
     }
   }, [attachmentPickerKind, stageComposerFiles]);
-
-  // handleComposerPaste gives file and image clipboard payloads priority over plain text.
-  // handleComposerPaste 让文件与图片剪贴板载荷优先于普通文本处理。
-  const handleComposerPaste = React.useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const fileList = Array.from(event.clipboardData.files ?? []);
-    const itemFiles = Array.from(event.clipboardData.items ?? [])
-      .map((item) => item.kind === "file" ? item.getAsFile() : null)
-      .filter((file): file is File => Boolean(file));
-    const files = fileList.length ? fileList : itemFiles;
-    if (!files.length) {
-      return;
-    }
-    const hasSupportedFile = files.some((file) => {
-      const kind = inferComposerAttachmentKindFromFile(file);
-      return Boolean(kind && enabledAttachmentKinds.has(kind));
-    });
-    if (!hasSupportedFile) {
-      return;
-    }
-    event.preventDefault();
-    void stageComposerFiles(files);
-  }, [enabledAttachmentKinds, stageComposerFiles]);
 
   // handleComposerDragOver highlights the composer only when dragged files are acceptable.
   // handleComposerDragOver 仅在拖入文件可接受时高亮输入区。
@@ -344,8 +342,8 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     attachmentInputAccept,
     openAttachmentPicker,
     handleAttachmentInputChange,
-    handleComposerPaste,
     stageComposerFiles,
+    stageApprovedComposerFiles,
     handleComposerDragOver,
     handleComposerDrop,
     removeComposerAttachment,

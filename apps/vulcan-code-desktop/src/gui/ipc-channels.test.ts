@@ -64,6 +64,9 @@ async function channelsUsedByBridge(): Promise<Set<string>> {
       exposeInMainWorld: (name: string, api: unknown) => exposed.set(name, api),
     },
     ipcRenderer,
+    // Supplies the local File metadata helper which has no IPC channel of its own.
+    // 提供没有独立 IPC 通道的本地 File 元数据助手。
+    webUtils: { getPathForFile: () => '' },
   };
   // The sandbox offers `electron` but no relative local modules; the stand-in refuses them too.
   // 沙箱提供 `electron` 但不提供相对本地模块；替身同样拒绝它们。

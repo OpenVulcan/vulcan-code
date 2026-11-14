@@ -1,7 +1,7 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import { ComposerSettingsHostContext } from "./composer-settings-host";
-import { composerAttachmentMedia } from "./composer-attachment-media";
+import { composerAttachmentMedia, inferComposerAttachmentKindFromFile } from "./composer-attachment-media";
 import { MediaPathContextMenu } from "@/components/media/media-path-context-menu";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
 import {
@@ -263,6 +263,9 @@ export function ComposerAttachmentStrip(props: {
   // Staged attachments shown in the strip.
   // 附件条中展示的已暂存附件。
   attachments: ComposerAttachmentSummary[];
+  // Local preview tiles without a staged asset, rendered in the same strip.
+  // 在同一附件栏渲染、尚无暂存资产的本地预览块。
+  localTiles?: React.ReactNode[];
   // Draft preparation states indexed by stable attachment identity.
   // 按稳定附件身份索引的草稿准备状态。
   preparations?: Readonly<Record<string, ComposerAttachmentPreparationSummary>>;
@@ -311,7 +314,7 @@ export function ComposerAttachmentStrip(props: {
     if (buttons && buttons.length > 0) buttons[Math.min(request.index, buttons.length - 1)].focus({ preventScroll: true });
     else if (props.attachments.length === 0) props.onEmptyAfterRemoval?.();
   }, [props.attachments, props.onEmptyAfterRemoval]);
-  if (props.attachments.length === 0) return null;
+  if (props.attachments.length === 0 && !props.localTiles?.length) return null;
   return (
     <div className="vk-attach" ref={strip}>
       {props.attachments.map((attachment, index) => {
@@ -425,6 +428,7 @@ export function ComposerAttachmentStrip(props: {
         </MediaPathContextMenu>
         );
       })}
+      {props.localTiles}
       {props.imageCompression && props.attachments.some((attachment) => attachment.kind === "image") ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -439,6 +443,61 @@ export function ComposerAttachmentStrip(props: {
           <TooltipContent className="vk-pick-tip" side="top">{t("composer.attachment.compressImagesHint")}</TooltipContent>
         </Tooltip>
       ) : null}
+    </div>
+  );
+}
+
+// Renders a captured file or path in the existing attachment box without creating an asset.
+// 在既有附件框中渲染捕获的文件或路径，不创建资产。
+export function ComposerLocalAttachmentTile(props: {
+  // Browser-owned original while eligibility or staging is pending.
+  // 判定或暂存期间由浏览器持有的原件。
+  file: File | null;
+  // A reference may still have a browser thumbnail even though it will only send its path.
+  // 引用可能有浏览器缩略图，但发送时仍仅发送路径。
+  pathOnly: boolean;
+  // File or folder display name and its optional original locator.
+  // 文件或目录的显示名称及其可选原始地址。
+  name: string;
+  reference: string | null;
+  // Removal waits for the current draft operation to settle.
+  // 当前草稿操作结束后才允许移除。
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  // The URL is scoped to this mounted tile and never enters the draft or the RPC payload.
+  // URL 仅限当前挂载的附件块，绝不进入草稿或 RPC 请求体。
+  const [image, setImage] = React.useState<string | null>(null);
+  React.useLayoutEffect(() => {
+    if (!props.file || inferComposerAttachmentKindFromFile(props.file) !== "image" || typeof URL.createObjectURL !== "function") {
+      setImage(null);
+      return;
+    }
+    // The original stays in the browser while the delivery route is being checked.
+    // 交付路线检查期间，原件仍保留在浏览器中。
+    const url = URL.createObjectURL(props.file);
+    setImage(url);
+    return () => URL.revokeObjectURL(url);
+  }, [props.file]);
+  // Resolve only existing attachment labels for the local preview.
+  // 本地预览仅使用现有附件文案。
+  const { t } = useI18n();
+  return (
+    <div className="vk-attach-tile" data-kind={image ? "image" : "file"} title={props.reference ?? props.name}>
+      {image ? <img alt={props.name} decoding="async" src={image} onError={() => setImage(null)} /> : (
+        <>
+          <FileText size={20} />
+          <span className="vk-attach-name">{props.name}</span>
+        </>
+      )}
+      {props.pathOnly && (
+        <ComposerAttachmentNotice fileName={props.name} failed={false}
+          error={props.reference ? null : t("composer.attachment.dropPathUnavailable")} />
+      )}
+      <button aria-label={`${t("composer.attachment.remove")} · ${props.name}`} className="vk-attach-remove"
+        disabled={props.disabled} onClick={props.onRemove} type="button">
+        <X size={12} />
+      </button>
     </div>
   );
 }

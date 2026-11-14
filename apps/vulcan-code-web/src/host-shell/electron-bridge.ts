@@ -258,6 +258,9 @@ interface ElectronDesktopApi {
   // desktop exposes window and notification actions through the isolated preload bridge.
   // desktop 通过隔离预加载桥暴露窗口与通知能力。
   desktop: ElectronDesktopBridge;
+  // Native clipboard paths belong to the owning workbench and may be absent on older shells.
+  // 原生剪贴板路径归所属工作台，较旧桌面壳可能没有此方法。
+  readClipboardFileReferences?: () => Promise<Array<{ path: string; name: string; directory: boolean }>>;
   // service resolves the exact ready Core selected by the GUI owner.
   // service 解析 GUI 所有者选中的精确就绪 Core。
   // restartForUpdate exists on preloads that can relaunch the client after an update restart.
@@ -401,6 +404,15 @@ export function readElectronDesktopBridge(): ElectronDesktopBridge | null {
     (name) => typeof desktop[name] === "function",
   ) && typeof desktop.nativeNotificationsAvailable === "boolean";
   return complete ? (api.desktop as ElectronDesktopBridge) : null;
+}
+
+// Returns the optional native file clipboard reader independently of window-management APIs.
+// 独立于窗口管理 API，返回可选的原生文件剪贴板读取方法。
+export function readElectronClipboardFileReferences():
+  (() => Promise<Array<{ path: string; name: string; directory: boolean }>>) | undefined {
+  if (typeof window === "undefined") return undefined;
+  const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
+  return typeof api?.readClipboardFileReferences === "function" ? api.readClipboardFileReferences : undefined;
 }
 
 // readElectronLocalBrowserBridge returns the complete temporary-browser bridge when Electron provides it.

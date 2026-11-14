@@ -8,7 +8,9 @@
 
 import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, shell } from 'electron';
 import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   SERVICE_CHANNELS,
@@ -431,6 +433,24 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     clipboard.writeText(value);
   });
   handle(CLIPBOARD_CHANNELS.paste, () => window.webContents.paste());
+  handle(CLIPBOARD_CHANNELS.readFileReferences, async () => {
+    // Read only native file references and metadata; directory contents and file bytes stay on disk.
+    // 内读取原生文件引用及元数据，目录内容与文件字节留在磁盘。
+    if (!await clipboard.has('text/uri-list')) return [];
+    const items = await clipboard.read();
+    const lists = await Promise.all(items.filter(item => item.types.includes('text/uri-list'))
+      .map(async item => {
+        const payload = await item.getType('text/uri-list');
+        if (!('text' in payload)) throw new TypeError('Native file references must be a URI list.');
+        return payload.text();
+      }));
+    const paths = lists.flatMap(list => list.split(/\r?\n/).filter(line => line.startsWith('file://')).map(uri => fileURLToPath(uri)));
+    return Promise.all(paths.map(async filePath => ({
+      path: filePath,
+      name: path.basename(filePath),
+      directory: await stat(filePath).then(info => info.isDirectory(), () => false),
+    })));
+  });
   handle(SERVICE_CHANNELS.connection, async () => {
     // Re-read the authoritative discovery path on reconnect; never search another user namespace.
     // 重连时重读权威发现路径，绝不搜索另一个用户命名空间。

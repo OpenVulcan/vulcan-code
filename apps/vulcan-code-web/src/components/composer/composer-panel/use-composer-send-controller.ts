@@ -317,7 +317,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
         accepted = await submitPrompt({
           draftSlotKey: submittedDraft.draftSlotKey,
           prompt: dropped?.prompt ?? prompt,
-          attachments: dropped ? [...submittedAttachments, ...dropped.attachments] : submittedAttachments,
+          attachments: dropped?.attachments ?? submittedAttachments,
           ...(dropped?.planId ? { droppedPlanId: dropped.planId } : {}),
           ...(sendMode === "insert" ? { insertIntoCurrentTurn: true } : {}),
           ...submissionSettings,
