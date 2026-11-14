@@ -96,6 +96,108 @@ async fn reasoning_recovery_draft_survives_reload_before_first_submission() {
         .unwrap();
     fixture.shutdown().await;
 }
+
+/// Verifies that an index retry across a cold load publishes the exact first recovery draft.
+/// 验证冷加载后的索引重试发布精确的首次恢复草稿。
+#[tokio::test]
+async fn reasoning_recovery_retries_sqlite_index_without_rebuilding_the_draft() {
+    use vulcan_workspace_store::{
+        local_database_runtime::LogicalDatabase, local_sql::execute_script_async,
+        workspace_store::ensure_session_v1_storage_schema,
+    };
+
+    let fixture = LifecycleStorageFixture::start().await;
+    let controller = &fixture.controller;
+    ensure_session_v1_storage_schema(controller).await.unwrap();
+    // Fail the actual SQLite insert, after the store's atomic directory publication.
+    // 让实际 SQLite 插入在存储层原子发布目录后失败。
+    execute_script_async(
+        &controller.local,
+        LogicalDatabase::AppState,
+        "CREATE TRIGGER fail_recovery_index BEFORE INSERT ON session_index_v1
+         BEGIN SELECT RAISE(ABORT, 'injected recovery index failure'); END;",
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    let session_id = SessionId::new_v4();
+    let project_id = "recovery-index-project";
+    let transcript = "User:\nOriginal question\n\nAssistant:\nOriginal answer";
+    let created_at_ms = 1_787_788_800_000;
+    let selection = vulcan_provider_adapters::ActiveAiModelSelection {
+        provider_id: "deepseek".into(),
+        model_id: "deepseek-flash".into(),
+        connection_id: "first-connection".into(),
+    };
+    let first_registry = SessionRuntimeRegistry::default();
+    let error = create_or_get_recovery_draft_session_v1(
+        controller,
+        &first_registry,
+        session_id,
+        std::future::ready(Ok(RecoveryDraftSessionV1 {
+            project_id: project_id.into(),
+            title: "First recovery".into(),
+            text: transcript.into(),
+            selection: selection.clone(),
+            now_ms: created_at_ms,
+        })),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("injected recovery index failure"), "{error}");
+    assert!(
+        locate_optional_session_v1_storage(controller, &session_id.to_string())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    execute_script_async(
+        &controller.local,
+        LogicalDatabase::AppState,
+        "DROP TRIGGER fail_recovery_index;",
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    drop(first_registry);
+    let reload_registry = SessionRuntimeRegistry::default();
+    // The source is deliberately unavailable on retry to prove the first tree is authoritative.
+    // 重试时特意让来源不可用，以证明首次目录树是权威。
+    let retry = create_or_get_recovery_draft_session_v1(
+        controller,
+        &reload_registry,
+        session_id,
+        std::future::ready(Err(
+            "Source unavailable after the first file publication.".into()
+        )),
+    )
+    .await
+    .unwrap();
+    assert_eq!(retry, session_id);
+    assert_eq!(
+        list_active_sessions_v1(controller, project_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let session = get_or_load_session_v1(controller, &reload_registry, retry)
+        .await
+        .unwrap();
+    session
+        .read(|document| {
+            assert_eq!(document.metadata.created_at_ms, created_at_ms);
+            assert_eq!(document.metadata.input_state.draft.text, transcript);
+            assert!(document.events().is_empty());
+        })
+        .unwrap();
+    let route = crate::session_request_config_v1::capture_next_request_config_v1(&session).unwrap();
+    assert_eq!(
+        route.connection_id.as_deref(),
+        Some(selection.connection_id.as_str())
+    );
+    fixture.shutdown().await;
+}
 use vulcan_agent_runtime::{
     attachment_asset_index::{
         AttachmentDraftMediaDelivery, AttachmentDraftMediaOrigin, acquire_staged_attachment_ref,

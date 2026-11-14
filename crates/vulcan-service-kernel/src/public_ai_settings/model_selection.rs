@@ -249,6 +249,9 @@ pub(crate) async fn service_select_public_ai_model(
         // 历史编码是 CPU 工作，因此与可靠读取一起放在阻塞工作线程。
         let replay_route = selected_model.route.clone();
         let replay_model_id = selected_model.model.id.clone();
+        // The resolved model includes any user-configured output cap used by dispatch.
+        // 已解析模型包含派发使用的用户自定义输出上限。
+        let model_output_limit = selected_model.model.capabilities.output_limit;
         let precheck = tokio::task::spawn_blocking(move || {
             let (snapshot, active_api_started_seq) =
                 projection_handle.capture_model_switch_projection()?;
@@ -257,6 +260,7 @@ pub(crate) async fn service_select_public_ai_model(
                 active_api_started_seq,
                 &replay_route,
                 &replay_model_id,
+                model_output_limit,
             )
         })
         .await

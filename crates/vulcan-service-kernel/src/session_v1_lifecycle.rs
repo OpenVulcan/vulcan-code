@@ -866,6 +866,16 @@ pub(crate) async fn create_or_get_recovery_draft_session_v1(
     {
         return Ok(session_id);
     }
+    // A published tree may already own the draft even if its SQLite insert failed.
+    // 即使 SQLite 插入失败，已发布目录树也可能已持有草稿。
+    if vulcan_workspace_store::workspace_store::resume_recovery_session_index_v1(
+        controller, session_id,
+    )
+    .await
+    .map_err(|error| error.to_string())?
+    {
+        return Ok(session_id);
+    }
     publish_recovery_draft_session_v1(controller, registry, session_id, build.await?)
         .await
         .map_err(|error| error.to_string())
@@ -911,7 +921,7 @@ async fn publish_recovery_draft_session_v1(
         SessionV1LifecycleError::MissingInitialFlushCandidate(session_id),
     )?;
     let date_bucket = session_v1_date_bucket(now_ms)?;
-    let created = create_indexed_session_v1(
+    let created = vulcan_workspace_store::workspace_store::create_indexed_recovery_session_v1(
         controller,
         &CreateSessionV1Request {
             cleaned_history: None,
@@ -923,6 +933,7 @@ async fn publish_recovery_draft_session_v1(
             compactions: &candidate.compactions,
             events: &candidate.tail_events,
         },
+        session_id,
     )
     .await?;
     document.apply_published_storage_metadata(&created.metadata)?;

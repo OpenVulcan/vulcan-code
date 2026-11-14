@@ -636,6 +636,48 @@ fn deepseek_anthropic_replays_signature_free_reasoning_as_native_thinking() {
     );
 }
 
+/// Verifies model-selection preflight can encode replay on the bundled DeepSeek Anthropic route.
+/// 验证模型选择预检可在内置 DeepSeek Anthropic 路由编码推理回放。
+#[test]
+fn deepseek_anthropic_selection_uses_the_effective_output_budget() {
+    let mut request = minimal_request();
+    request.model_id = "deepseek-flash".into();
+    request.messages.push(AiMessage {
+        role: vulcan_ai_contract::MessageRole::Assistant,
+        content: vec![ContentItem::Reasoning {
+            text: "Recorded reasoning".into(),
+            signature: None,
+        }],
+        provider_context_items: Vec::new(),
+    });
+    let route = deepseek_route(ANTHROPIC_MESSAGES_PROFILE_ID);
+    let effective_output_budget = request.output_token_limit.unwrap();
+    validate_reasoning_replay_for_selection(
+        &route,
+        &request.model_id,
+        effective_output_budget,
+        request.messages.clone(),
+    )
+    .expect("selection must accept replayable Anthropic history");
+    assert!(
+        validate_reasoning_replay_for_selection(
+            &route,
+            &request.model_id,
+            0,
+            request.messages.clone()
+        )
+        .is_err(),
+        "Anthropic preflight must validate the supplied output budget",
+    );
+    assert_eq!(
+        encoding_client()
+            .encode_request(&route, &request)
+            .unwrap()
+            .body["max_tokens"],
+        effective_output_budget,
+    );
+}
+
 /// Verifies an undeclared Anthropic route keeps its existing bridge projection byte for byte.
 /// 验证未声明的 Anthropic 路由逐字节保持其既有桥接投影。
 #[test]

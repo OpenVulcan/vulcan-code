@@ -58,7 +58,7 @@ pub(crate) const NO_ANSWER_COMPLETION_SUBCATEGORY: &str = "no_answer_completion"
 /// 返回值
 /// The default request budget capped by the model maximum when present.
 /// 返回默认请求预算；存在模型最大值时以其封顶。
-pub(crate) fn resolved_public_output_token_limit(model_limit: Option<u64>) -> u64 {
+pub fn resolved_public_output_token_limit(model_limit: Option<u64>) -> u64 {
     model_limit
         .map(|maximum| DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT.min(maximum))
         .unwrap_or(DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT)

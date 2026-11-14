@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createClientOwnedActionId,
   notificationClientInstanceId,
@@ -70,5 +70,51 @@ describe("client-owned action identity", () => {
     expect(resolveNotificationClientInstanceId(storage)).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
+  });
+
+  it("reuses the pending recovery action across reload until its exact acknowledgement", async () => {
+    // values retains browser session storage while the page module is recreated.
+    // values 在页面模块重新创建期间保留浏览器会话存储。
+    const values = new Map<string, string>();
+    // storage provides the same tab's data to both document lifetimes.
+    // storage 向两次文档生命周期提供同一个标签页的数据。
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    // scope identifies a blocked switch's source and exact target.
+    // scope 标识被阻止切换的来源和精确目标。
+    const scope = 'reasoning-recovery:["source","deepseek","account","deepseek-flash"]';
+    try {
+      vi.stubGlobal("sessionStorage", storage);
+      vi.spyOn(performance, "getEntriesByType").mockReturnValue([
+        { type: "navigate" } as PerformanceNavigationTiming,
+      ]);
+      vi.resetModules();
+      // first represents the original page before the recovery response is lost.
+      // first 表示恢复响应丢失之前的原页面。
+      const first = await import("@/notifications/client-identity");
+      // actionId is saved before the first recovery request.
+      // actionId 在首次恢复请求之前保存。
+      const actionId = first.retainClientOwnedRetryActionId(scope);
+      vi.mocked(performance.getEntriesByType).mockReturnValue([
+        { type: "reload" } as PerformanceNavigationTiming,
+      ]);
+      vi.resetModules();
+      // reloaded has a new module instance and restores the original tab owner.
+      // reloaded 是恢复原标签页所有者的新模块实例。
+      const reloaded = await import("@/notifications/client-identity");
+      expect(reloaded.retainClientOwnedRetryActionId(scope)).toBe(actionId);
+      expect(reloaded.retainClientOwnedRetryActionId(`${scope}:other-route`)).not.toBe(actionId);
+      reloaded.completeClientOwnedRetryAction(scope, reloaded.createClientOwnedActionId());
+      expect(reloaded.retainClientOwnedRetryActionId(scope)).toBe(actionId);
+      reloaded.completeClientOwnedRetryAction(scope, actionId);
+      expect(reloaded.retainClientOwnedRetryActionId(scope)).not.toBe(actionId);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
 });

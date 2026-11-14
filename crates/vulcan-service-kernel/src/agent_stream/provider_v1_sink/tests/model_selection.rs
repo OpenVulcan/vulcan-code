@@ -286,7 +286,13 @@ async fn rebuild_round_trip_request(
             .unwrap()
             .into(),
     );
-    precheck_projected_assistant_replay(&snapshot, None, &execution.route, &execution.model.id)?;
+    precheck_projected_assistant_replay(
+        &snapshot,
+        None,
+        &execution.route,
+        &execution.model.id,
+        execution.model.capabilities.output_limit,
+    )?;
 
     // The transport gate validates that the candidate, execution, and request facts share the same identity.
     // 传输闸门校验候选、执行和请求事实是否使用同一身份。
@@ -381,6 +387,7 @@ async fn model_switch_rejects_opaque_deepseek_reasoning_before_dispatch() {
             None,
             &execution.route,
             &execution.model.id,
+            execution.model.capabilities.output_limit,
         );
         if replayable {
             precheck.unwrap();

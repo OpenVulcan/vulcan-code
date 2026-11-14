@@ -50,7 +50,9 @@ use super::session_v1::writer::{
 
 mod index_probe;
 mod lifecycle_tree;
+mod recovery_creation;
 pub(super) use index_probe::inspect as inspect_workspace_session_rows;
+pub use recovery_creation::{create_indexed_recovery_session_v1, resume_recovery_session_index_v1};
 
 /// Fixed parent-owned directory containing every embedded task-session V1 tree.
 /// 保存全部内嵌任务会话 V1 目录树的固定父级目录。
@@ -1020,6 +1022,20 @@ pub async fn create_indexed_session_v1(
     ensure_session_index_v1_schema(host_runtime).await?;
     let row = create_index_row(request)?;
     validate_new_session_index_v1(host_runtime, &row).await?;
+    publish_indexed_session_creation(host_runtime, request, row).await
+}
+
+/// Publishes a validated creation row after the exact session tree has been written.
+/// 在精确会话目录树写入后发布已校验的创建索引行。
+/// The host owns the files and database; the request and row describe the same new session.
+/// 宿主持有文件和数据库；请求与索引行描述同一个新会话。
+/// Returns the published locator and metadata, or the storage or index failure.
+/// 返回已发布的定位器和元数据，或存储及索引错误。
+async fn publish_indexed_session_creation(
+    host_runtime: &HostRuntimeHandle,
+    request: &CreateSessionV1Request<'_>,
+    row: SessionIndexV1Row,
+) -> Result<CreatedSessionV1, SessionV1StoreError> {
     // The list kind mirrors the published metadata; dedicated profiles are frozen at creation.
     // 列表种类镜像已发布 metadata；专职配置在创建时冻结。
     let dedicated = request.metadata.dedicated.is_some();

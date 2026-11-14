@@ -33,6 +33,14 @@ function currentSessionStorage(): ClientIdentityStorage | null {
   }
 }
 
+// clientRetryStorageKey addresses one pending action under the exact tab or window owner.
+// clientRetryStorageKey 按精确的标签页或窗口所有者定位一项待重试操作。
+// scope identifies the operation and its immutable inputs; returns its sessionStorage key.
+// scope 标识操作及其不可变输入，返回对应的 sessionStorage 键。
+function clientRetryStorageKey(scope: string): string {
+  return `vulcan.action-retry.v1:${notificationClientInstanceId}:${scope}`;
+}
+
 // currentDocumentIsReload distinguishes a real reload from a new tab that copied sessionStorage.
 // currentDocumentIsReload 区分真正重载与复制了 sessionStorage 的新标签页。
 // Returns true only when the browser reports a reload navigation for this document.
@@ -93,4 +101,60 @@ export function createClientOwnedActionId(): string {
   // actionId 区分同一客户端实例发起的重试与独立动作。
   const actionId = globalThis.crypto.randomUUID();
   return `${CLIENT_ACTION_ID_PREFIX}:${notificationClientInstanceId}:${actionId}`;
+}
+
+// retainClientOwnedRetryActionId restores or persists the pending action for scope before dispatch.
+// retainClientOwnedRetryActionId 在派发前恢复或持久化 scope 对应的待重试操作。
+// Returns the exact pending identity, with in-memory retries still available when storage is disabled.
+// 返回精确的待重试身份，存储禁用时仍可在内存中重试。
+export function retainClientOwnedRetryActionId(scope: string): string {
+  // Use the same tab owner as notifications so a copied tab starts a separate operation.
+  // 使用与通知相同的标签页所有者，使复制出的标签页发起独立操作。
+  const storage = currentSessionStorage();
+  // key binds the action to its owner and exact inputs.
+  // key 将操作绑定到所有者和精确输入。
+  const key = clientRetryStorageKey(scope);
+  // prefix is the required owner portion of the generated identity.
+  // prefix 是生成身份必须具有的所有者前缀。
+  const prefix = `${CLIENT_ACTION_ID_PREFIX}:${notificationClientInstanceId}:`;
+  try {
+    // previous is valid only if this client owns the stored canonical UUID.
+    // previous 仅在当前客户端持有存储的规范 UUID 时有效。
+    const previous = storage?.getItem(key);
+    if (previous?.startsWith(prefix) && CANONICAL_UUID_PATTERN.test(previous.slice(prefix.length))) {
+      return previous;
+    }
+  } catch {
+    // An unavailable session store does not prevent the action from running.
+    // 会话存储不可访问时仍可执行操作。
+  }
+  // actionId is retained before the request can reach the server.
+  // actionId 在请求抵达服务端之前保存。
+  const actionId = createClientOwnedActionId();
+  try {
+    storage?.setItem(key, actionId);
+  } catch {
+    // The caller keeps this ID for retries during the current page load.
+    // 调用方保留该 ID，用于当前页面内重试。
+  }
+  return actionId;
+}
+
+// completeClientOwnedRetryAction removes the retained ID for the acknowledged operation.
+// completeClientOwnedRetryAction 移除已确认操作的保留 ID。
+// scope locates the pending action and actionId protects a newer action from stale acknowledgement.
+// scope 定位待重试操作，actionId 防止过期确认清除较新的操作。
+export function completeClientOwnedRetryAction(scope: string, actionId: string): void {
+  try {
+    // The same storage implementation and key own both the pending ID and its removal.
+    // 同一个存储实现和键同时管理待重试 ID 及其移除。
+    const storage = globalThis.sessionStorage;
+    // key identifies the acknowledged operation in the current client.
+    // key 标识当前客户端已确认的操作。
+    const key = clientRetryStorageKey(scope);
+    if (storage?.getItem(key) === actionId) storage.removeItem(key);
+  } catch {
+    // A storage failure does not change the server acknowledgement.
+    // 存储失败不影响服务端确认。
+  }
 }

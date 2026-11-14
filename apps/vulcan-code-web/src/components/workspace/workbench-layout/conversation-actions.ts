@@ -1,5 +1,5 @@
 import React from "react";
-import { createClientOwnedActionId } from "@/notifications/client-identity";
+import { completeClientOwnedRetryAction, createClientOwnedActionId, retainClientOwnedRetryActionId } from "@/notifications/client-identity";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
@@ -757,8 +757,8 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
       // recoveryKey scopes retries to the exact source session and target route.
       // recoveryKey 将重试限定到精确的来源会话与目标路由。
       const recoveryKey = JSON.stringify([conversationId, choice.providerId, choice.connectionId, choice.modelId]);
-      const recovery = recoveryActionsRef.current.get(recoveryKey) ?? { actionId: createClientOwnedActionId(), running: false };
-      recoveryActionsRef.current.set(recoveryKey, recovery);
+      // toastId scopes both the visible offer and the retained action to reasoning recovery.
+      // toastId 将可见提示和保留操作限定在推理恢复范围内。
       const toastId = `reasoning-recovery:${recoveryKey}`;
       toast(translate("conversationActions.reasoningReplayBlocked"), {
         id: toastId,
@@ -768,7 +768,12 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
           label: translate("conversationActions.reasoningRecoveryCreate"),
           onClick: (event) => {
             event.preventDefault();
+            // Resolve the ID only when the user starts recovery, before the first RPC.
+            // 仅当用户开始恢复时解析 ID，并在第一次 RPC 前完成。
+            const recovery = recoveryActionsRef.current.get(recoveryKey)
+              ?? { actionId: retainClientOwnedRetryActionId(toastId), running: false };
             if (recovery.running) return;
+            recoveryActionsRef.current.set(recoveryKey, recovery);
             recovery.running = true;
             void createReasoningRecoverySession({
               actionId: recovery.actionId,
@@ -785,6 +790,7 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
                 setDraftConversation(null);
                 setSelectedConversationId(sessionId);
               }
+              completeClientOwnedRetryAction(toastId, recovery.actionId);
               recoveryActionsRef.current.delete(recoveryKey);
               toast.dismiss(toastId);
             }).catch((error: unknown) => {

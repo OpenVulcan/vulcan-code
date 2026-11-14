@@ -33,11 +33,12 @@ use vulcan_llm_core::{
 
 /// Encodes the supplied replay history through the selected route without sending a request.
 /// 通过所选路由编码传入的回放历史，不发送请求。
-/// The model and messages describe the history probe; the result covers the route's replay contract.
-/// 模型和消息描述历史探测；返回值覆盖该路由的推理回放契约。
+/// The model, effective output budget, and messages describe the probe; the result covers the route's replay contract.
+/// 模型、有效输出预算和消息描述探测请求；返回值覆盖该路由的推理回放契约。
 pub fn validate_reasoning_replay_for_selection(
     route: &ProviderExecutionRoute,
     model_id: &str,
+    output_token_limit: u64,
     messages: Vec<AiMessage>,
 ) -> Result<(), ProviderExecutionFailure> {
     if route.reasoning_replay_contract().is_none()
@@ -73,7 +74,7 @@ pub fn validate_reasoning_replay_for_selection(
         reasoning_output: Default::default(),
         model_parameters: Default::default(),
         resources: Vec::new(),
-        output_token_limit: None,
+        output_token_limit: Some(output_token_limit),
     };
     let encoded = project_internal_baseline_for_provider(route, &request)?;
     project_provider_request(route, &request, encoded).map(|_| ())

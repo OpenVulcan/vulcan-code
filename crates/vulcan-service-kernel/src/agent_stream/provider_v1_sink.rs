@@ -1156,11 +1156,16 @@ fn projected_assistant_request(
 
 /// Checks the target model against the same assistant replay policy used to assemble physical requests.
 /// 使用组装物理请求时相同的助手回放策略检查目标模型。
+/// Uses the captured history and in-flight boundary with the target route, model ID, and effective model output limit.
+/// 使用捕获的历史和在途边界，以及目标路由、模型 ID 和模型的有效输出上限。
+/// Returns a controlled replay error if the target cannot encode the retained reasoning.
+/// 目标无法编码保留的推理时返回受控回放错误。
 pub(crate) fn precheck_projected_assistant_replay(
     snapshot: &SessionProviderProjectionSnapshot,
     active_api_started_seq: Option<Seq>,
     route: &vulcan_provider_adapters::execution::ProviderExecutionRoute,
     model_id: &str,
+    model_output_limit: Option<u64>,
 ) -> Result<(), SessionRuntimeError> {
     // The pending model takes effect at a later request boundary, after the running API can seal its envelope.
     // 待生效模型在后续请求边界生效，届时当前 API 可以先封口其封套。
@@ -1219,8 +1224,17 @@ pub(crate) fn precheck_projected_assistant_replay(
             _ => {}
         }
     }
+    // Use the same model cap and host budget as the next physical request.
+    // 使用与下一次物理请求相同的模型上限与宿主预算。
+    let output_token_limit =
+        vulcan_agent_runtime::agent_runtime::provider_transport_vulcan::resolved_public_output_token_limit(
+            model_output_limit,
+        );
     vulcan_provider_adapters::execution::validate_reasoning_replay_for_selection(
-        route, model_id, messages,
+        route,
+        model_id,
+        output_token_limit,
+        messages,
     )
     .map_err(|error| {
         if error.error.subcategory.as_deref()
