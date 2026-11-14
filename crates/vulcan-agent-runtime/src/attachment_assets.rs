@@ -809,7 +809,11 @@ fn stage_attachment_bytes_with_effective_mime_type(
 /// 返回值
 /// A lowercase concrete MIME type, the octet-stream fallback for empty input, or an explicit error.
 /// 返回小写具体 MIME 类型、空输入对应的八位流回退，或一个明确错误。
-fn normalize_generic_attachment_mime_type(mime_type: &str) -> Result<String, String> {
+/// Normalizes browser-supplied `mime_type` for staging or metadata-only admission.
+/// 为暂存或仅元数据准入规范化浏览器提供的 `mime_type`。
+/// Returns the canonical MIME string or an error for invalid metadata.
+/// 返回规范 MIME 字符串，元数据无效时返回错误。
+pub fn normalize_generic_attachment_mime_type(mime_type: &str) -> Result<String, String> {
     let normalized = mime_type.trim().to_ascii_lowercase();
     if normalized.is_empty() {
         return Ok(String::from("application/octet-stream"));

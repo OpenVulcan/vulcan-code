@@ -10,6 +10,7 @@ use vulcan_agent_runtime::attachment_asset_index::{
     AttachmentDraftMediaDelivery, AttachmentDraftMediaOrigin,
 };
 use vulcan_ai_contract::ResourceKind;
+use vulcan_core::types::ConversationAttachmentKind;
 use vulcan_provider_adapters::{
     MediaDeliveryDecision, MediaDeliveryOrigin, MediaDeliveryPlanner, MediaDeliveryPolicy,
     MediaDeliveryPurpose, MediaDeliveryTarget, ResolvedPublicAiExecution,
@@ -338,15 +339,30 @@ impl ComposerMediaDeliveryPlanner {
                 "attachment_size_is_unknown",
             ));
         };
-        // The canonical attachment kind remains unchanged even when its target cannot consume it.
-        // 即使目标不能消费，规范附件类型也保持不变。
-        let kind = attachment_kind(attachment.kind.clone());
+        self.plan_file(
+            execution,
+            attachment.kind.clone(),
+            &attachment.mime_type,
+            bytes,
+        )
+    }
+
+    /// Plans original file delivery from its canonical kind, MIME and raw size without requiring an asset.
+    /// 根据规范类别、MIME 和原始大小规划原文件交付，无需已存在的附件资产。
+    pub(super) fn plan_file(
+        &mut self,
+        execution: &ResolvedPublicAiExecution,
+        kind: ConversationAttachmentKind,
+        mime_type: &str,
+        bytes: u64,
+    ) -> Result<(ComposerAttachmentDeliveryPlan, &'static str), String> {
+        let kind = attachment_kind(kind);
         // The existing resolver distinguishes genuine upload interfaces from inline-only primitives.
         // 既有解析器区分真正上传接口和仅内联原语。
         let upload = execution.client.conversation_media_upload_contract(
             &execution.route,
             kind,
-            &attachment.mime_type,
+            mime_type,
         )?;
         // Model and protocol capabilities are frozen together; no global settings lookup is allowed here.
         // 模型与协议能力一起冻结；这里不允许查询全局设置。
@@ -361,7 +377,7 @@ impl ComposerMediaDeliveryPlanner {
                 .find(|constraint| constraint.resource_kind == kind),
             upload: upload.as_ref(),
         };
-        self.plan_target(&target, kind, &attachment.mime_type, bytes)
+        self.plan_target(&target, kind, mime_type, bytes)
     }
 
     /// Admits one verified `kind`/`mime`/`bytes` source against `target` and returns its batch-aware composer decision.

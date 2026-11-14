@@ -1388,6 +1388,7 @@
   "composer.attachment.extension": "Extensão",
   "composer.attachment.menu": "Anexos",
   "composer.attachment.empty": "Nenhum tipo de anexo disponível",
+  "composer.attachment.dropPathUnavailable": "Não é possível enviar este arquivo ao modelo selecionado. Informe o caminho real ou o link para referenciá-lo.",
   "composer.attachment.remove": "Remover anexo",
   "composer.attachment.processing": "Confirmando o recurso enviado",
   "composer.attachment.preparationBlocked": "{count} anexo(s) ainda está(ão) sendo preparado(s). Aguarde a conclusão antes de enviar.",

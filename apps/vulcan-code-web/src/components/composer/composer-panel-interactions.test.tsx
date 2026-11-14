@@ -9,6 +9,7 @@ import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinkin
 import { ComposerEnterSendSettingsSection } from "@/components/features/settings/composer-enter-send-settings";
 import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings";
 import type { ComposerAttachmentSummary, PendingPromptSummary, PublicAiSessionProviderToolSettings } from "@/types";
+import { classifyDroppedComposerFiles, stageDroppedComposerFile } from "@/service/conversation-actions-service";
 
 // transport replaces only external service boundaries; composer controls and all draft hooks remain real.
 // transport 仅替换外部服务边界；输入区控件和全部草稿 Hook 均使用真实实现。
@@ -22,6 +23,8 @@ vi.mock("@/service/settings-actions-service", () => ({
 }));
 vi.mock("@/service/conversation-actions-service", () => ({
   stageComposerAttachmentPreviewBytes: vi.fn(),
+  classifyDroppedComposerFiles: vi.fn(),
+  stageDroppedComposerFile: vi.fn(),
   cancelConversationSubmission: vi.fn().mockResolvedValue(undefined),
   discardComposerAttachmentPlans: vi.fn().mockResolvedValue(undefined),
   planComposerAttachments: vi.fn().mockResolvedValue([]),
@@ -85,6 +88,15 @@ async function mount(props: React.ComponentProps<typeof ComposerPanel>): Promise
   await act(async () => root.render(<ComposerPanel {...props} />));
 }
 
+// Drop Chromium-shaped file or URL data through the mounted composer.
+// 通过已挂载的输入区拖入 Chromium 形状的文件或 URL 数据。
+async function dragIntoComposer(files: File[], uri = ""): Promise<void> {
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { files, getData: () => uri } });
+  await act(async () => { host.querySelector("textarea")!.dispatchEvent(event); });
+  expect(event.defaultPrevented).toBe(true);
+}
+
 /** Dispatches the actual textarea key event without invoking internal callbacks.
  * 分派真实文本框键盘事件，不直接调用内部回调。
  * Parameter: init adds modifiers or composition state; returns the dispatched event for default-action assertions.
@@ -144,6 +156,60 @@ it("opens the same conversation history action from slash and the plus menu", as
   const history = document.querySelector<HTMLElement>('[role="menuitem"][data-action="clean-history"]')!;
   await act(async () => history.click());
   expect(setOpen.mock.calls).toEqual([[true], [true]]);
+});
+
+it("references unsupported CHM, restricted image and oversized video through the real drop handler", async () => {
+  const files = [
+    new File(["documentation"], "guide.chm", { type: "application/vnd.ms-htmlhelp" }),
+    new File(["image"], "drawing.gif", { type: "image/gif" }),
+    new File([new Uint8Array(2048)], "recording.mp4", { type: "video/mp4" }),
+  ];
+  vi.stubGlobal("vulcanDesktop", { localFile: { inspect: vi.fn(), pathForFile: (file: File) => `D:/Examples/${file.name}` } });
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue([false, false, false]);
+  const props = composerProps({ isConversationRunning: false });
+  await mount(props);
+  await dragIntoComposer(files);
+  expect(host.querySelector("textarea")?.value).toBe("D:/Examples/guide.chm\nD:/Examples/drawing.gif\nD:/Examples/recording.mp4");
+  expect(classifyDroppedComposerFiles).toHaveBeenCalledWith(props.conversationId, null, files);
+  expect(stageDroppedComposerFile).not.toHaveBeenCalled();
+  expect(props.onStageAttachmentBytes).not.toHaveBeenCalled();
+});
+
+it("inserts a dropped URL and asks for a path when an unsupported file has no native locator", async () => {
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValue([false]);
+  const feedback = vi.spyOn(toast, "info");
+  await mount(composerProps());
+  await dragIntoComposer([], "https://example.test/reference");
+  await dragIntoComposer([new File(["content"], "guide.chm")]);
+  expect(host.querySelector("textarea")?.value).toBe("https://example.test/reference");
+  expect(feedback).toHaveBeenCalledWith("composer.attachment.dropPathUnavailable");
+  expect(stageDroppedComposerFile).not.toHaveBeenCalled();
+});
+
+it("rechecks dropped files before staging and keeps rejected originals as references in the submitted prompt", async () => {
+  transport.loadSettings.mockResolvedValue(publicAiSettingsWithInvalidDefaultFixture());
+  const image = new File(["image"], "drawing.gif", { type: "image/gif" });
+  const video = new File(["video"], "recording.mp4", { type: "video/mp4" });
+  vi.stubGlobal("vulcanDesktop", { localFile: { inspect: vi.fn(), pathForFile: (file: File) => `D:/Examples/${file.name}` } });
+  vi.mocked(classifyDroppedComposerFiles).mockResolvedValueOnce([true, true]).mockResolvedValueOnce([false, true]);
+  const staged = { kind: "video", localPath: "/staged/recording.mp4", fileName: "recording.mp4", mimeType: "video/mp4", assetId: "video-asset" } satisfies ComposerAttachmentSummary;
+  vi.mocked(stageDroppedComposerFile).mockResolvedValueOnce(staged);
+  transport.loadSession.mockResolvedValue({
+    enabledCapabilities: [], selections: {}, extensionTargetSets: {}, extensionModes: {},
+    mediaUnderstandingSelections: {}, conflicts: [], requestsStarted: true,
+  } satisfies PublicAiSessionProviderToolSettings);
+  const props = composerProps({ isConversationRunning: false });
+  await mount(props);
+  await dragIntoComposer([image, video]);
+  expect(stageDroppedComposerFile).not.toHaveBeenCalled();
+  expect(host.textContent).toContain(video.name);
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="composer.aria.send"]')!.click(); });
+  expect(classifyDroppedComposerFiles).toHaveBeenCalledTimes(2);
+  expect(stageDroppedComposerFile).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(stageDroppedComposerFile).mock.calls[0]?.[4]).toBe(video);
+  expect(props.onSubmitPrompt).toHaveBeenCalledWith(expect.objectContaining({
+    prompt: "D:/Examples/drawing.gif", attachments: [staged],
+  }));
 });
 
 it("blocks Enter exactly like the disabled send button when capabilities are unavailable during a run", async () => {

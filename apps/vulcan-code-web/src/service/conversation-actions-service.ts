@@ -854,6 +854,34 @@ export async function stageComposerAttachmentBytes(
   });
 }
 
+// Return only the file facts that determine delivery eligibility.
+// 仅返回用于确定交付资格的文件信息。
+function droppedComposerFileFacts(file: File) {
+  return { fileName: file.name, mimeType: file.type, byteLen: file.size };
+}
+
+// Ask Core to classify dropped files in their current order without transferring their contents.
+// 请求 Core 按当前顺序判定拖入文件，不传递文件内容。
+export function classifyDroppedComposerFiles(
+  conversationId: string | null, modelSelection: ComposerModelSelectionSnapshot | null, files: File[],
+): Promise<boolean[]> {
+  return serviceClient.request("service_classify_dropped_composer_files", {
+    conversationId, modelSelection, files: files.map(droppedComposerFileFacts),
+  });
+}
+
+// Stage an eligible dropped file under its draft owner and recheck the route at the write boundary.
+// 以草稿所有者暂存符合条件的拖入文件，并在写入边界重新检查路线。
+export async function stageDroppedComposerFile(
+  projectId: string | null, conversationId: string | null, draftSlotKey: string,
+  modelSelection: ComposerModelSelectionSnapshot | null, file: File,
+): Promise<ComposerAttachmentSummary | null> {
+  return serviceClient.request("service_stage_dropped_composer_file", {
+    projectId, conversationId, draftSlotKey, modelSelection,
+    file: droppedComposerFileFacts(file), dataBase64: await blobToBase64(file),
+  });
+}
+
 // fetchModelAttachmentCapabilities reads the attachment gates of one exact model route; `bridged` is always false.
 // fetchModelAttachmentCapabilities 读取一条精确模型路线的附件门控；`bridged` 恒为 false。
 export async function fetchModelAttachmentCapabilities(

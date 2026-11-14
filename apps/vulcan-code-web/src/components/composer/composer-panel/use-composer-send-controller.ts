@@ -11,6 +11,7 @@ import {
   type ComposerDraftSubmissionSnapshot,
 } from "@/components/composer/composer-panel/use-composer-session-draft";
 import { useI18n } from "@/i18n";
+import { recordSentPrompt } from "./use-composer-prompt-recall";
 import type { ComposerAttachmentSummary } from "@/types";
 
 // ComposerSubmissionSettings contains runtime controls shared by ordinary and goal-created submissions.
@@ -23,6 +24,9 @@ type ComposerSubmissionSettings = Pick<
 // UseComposerSendControllerOptions defines draft state, runtime controls, and backend actions for sending.
 // UseComposerSendControllerOptions 定义发送所需的草稿状态、运行时控件与后端操作。
 export interface UseComposerSendControllerOptions {
+  // Groups successfully submitted prompts for project-scoped recall.
+  // 按项目归组已成功提交的提示词，供输入区召回。
+  promptRecallScope?: string;
   // Stable draft slot that owns generated-submission failure recovery.
   // 持有生成式提交失败恢复的稳定草稿槽。
   draftSlotKey: string;
@@ -55,6 +59,14 @@ export interface UseComposerSendControllerOptions {
   // Flushes pending provider/model configuration writes before submission.
   // 在提交前刷新仍在进行的供应商/模型配置写入。
   beforeSubmit?: () => Promise<boolean>;
+  // Revalidate dropped originals before staging them for this one submission.
+  // 为本次提交暂存拖入原文件之前，重新验证这些文件。
+  droppedFiles?: {
+    count: number;
+    prepare: (prompt: string) => Promise<{
+      prompt: string; attachments: ComposerAttachmentSummary[]; complete: () => void; rollback: () => Promise<void>;
+    } | null>;
+  };
   // Whether the selected backend conversation currently has an active run.
   // 当前选中的后端会话是否存在活动运行。
   isConversationRunning: boolean;
@@ -114,6 +126,13 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   // t resolves stable composer error messages for the current locale.
   // t 为当前语言解析稳定的输入区错误消息。
   const { t } = useI18n();
+  // Record the exact prompt acknowledged by the workbench, including dropped path references.
+  // 记录工作台确认的实际提示词，包括拖入的路径引用。
+  const submitPrompt = React.useCallback(async (submission: ComposerSubmission) => {
+    const accepted = await options.onSubmitPrompt(submission);
+    if (accepted && options.promptRecallScope !== undefined) recordSentPrompt(options.promptRecallScope, submission.prompt);
+    return accepted;
+  }, [options.onSubmitPrompt, options.promptRecallScope]);
   // isSubmitting drives React-visible eligibility updates for goal auto submission.
   // isSubmitting 驱动目标自动提交资格的 React 可见更新。
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -227,7 +246,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     const prompt = options.draftInput.trim();
     // hasSubmittableContent includes either non-empty text or at least one staged attachment.
     // hasSubmittableContent 包含非空文本或至少一个已暂存附件。
-    const hasSubmittableContent = Boolean(prompt || options.attachments.length > 0);
+    const hasSubmittableContent = Boolean(prompt || options.attachments.length || options.droppedFiles?.count);
     options.onTrace?.("composer.send_or_stop", {
       isConversationRunning: options.isConversationRunning,
       hasSubmittableContent,
@@ -252,6 +271,20 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       if (options.beforeSubmit && !(await options.beforeSubmit())) {
         return;
       }
+      // Keep the originals available for retry if preparation or submission fails.
+      // 准备或提交失败时保留原始文件供重试。
+      let dropped: Awaited<ReturnType<NonNullable<UseComposerSendControllerOptions["droppedFiles"]>["prepare"]>> = null;
+      try {
+        if (options.droppedFiles?.count) {
+          dropped = await options.droppedFiles.prepare(prompt);
+          if (!dropped) return;
+        }
+      } catch (error) {
+        toast.error(t("composer.attachment.unsupported"), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
       // Freeze owner-local delivery decisions before clearing changes attachment preparation refs.
       // 在清空草稿改变附件准备 ref 前，冻结属于该所有者的传输决策。
       const submittedAttachments = options.projectAttachmentsForSubmission
@@ -266,6 +299,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       try {
         submittedDraft = await options.clearForSubmission();
       } catch (error) {
+        await dropped?.rollback();
         if (error instanceof ComposerDraftChangedBeforeSubmissionError) {
           toast.info(t("composer.error.draftChangedBeforeSubmission"));
         } else {
@@ -277,18 +311,25 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       }
       // sent records whether the workbench runtime accepted this complete submission.
       // sent 记录工作台运行时是否接受本次完整提交。
-      const sent = await options.onSubmitPrompt({
-        draftSlotKey: submittedDraft.draftSlotKey,
-        prompt,
-        attachments: submittedAttachments,
-        ...(sendMode === "insert" ? { insertIntoCurrentTurn: true } : {}),
-        ...submissionSettings,
-        sessionSettings: submittedSessionSettings,
-      });
-      if (!sent) {
-        options.restoreFailedSubmission(submittedDraft);
-      } else {
-        options.clearSessionSettings(submittedSessionSettings);
+      let accepted = false;
+      try {
+        accepted = await submitPrompt({
+          draftSlotKey: submittedDraft.draftSlotKey,
+          prompt: dropped?.prompt ?? prompt,
+          attachments: dropped ? [...submittedAttachments, ...dropped.attachments] : submittedAttachments,
+          ...(sendMode === "insert" ? { insertIntoCurrentTurn: true } : {}),
+          ...submissionSettings,
+          sessionSettings: submittedSessionSettings,
+        });
+        if (accepted) {
+          dropped?.complete();
+          options.clearSessionSettings(submittedSessionSettings);
+        }
+      } finally {
+        if (!accepted) {
+          options.restoreFailedSubmission(submittedDraft);
+          await dropped?.rollback();
+        }
       }
     } finally {
       finishSubmission();
@@ -302,13 +343,14 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     options.clearSessionSettings,
     options.clearForSubmission,
     options.draftInput,
+    options.droppedFiles,
     options.isConversationRunning,
-    options.onSubmitPrompt,
     options.onTrace,
     options.projectAttachmentsForSubmission,
     options.restoreFailedSubmission,
     requestStop,
     submissionSettings,
+    submitPrompt,
     t,
   ]);
   // stopConversation stops the active backend run while retaining every draft field.
@@ -343,7 +385,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       const submittedSessionSettings = options.captureSessionSettings();
       // sent records whether the workbench runtime accepted the generated first turn.
       // sent 记录工作台运行时是否接受生成的首轮。
-      const sent = await options.onSubmitPrompt({
+      const sent = await submitPrompt({
         draftSlotKey: submissionDraftSlotKey,
         prompt: objective,
         attachments: [],
@@ -366,9 +408,9 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     options.beforeSubmit,
     options.captureSessionSettings,
     options.clearSessionSettings,
-    options.onSubmitPrompt,
     options.restoreInputToSlot,
     submissionSettings,
+    submitPrompt,
     submissionVersionAtRender,
   ]);
 

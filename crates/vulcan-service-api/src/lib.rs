@@ -19,6 +19,10 @@ use time::OffsetDateTime;
 /// 单个有界媒体 Range 响应返回的最大字节数。
 pub const SERVICE_MEDIA_RANGE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
+/// Maximum JSON request length accepted by the browser service RPC endpoint.
+/// 浏览器服务 RPC 端点接受的最大 JSON 请求长度。
+pub const WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Redacted secret placeholder returned through browser-facing HTTP snapshots.
 /// 通过浏览器侧 HTTP 快照返回的敏感信息脱敏占位符。
 pub const WEBUI_REDACTED_SECRET_PLACEHOLDER: &str = "********";

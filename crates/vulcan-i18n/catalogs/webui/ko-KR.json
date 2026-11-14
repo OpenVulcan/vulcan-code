@@ -1388,6 +1388,7 @@
   "composer.attachment.extension": "확장",
   "composer.attachment.menu": "첨부 파일",
   "composer.attachment.empty": "사용할 수 있는 첨부 파일 유형이 없습니다",
+  "composer.attachment.dropPathUnavailable": "선택한 모델에 이 파일을 보낼 수 없습니다. 파일을 참조하려면 실제 경로나 링크를 입력하세요.",
   "composer.attachment.remove": "첨부 파일 제거",
   "composer.attachment.processing": "업로드된 리소스를 확인하는 중",
   "composer.attachment.preparationBlocked": "첨부 파일 {count}개를 아직 준비하는 중입니다. 완료된 후 보내세요.",

@@ -64,8 +64,8 @@ import { useComposerModelSelection } from "@/components/composer/composer-panel/
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
 import { useComposerShortcutHint } from "@/components/composer/composer-panel/use-composer-shortcut-hint";
 import { useComposerTypingRedirect } from "@/components/composer/composer-panel/use-composer-typing-redirect";
-import { recordSentPrompt } from "@/components/composer/composer-panel/use-composer-prompt-recall";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
+import { useComposerDroppedFiles } from "@/components/composer/composer-panel/use-composer-dropped-files";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-answer-mode";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
@@ -300,8 +300,6 @@ export function ComposerPanel(props: {
     handleAttachmentInputChange,
     handleComposerPaste,
     stageComposerFiles,
-    handleComposerDragOver,
-    handleComposerDrop,
     removeComposerAttachment,
     clearForSubmission,
     restoreFailedSubmission,
@@ -542,20 +540,15 @@ export function ComposerPanel(props: {
       }
     }
   }, [flushSecondaryRouteSelection]);
+  // Keep drag admission and original file handles separate from the managed attachment draft.
+  // 将拖入准入和原始文件句柄与托管附件草稿分开。
+  const droppedFiles = useComposerDroppedFiles({
+    draftSlotKey, projectId: props.projectId, conversationId: props.conversationId, modelSelection: activeModelSelection,
+    attachments, routeRevision: routePlanningRevision, setDraftInput, setDragOver: setIsAttachmentDragOver, flushRoute: flushComposerRouteSelections,
+  });
   // Keep shortcuts visible in the placeholder or the note under a populated running draft.
   // 在占位提示或运行中已有内容的草稿下方显示快捷键。
   const { placeholder, note: shortcutNote } = useComposerShortcutHint(props.isConversationRunning, draftInput.length > 0, t);
-  // promptRecallScope groups recalled prompts by project; drafts outside any project share one scope.
-  // promptRecallScope 按项目归组召回的提示词；不属于任何项目的草稿共用一个范围。
-  const promptRecallScope = props.projectId ?? "";
-  const { onSubmitPrompt } = props;
-  // submitPrompt records each prompt the service accepted, so ArrowUp can bring it back.
-  // submitPrompt 记录服务接受的每条提示词，使 ArrowUp 能将其取回。
-  const submitPrompt = React.useCallback(async (submission: ComposerSubmission) => {
-    const accepted = await onSubmitPrompt(submission);
-    if (accepted) recordSentPrompt(promptRecallScope, submission.prompt);
-    return accepted;
-  }, [onSubmitPrompt, promptRecallScope]);
   // Send controller owns duplicate gating, stop routing, draft consumption, and failure recovery.
   // 发送控制器管理重复门控、停止路由、草稿消费与失败恢复。
   const {
@@ -569,6 +562,7 @@ export function ComposerPanel(props: {
     draftInput,
     attachments,
     projectAttachmentsForSubmission: attachmentPreparation.projectForSubmission,
+    droppedFiles,
     executionMode,
     reasoningEffort: null,
     modelSelection: submittedModelSelection,
@@ -580,7 +574,7 @@ export function ComposerPanel(props: {
     clearForSubmission,
     restoreFailedSubmission,
     restoreInputToSlot,
-    onSubmitPrompt: submitPrompt,
+    onSubmitPrompt: props.onSubmitPrompt, promptRecallScope: props.projectId ?? "",
     onStopConversationRun: props.onStopConversationRun,
     onTrace: props.onTrace,
   });
@@ -594,12 +588,12 @@ export function ComposerPanel(props: {
   const handleComposerSend = React.useCallback(async (sendMode: ComposerSendMode = "queue", allowStop = true) => {
     // Match the toolbar's stop action: unsent staging and draft replacement must not block stopping a running turn.
     // 与工具栏的停止操作保持一致：未完成的暂存和草稿替换不得阻止停止运行中的轮次。
-    if (props.isConversationRunning && !draftInput.trim() && attachments.length === 0) {
+    if (props.isConversationRunning && !draftInput.trim() && attachments.length === 0 && !droppedFiles.count) {
       if (allowStop) await sendDraft();
       return;
     }
     if (pendingPromptEditRef.current) return;
-    if (hasPendingAttachmentStaging()) {
+    if (hasPendingAttachmentStaging() || droppedFiles.checking) {
       toast.info(t("composer.attachment.stagingPending"));
       return;
     }
@@ -610,6 +604,8 @@ export function ComposerPanel(props: {
     attachments.length,
     admitAttachments,
     draftInput,
+    droppedFiles.checking,
+    droppedFiles.count,
     props.isConversationRunning,
     providerToolSettingsBlocked,
     sendDraft,
@@ -768,7 +764,7 @@ export function ComposerPanel(props: {
 
   const { pathMention, handleKeyDown: handleTextareaKeyDown, listboxIds, textareaListbox } = useComposerTextareaKeys({
     input: draftInput, setInput: setDraftInput, textareaRef: composerTextareaRef,
-    recallScope: promptRecallScope, slotKey: draftSlotKey,
+    recallScope: props.projectId ?? "", slotKey: draftSlotKey,
     workspacePath: props.workspacePath ?? null, projectId: props.projectId, conversationId: props.conversationId,
     slashPanelVisible, slashActiveIndex: Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1), onKeyDown: handleComposerKeyDown,
   });
@@ -808,8 +804,8 @@ export function ComposerPanel(props: {
         className="vk-composer" data-drag-over={isAttachmentDragOver ? "" : undefined}
         data-workspace-input-owner="composer"
         onDragLeave={() => setIsAttachmentDragOver(false)}
-        onDragOver={isPendingPromptEditing ? undefined : handleComposerDragOver}
-        onDrop={isPendingPromptEditing ? undefined : handleComposerDrop}
+        onDragOver={isPendingPromptEditing ? undefined : droppedFiles.dragOver}
+        onDrop={isPendingPromptEditing ? undefined : event => void droppedFiles.drop(event)}
         onKeyDownCapture={handleComposerContainerKeyDown}
       >
         <input
@@ -835,6 +831,7 @@ export function ComposerPanel(props: {
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           compression={attachmentPreparation.compression}
         />
+        {droppedFiles.preview}
         {slashPanelVisible && !isPendingPromptEditing ? (
           <ComposerSlashCommandPanel
             id={listboxIds.slash}
@@ -935,7 +932,7 @@ export function ComposerPanel(props: {
             ) : null}
           </div>
           <ComposerPanelToolbarRight
-            attachmentCount={attachments.length}
+            attachmentCount={attachments.length + droppedFiles.count}
             contextUsage={props.contextUsage}
             draftSlotKey={draftSlotKey}
             sessionProviderUsage={props.sessionProviderUsage}
@@ -943,7 +940,7 @@ export function ComposerPanel(props: {
             modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
-            sendBlocked={isPendingPromptEditing || pendingAttachmentCount > 0 || providerToolSettingsBlocked || voice.busy || attachmentPreparation.blocksSubmission}
+            sendBlocked={isPendingPromptEditing || pendingAttachmentCount > 0 || droppedFiles.checking || providerToolSettingsBlocked || voice.busy || attachmentPreparation.blocksSubmission}
             voiceInputControl={voice.control}
             stopPending={isStopping}
             onSend={() => void handleComposerSend()}

@@ -1388,6 +1388,7 @@
   "composer.attachment.extension": "Erweiterung",
   "composer.attachment.menu": "Anhänge",
   "composer.attachment.empty": "Keine Anhangstypen verfügbar",
+  "composer.attachment.dropPathUnavailable": "Diese Datei kann nicht an das ausgewählte Modell gesendet werden. Fügen Sie zur Referenz den tatsächlichen Pfad oder Link ein.",
   "composer.attachment.remove": "Anhang entfernen",
   "composer.attachment.processing": "Hochgeladene Ressource wird bestätigt",
   "composer.attachment.preparationBlocked": "{count} Anhang/Anhänge werden noch vorbereitet. Warte, bis sie fertig sind, bevor du sendest.",

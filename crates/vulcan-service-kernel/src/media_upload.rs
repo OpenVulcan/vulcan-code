@@ -23,6 +23,8 @@ use vulcan_workbench_model::SessionMediaReferenceScope;
 
 mod composer_policy;
 mod draft_execution;
+mod dropped_files;
+pub(crate) use dropped_files::{classify_dropped_composer_files, stage_dropped_composer_file};
 mod image_conversion;
 #[cfg(test)]
 pub(crate) use image_conversion::exercise_composer_image_conversion;

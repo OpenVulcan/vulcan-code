@@ -36,13 +36,13 @@ use uuid::Uuid;
 use vulcan_service_api::{
     ConversationEventLiveDeltaAccumulatorV1, ServiceEvent, ServiceEventSink, ServiceMediaResponse,
     ServiceStaticResponse, ServiceStatusSnapshot, SessionResourceContentV1Request,
-    WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest, WebuiServiceSettings,
-    build_service_media_file_response, build_webui_static_response, service_media_error_response,
-    service_media_path_from_encoded_route_segment, webui_service_discovery_snapshot_path,
-    webui_service_http_bind_ports, webui_service_origin_text_is_allowed,
-    webui_service_request_token_values_are_valid, webui_service_required_origin_text_is_allowed,
-    webui_service_rpc_error_envelope, webui_service_rpc_failure_envelope,
-    webui_service_rpc_success_envelope,
+    WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES, WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest,
+    WebuiServiceSettings, build_service_media_file_response, build_webui_static_response,
+    service_media_error_response, service_media_path_from_encoded_route_segment,
+    webui_service_discovery_snapshot_path, webui_service_http_bind_ports,
+    webui_service_origin_text_is_allowed, webui_service_request_token_values_are_valid,
+    webui_service_required_origin_text_is_allowed, webui_service_rpc_error_envelope,
+    webui_service_rpc_failure_envelope, webui_service_rpc_success_envelope,
 };
 
 /// Boxed asynchronous result returned by a browser-facing RPC dispatcher.
@@ -138,10 +138,6 @@ pub struct WebuiServiceBrowserStream {
 /// Shared service discovery snapshot used by health checks while readiness changes.
 /// 健康检查在就绪状态变化时使用的共享服务发现快照。
 pub type SharedWebuiServiceDiscoverySnapshot = Arc<Mutex<WebuiServiceDiscoverySnapshot>>;
-
-/// Maximum JSON body size accepted by the browser-facing RPC endpoint.
-/// 浏览器侧 RPC 端点允许接收的最大 JSON 请求体大小。
-const WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Maximum JSON-RPC body accepted by the MCP endpoint; tool arguments are small JSON documents.
 /// MCP 端点允许接收的最大 JSON-RPC 请求体；工具参数都是小型 JSON 文档。

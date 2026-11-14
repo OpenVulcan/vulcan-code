@@ -1388,6 +1388,7 @@
   "composer.attachment.extension": "Расширение",
   "composer.attachment.menu": "Вложения",
   "composer.attachment.empty": "Нет доступных типов вложений",
+  "composer.attachment.dropPathUnavailable": "Этот файл нельзя отправить выбранной модели. Для ссылки на него укажите фактический путь или ссылку.",
   "composer.attachment.remove": "Удалить вложение",
   "composer.attachment.processing": "Подтверждение загруженного ресурса",
   "composer.attachment.preparationBlocked": "Вложений ещё готовится: {count}. Дождитесь завершения перед отправкой.",

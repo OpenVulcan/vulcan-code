@@ -1388,6 +1388,7 @@
   "composer.attachment.extension": "Extension",
   "composer.attachment.menu": "Attachments",
   "composer.attachment.empty": "No attachment types are available",
+  "composer.attachment.dropPathUnavailable": "This file cannot be sent to the selected model. Drop or paste its actual path or link to reference it.",
   "composer.attachment.remove": "Remove attachment",
   "composer.attachment.processing": "Confirming uploaded resource",
   "composer.attachment.preparationBlocked": "{count} attachment(s) are still being prepared. Wait for completion before sending.",

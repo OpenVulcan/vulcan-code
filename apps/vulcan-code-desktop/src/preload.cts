@@ -7,7 +7,7 @@
 // 渲染进程绝不接收原始 ipcRenderer 对象。每个方法返回 Promise，每个订阅返回自身的取消订阅函数，
 // 因此 WebUI 不会跨组件生命周期泄漏监听器。
 
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 
 // Channel names are inlined because a sandboxed preload cannot require a relative local module:
 // only the `electron` module and a small set of Node built-ins are available there. The shared
@@ -228,6 +228,9 @@ const localBrowser = {
 // localFile passes one absolute path per call; the main process decides what the OS may do with it.
 // localFile 每次调用传递一个绝对路径；由主进程决定操作系统可对其执行的操作。
 const localFile = {
+  // Resolve the OS path of a user-provided native File without reading its contents.
+  // 解析用户提供的原生 File 对象的操作系统路径，无需读取文件内容。
+  pathForFile: (file: File): string => webUtils.getPathForFile(file),
   // inspect resolves with whether the path exists and whether its default program may open it.
   // inspect 返回路径是否存在，以及能否交给默认程序打开。
   inspect: (filePath: string): Promise<unknown> => ipcRenderer.invoke(LOCAL_FILE_CHANNELS.inspect, filePath),

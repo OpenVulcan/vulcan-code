@@ -10,6 +10,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_continue_conversation",
     "service_cancel_conversation_submission",
     "service_plan_composer_attachments",
+    "service_classify_dropped_composer_files",
+    "service_stage_dropped_composer_file",
     "service_discard_composer_attachment_plans",
     "service_prepare_composer_attachment",
     "service_model_attachment_capabilities",
@@ -203,6 +205,32 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "attachments")?,
                 rpc_optional_param(params, "retryUploads")?.unwrap_or(false),
                 rpc_required_param(params, "compressImages")?,
+            )
+            .await,
+        ),
+        "service_classify_dropped_composer_files" => {
+            // Decode only file descriptors so route preflight never consumes uploaded bytes.
+            // 仅解析文件描述，确保路线预检不接收上传字节。
+            let files: Vec<_> = rpc_required_param(params, "files")?;
+            rpc_json_result(
+                classify_dropped_composer_files(
+                    &state,
+                    rpc_optional_param::<String>(params, "conversationId")?.as_deref(),
+                    rpc_optional_param(params, "modelSelection")?.as_ref(),
+                    &files,
+                )
+                .await,
+            )
+        }
+        "service_stage_dropped_composer_file" => rpc_json_result(
+            stage_dropped_composer_file(
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "draftSlotKey")?,
+                rpc_optional_param(params, "modelSelection")?,
+                rpc_required_param(params, "file")?,
+                rpc_required_param(params, "dataBase64")?,
             )
             .await,
         ),

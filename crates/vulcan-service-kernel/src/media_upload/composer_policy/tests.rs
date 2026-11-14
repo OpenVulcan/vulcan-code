@@ -22,6 +22,77 @@ fn target(upload: Option<&ConversationMediaUploadContract>) -> MediaDeliveryTarg
     }
 }
 
+/// Confirms drop preflight resolves the original format and uses target MIME and size limits.
+/// 验证拖入预检保留原始格式并执行目标 MIME 与大小限制。
+#[test]
+fn dropped_chm_image_and_video_follow_exact_route_constraints() -> Result<(), String> {
+    use super::super::dropped_files::test_file_descriptor;
+    // Only this route's documented MIME types and sizes may consume native input.
+    // 仅本路线声明的 MIME 类型和大小可消耗原生输入。
+    let cases = [
+        (
+            "guide.chm",
+            "application/vnd.ms-htmlhelp",
+            32,
+            ResourceKind::File,
+            "application/pdf",
+            1024,
+            false,
+        ),
+        (
+            "diagram.gif",
+            "image/gif",
+            32,
+            ResourceKind::Image,
+            "image/png",
+            1024,
+            false,
+        ),
+        (
+            "clip.mp4",
+            "video/mp4",
+            2049,
+            ResourceKind::Video,
+            "video/mp4",
+            2048,
+            false,
+        ),
+        (
+            "clip.mp4",
+            "video/mp4",
+            2048,
+            ResourceKind::Video,
+            "video/mp4",
+            2048,
+            true,
+        ),
+    ];
+    for (name, mime, bytes, kind, allowed_mime, limit, send) in cases {
+        let (descriptor_kind, mime) = test_file_descriptor(name, mime, bytes)?;
+        assert_eq!(attachment_kind(descriptor_kind), kind);
+        let constraint = vulcan_provider_adapters::InputResourceConstraint {
+            resource_kind: kind,
+            accepted_mime_types: vec![allowed_mime.into()],
+            max_bytes: Some(limit),
+            max_count: None,
+            reference_policy: Default::default(),
+            upload_channel_refs: Vec::new(),
+        };
+        let target = MediaDeliveryTarget {
+            constraint: Some(&constraint),
+            ..target(None)
+        };
+        let mut planner = ComposerMediaDeliveryPlanner::new(MediaDeliveryPolicy::default())?;
+        let (plan, _) = planner.plan_target(&target, kind, &mime, bytes)?;
+        assert_eq!(
+            plan != ComposerAttachmentDeliveryPlan::MetadataOnly,
+            send,
+            "{name}"
+        );
+    }
+    Ok(())
+}
+
 /// Builds one real URL-returning upload with a fixed hard size and native-count bound.
 /// 构建一个返回URL、固定硬大小及原生数量边界的真实上传。
 fn upload() -> ConversationMediaUploadContract {

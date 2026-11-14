@@ -238,6 +238,9 @@ export interface ElectronLocalFileInspection {
 // ElectronLocalFileBridge hands one absolute path to the OS; the main process rechecks every request.
 // ElectronLocalFileBridge 将单个绝对路径交给操作系统；主进程复核每个请求。
 export interface ElectronLocalFileBridge {
+  // Returns the native path for a user-provided File, or an empty string for an in-memory File.
+  // 返回用户提供的 File 的原生路径，内存 File 返回空字符串。
+  pathForFile?: (file: File) => string;
   // inspect resolves with the path's state.
   // inspect 返回路径状态。
   inspect: (path: string) => Promise<ElectronLocalFileInspection>;
