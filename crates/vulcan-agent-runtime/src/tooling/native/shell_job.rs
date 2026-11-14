@@ -150,6 +150,52 @@ struct ShellJobToolArgs {
     timeout_ms: Option<u64>,
 }
 
+/// Parses shell-job arguments and enforces the advertised bounds before touching any job.
+/// 解析 shell 任务参数，并在访问任务前执行已声明的参数边界。
+fn parse_shell_job_arguments(arguments: Value) -> Result<ShellJobToolArgs, NativeToolError> {
+    let args: ShellJobToolArgs = serde_json::from_value(arguments).map_err(|error| {
+        NativeToolError::new(format!("Failed to parse shell_job arguments: {error}"))
+    })?;
+    if args.start_line == Some(0) {
+        return Err(NativeToolError::new(
+            "The shell_job start_line must be at least 1.",
+        ));
+    }
+    if args
+        .max_lines
+        .is_some_and(|value| !(1..=SHELL_JOB_READ_MAX_LINES).contains(&value))
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job max_lines must be between 1 and {SHELL_JOB_READ_MAX_LINES}."
+        )));
+    }
+    if args
+        .max_matches
+        .is_some_and(|value| !(1..=SHELL_JOB_SEARCH_MAX_MATCHES).contains(&value))
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job max_matches must be between 1 and {SHELL_JOB_SEARCH_MAX_MATCHES}."
+        )));
+    }
+    if args
+        .context_lines
+        .is_some_and(|value| value > SHELL_JOB_SEARCH_MAX_CONTEXT_LINES)
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job context_lines must be at most {SHELL_JOB_SEARCH_MAX_CONTEXT_LINES}."
+        )));
+    }
+    if args
+        .timeout_ms
+        .is_some_and(|value| !(1..=SHELL_JOB_WAIT_MAX_MS).contains(&value))
+    {
+        return Err(NativeToolError::new(format!(
+            "The shell_job timeout_ms must be between 1 and {SHELL_JOB_WAIT_MAX_MS}."
+        )));
+    }
+    Ok(args)
+}
+
 /// Runs one `shell_job` call.
 /// 执行一次 `shell_job` 调用。
 async fn execute_shell_job_tool(
@@ -158,9 +204,7 @@ async fn execute_shell_job_tool(
     let owner = ShellCommandJobContext::of_request(&request)
         .owner_session_id()
         .to_string();
-    let args: ShellJobToolArgs = serde_json::from_value(request.arguments).map_err(|error| {
-        NativeToolError::new(format!("Failed to parse shell_job arguments: {error}"))
-    })?;
+    let args = parse_shell_job_arguments(request.arguments)?;
     let runtime = ShellJobRuntime::global();
     let jobs_dir = runtime.jobs_directory(&owner);
     let job_id = || {
@@ -216,10 +260,7 @@ async fn execute_shell_job_tool(
         "read" => {
             let job_id = job_id()?;
             let reader = open_reader(runtime, &owner, &jobs_dir, job_id)?;
-            let max_lines = args
-                .max_lines
-                .unwrap_or(SHELL_JOB_READ_DEFAULT_LINES)
-                .clamp(1, SHELL_JOB_READ_MAX_LINES);
+            let max_lines = args.max_lines.unwrap_or(SHELL_JOB_READ_DEFAULT_LINES);
             let text = match args.start_line {
                 None => {
                     let tail = reader
@@ -281,11 +322,8 @@ async fn execute_shell_job_tool(
                 .search(
                     &regex,
                     args.context_lines
-                        .unwrap_or(SHELL_JOB_SEARCH_DEFAULT_CONTEXT_LINES)
-                        .min(SHELL_JOB_SEARCH_MAX_CONTEXT_LINES),
-                    args.max_matches
-                        .unwrap_or(SHELL_JOB_SEARCH_MAX_MATCHES)
-                        .clamp(1, SHELL_JOB_SEARCH_MAX_MATCHES),
+                        .unwrap_or(SHELL_JOB_SEARCH_DEFAULT_CONTEXT_LINES),
+                    args.max_matches.unwrap_or(SHELL_JOB_SEARCH_MAX_MATCHES),
                     SHELL_OUTPUT_TAIL_BUDGET_BYTES,
                 )
                 .map_err(io_error)?;
@@ -311,10 +349,7 @@ async fn execute_shell_job_tool(
                     json!({ "action": "wait", "job_id": job_id, "running": false, "purpose": summary.purpose }),
                 ));
             };
-            let budget = args
-                .timeout_ms
-                .unwrap_or(SHELL_JOB_WAIT_DEFAULT_MS)
-                .clamp(1, SHELL_JOB_WAIT_MAX_MS);
+            let budget = args.timeout_ms.unwrap_or(SHELL_JOB_WAIT_DEFAULT_MS);
             let mut interjection = runtime.subscribe_interjection(&owner);
             let waited = job
                 .wait_interruptible(Some(Duration::from_millis(budget)), &mut interjection)
@@ -579,4 +614,35 @@ fn render_job_status(job: &ShellJobSummary) -> String {
         lines.push(String::from("Latest output: none yet"));
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that execution enforces the ranges advertised for job reads, searches, and waits.
+    /// 验证执行入口遵循任务读取、搜索和等待所声明的参数范围。
+    #[test]
+    fn shell_job_enforces_advertised_ranges() {
+        for arguments in [
+            json!({"action": "read", "start_line": 1, "max_lines": SHELL_JOB_READ_MAX_LINES}),
+            json!({"action": "search", "context_lines": 0, "max_matches": SHELL_JOB_SEARCH_MAX_MATCHES}),
+            json!({"action": "search", "context_lines": SHELL_JOB_SEARCH_MAX_CONTEXT_LINES}),
+            json!({"action": "wait", "timeout_ms": SHELL_JOB_WAIT_MAX_MS}),
+        ] {
+            assert!(parse_shell_job_arguments(arguments).is_ok());
+        }
+
+        for arguments in [
+            json!({"action": "read", "start_line": 0}),
+            json!({"action": "read", "max_lines": 0}),
+            json!({"action": "read", "max_lines": SHELL_JOB_READ_MAX_LINES + 1}),
+            json!({"action": "search", "context_lines": SHELL_JOB_SEARCH_MAX_CONTEXT_LINES + 1}),
+            json!({"action": "search", "max_matches": SHELL_JOB_SEARCH_MAX_MATCHES + 1}),
+            json!({"action": "wait", "timeout_ms": 0}),
+            json!({"action": "wait", "timeout_ms": SHELL_JOB_WAIT_MAX_MS + 1}),
+        ] {
+            assert!(parse_shell_job_arguments(arguments).is_err());
+        }
+    }
 }
