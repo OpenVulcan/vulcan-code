@@ -36,6 +36,7 @@ import {
   saveToolCollapseDefault,
 } from "@/service/settings-actions-service";
 import { BrowserServiceRpcError } from "@/service/browserTransport";
+import { selectConversation } from "@/service/project-actions-service";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import { modelContextWindowOffer, showModelContextWindowOffer } from "./model-context-window-offer";
 import {
@@ -783,13 +784,24 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
               modelId: choice.modelId,
               connectionId: choice.connectionId,
             }).then(async (sessionId) => {
-              // Refresh the indexed conversation before selecting it so the composer loads its saved draft.
-              // 先刷新索引会话再选中它，以便输入区加载已保存的草稿。
-              const snapshot = await loadWorkbenchSnapshot();
-              setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+              // Recovery publishes membership independently of navigation. The requesting view can select the new route.
+              // 恢复独立发布会话成员关系，发起恢复的界面可以选中新会话路由。
               if (selectedConversationIdRef.current === conversationId) {
-                setDraftConversation(null);
-                setSelectedConversationId(sessionId);
+                // Read the recovered route and controls through the normal selector.
+                // 通过普通会话选择接口读取恢复后的路由及控件。
+                const snapshot = await selectConversation(sessionId);
+                if (
+                  snapshot?.selectedConversationId === sessionId
+                  && selectedConversationIdRef.current === conversationId
+                  && (snapshot.revision ?? 0) >= (workbenchStateRef.current.revision ?? 0)
+                ) {
+                  setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot, {
+                    selectedConversationSource: "incoming",
+                    allowSameServiceRevision: true,
+                  }));
+                  setDraftConversation(null);
+                  setSelectedConversationId(sessionId);
+                }
               }
               completeClientOwnedRetryAction(toastId, recovery.actionId);
               recoveryActionsRef.current.delete(recoveryKey);

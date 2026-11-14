@@ -248,6 +248,12 @@ impl SessionV1StorageLocator {
         exact_metadata_file_exists(self)
     }
 
+    /// Returns whether this indexed session is archived according to its validated metadata.
+    /// 根据已校验元数据返回此索引会话是否已归档。
+    pub fn is_archived(&self) -> Result<bool, SessionV1StoreError> {
+        Ok(self.read_indexed_metadata()?.archived_at_ms.is_some())
+    }
+
     /// Reads only the exact metadata file, validating its contract and locator identity.
     /// 仅读取精确 metadata 文件，校验契约及定位器身份。
     /// Returns metadata without reading runtime, compactions, or interaction segments.

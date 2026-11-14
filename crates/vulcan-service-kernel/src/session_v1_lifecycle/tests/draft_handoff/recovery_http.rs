@@ -6,8 +6,8 @@ use std::{sync::Mutex, time::Duration};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::Notify, time::timeout};
 use vulcan_provider_adapters::{CredentialConnection, CredentialMode, PersistedAiConfiguration};
 use vulcan_service_api::{
-    ServiceEvent, ServiceEventEmitter, WebuiServiceRpcHttpResponse, WorkbenchSnapshot,
-    webui_service_ready_discovery_snapshot,
+    ProviderRetryStatusSnapshot, ServiceEvent, ServiceEventEmitter, WebuiServiceRpcHttpResponse,
+    WorkbenchDelta, WorkbenchSnapshot, webui_service_ready_discovery_snapshot,
 };
 use vulcan_service_host::{WebuiServiceHttpConfig, serve_webui_service_http_listener};
 
@@ -146,6 +146,9 @@ async fn verify_recovery_after_http_disconnect() {
         static_root: None,
         rpc_dispatcher: Arc::new({
             let (started, disconnected) = (started.clone(), disconnected.clone());
+            // Keep a test observer for later live events on the same service state and bridge.
+            // 保留测试观测者，以便在同一服务状态和桥接上发送后续实时事件。
+            let (state, emitter) = (state.clone(), emitter.clone());
             move |method, params| {
                 let state = state.clone();
                 let emitter = emitter.clone();
@@ -215,27 +218,87 @@ async fn verify_recovery_after_http_disconnect() {
 
         // The completed publisher notifies an already reconnected client and retains the same new session.
         // 完成发布的任务通知已重连的客户端，并保留同一个新会话。
-        let ServiceEvent::Workbench(updated) = updates.recv().await.unwrap() else {
-            panic!("expected the recovery workbench broadcast");
+        let ServiceEvent::WorkbenchDelta(updated) = updates.recv().await.unwrap() else {
+            panic!("expected a session-scoped recovery broadcast");
+        };
+        let WorkbenchDelta::ConversationSummaryChanged(recovered) = &updated.delta else {
+            panic!("expected the recovered conversation summary");
         };
         let after = reconnect_workbench(&client, &rpc_url, &token).await;
-        let source_id = source_id.to_string();
-        let recovered = after
-            .conversations
-            .iter()
-            .find(|session| session.id != source_id)
-            .expect("reconnected workbench contains the recovered session");
+        assert_ne!(recovered.conversation.id, source_id.to_string());
         assert_eq!(after.conversations.len(), 2);
         assert!(after.revision > before.revision);
+        assert_eq!(after.revision, updated.generation);
+        assert!(after.conversations.contains(&recovered.conversation));
         assert!(
-            updated
+            before
                 .conversations
                 .iter()
-                .any(|session| session.id == recovered.id)
+                .all(|row| after.conversations.contains(row))
         );
         assert_eq!(
-            after.selected_conversation_id.as_deref(),
-            Some(recovered.id.as_str())
+            after.selected_conversation_id,
+            before.selected_conversation_id
+        );
+        assert!(recovered.selected_conversation_id.is_none());
+
+        // Choosing the recovered draft uses the usual selector and publishes a contiguous generation.
+        // 打开恢复草稿走普通选择接口，并发布连续版本。
+        let selection: WebuiServiceRpcHttpResponse = client
+            .post(&rpc_url)
+            .header("x-vulcan-service-token", &token)
+            .json(
+                &serde_json::json!({ "method": "service_select_conversation", "params": {
+                    "conversationId": recovered.conversation.id,
+                }}),
+            )
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        // The caller receives the new focus; other clients only receive the ordered sidebar update.
+        // 调用方得到新焦点，其他客户端只接收有序侧栏更新。
+        let selected: WorkbenchSnapshot =
+            serde_json::from_value(selection.result.unwrap()).unwrap();
+        assert_eq!(
+            selected.selected_conversation_id.as_deref(),
+            Some(recovered.conversation.id.as_str())
+        );
+        let ServiceEvent::WorkbenchDelta(navigation) = updates.recv().await.unwrap() else {
+            panic!("expected an ordered navigation delta");
+        };
+        assert_eq!(navigation.generation, updated.generation + 1);
+        assert_eq!(navigation.generation, selected.revision);
+        assert!(
+            matches!(&navigation.delta, WorkbenchDelta::ConversationSummaryChanged(change)
+            if change.conversation.id == recovered.conversation.id && change.selected_conversation_id.is_none())
+        );
+
+        // A peer's next retry update follows navigation with no gap that could reload the workbench.
+        // 其他会话的下一条重试更新紧随导航，不出现会触发工作台重载的版本缺口。
+        crate::agent_stream::emit_provider_retry_status(
+            &emitter,
+            &state,
+            source_id,
+            Some(ProviderRetryStatusSnapshot {
+                attempt: 1,
+                max_retries: 3,
+                delay_ms: 4000,
+                reason: "fixture retry".into(),
+            }),
+        )
+        .unwrap();
+        let ServiceEvent::WorkbenchDelta(live) = updates.recv().await.unwrap() else {
+            panic!("expected a peer live delta");
+        };
+        assert_eq!(live.generation, navigation.generation + 1);
+        assert!(
+            matches!(&live.delta, WorkbenchDelta::ProviderRetryStatusChanged(retry)
+            if retry.conversation_id == source_id.to_string())
         );
     };
     tokio::select! {

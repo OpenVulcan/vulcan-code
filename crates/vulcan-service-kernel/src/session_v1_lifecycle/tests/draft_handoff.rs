@@ -16,6 +16,7 @@ use vulcan_workspace_store::{
 
 mod dropped_composer_http;
 mod recovery_http;
+mod recovery_workbench;
 
 /// The exact project inserted into each isolated recovery database.
 /// 写入每个隔离恢复数据库的精确项目。

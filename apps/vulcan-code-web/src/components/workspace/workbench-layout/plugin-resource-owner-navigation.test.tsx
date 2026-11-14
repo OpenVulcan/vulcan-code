@@ -148,6 +148,30 @@ it("opens chat only after exact service confirmation and sends only the original
   expect(serviceClient.request).toHaveBeenCalledWith("service_mark_conversation_read", { conversationId: "conversation-original" });
 });
 
+// Delivers the selection's own broadcast ahead of its HTTP reply through the real layout.
+// 通过真实布局先交付选择操作自身的广播，再交付 HTTP 响应。
+it("opens the exact diagnostic owner after its same-generation summary is already visible", async () => {
+  // Keep the owner's RPC pending until the matching delta has advanced the layout revision.
+  // 让所有者 RPC 继续等待，直到对应增量推进布局版本。
+  let finish!: (snapshot: WorkbenchSnapshot) => void;
+  vi.mocked(serviceClient.request).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  await click(readLocaleMessage("en-US", "pluginDiagnostics.locate"));
+  // The selection broadcast has the exact owner but no client navigation instruction.
+  // 选择广播包含精确所有者，但没有客户端导航指令。
+  const owner = workbench.conversations.find((row) => row.id === "conversation-original")!;
+  // The accompanying reply has the same service generation and supplies the selected route.
+  // 配套响应具有相同服务版本，并提供所选会话路由。
+  const revision = workbench.revision + 1;
+  await renderLayout({ seq: 1, envelopes: [{ generation: revision, delta: {
+    kind: "conversationSummaryChanged", payload: { conversation: owner },
+  } }] });
+  expect(consumed).toHaveBeenCalledWith(1);
+  expect(host.querySelector('[data-main-view="skills"]')).not.toBeNull();
+  await act(async () => finish({ ...workbench, revision, selectedConversationId: owner.id }));
+  expect(host.querySelector('[data-main-view="chat"]')).not.toBeNull();
+  expect(host.querySelector('[data-selected-owner]')?.getAttribute("data-selected-owner")).toBe(owner.id);
+});
+
 it("does not persist a read marker for an owner the selection reply already shows as read", async () => {
   vi.mocked(serviceClient.request).mockResolvedValueOnce({ ...workbench, revision: workbench.revision + 1, selectedConversationId: "conversation-original",
     conversations: workbench.conversations.map((conversation) => conversation.id === "conversation-original" ? { ...conversation, unread: false } : conversation) });

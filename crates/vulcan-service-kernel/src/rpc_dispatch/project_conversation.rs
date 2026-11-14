@@ -278,7 +278,8 @@ pub(super) async fn dispatch(
                 .await,
         ),
         "service_select_conversation" => rpc_json_result(
-            service_select_conversation(state, rpc_required_param(params, "conversationId")?).await,
+            service_select_conversation(app, state, rpc_required_param(params, "conversationId")?)
+                .await,
         ),
         "service_list_collaboration_grants" => rpc_json_result(
             service_list_collaboration_grants(

@@ -596,7 +596,12 @@ pub(crate) async fn service_mark_conversation_read(
 
 /// Selects one conversation in the retained WebUI workspace state.
 /// 在 WebUI 保留的工作区状态中选中一个会话。
+/// `app` publishes the retained generation, `state` owns the workspace, and `conversation_id` names the target.
+/// `app` 发布保留状态的版本，`state` 持有工作区，`conversation_id` 指定目标。
+/// Returns the workbench with the target's session controls and selection.
+/// 返回带有目标会话控件及选择的工作台。
 pub(crate) async fn service_select_conversation(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -664,9 +669,14 @@ pub(crate) async fn service_select_conversation(
             projection.apply(registry.as_ref(), &mut workspace.session_runtime_state)?;
         }
     }
-    if let Some(workbench) =
+    if let Some((workbench, envelope)) =
         select_conversation_in_retained_state(&state, session_id, &conversation_id)?
     {
+        emit_service_event_with_trace(
+            &app,
+            "workbench_selection_delta_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+        );
         return Ok(workbench);
     }
     // The full refresh resolves the same metadata owner, so release this navigation guard first.
@@ -686,18 +696,16 @@ pub(crate) async fn service_select_conversation(
 /// `session_id` 标识侧栏选中的会话。
 /// `conversation_id` is the string form returned to the WebUI snapshot.
 /// `conversation_id` 是返回给 WebUI 快照的字符串形式。
-/// `subagent_surface_preload` is an optional lock-free surface preload captured before selection.
-/// `subagent_surface_preload` 是选择前在锁外完成的可选界面预载结果。
 ///
 /// # Returns
 /// 返回值
-/// `Some(workbench)` when the retained workspace contains the session, or `None` when a full refresh is required.
-/// 当保留工作区包含该会话时返回 `Some(workbench)`；需要完整刷新时返回 `None`。
+/// Returns the retained workbench and its broadcast envelope, or `None` when a full refresh is required.
+/// 返回保留工作台及其广播增量；需要完整刷新时返回 `None`。
 fn select_conversation_in_retained_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     conversation_id: &str,
-) -> Result<Option<WorkbenchSnapshot>, String> {
+) -> Result<Option<(WorkbenchSnapshot, WorkbenchDeltaEnvelope)>, String> {
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -710,15 +718,19 @@ fn select_conversation_in_retained_state(
         .sessions
         .iter()
         .any(|session| session.id == session_id);
-    let workbench_contains_conversation = guard
+    // Keep the exact row available for a generation-contiguous broadcast to other views.
+    // 保留精确会话行，供其他界面接收连续版本的广播。
+    let conversation = guard
         .workbench
         .conversations
         .iter()
-        .any(|conversation| conversation.id == conversation_id);
-    if !workspace_contains_session || !workbench_contains_conversation {
+        .find(|conversation| conversation.id == conversation_id)
+        .filter(|_| workspace_contains_session)
+        .cloned();
+    let Some(conversation) = conversation else {
         guard.workspace_snapshot = Some(workspace_snapshot);
         return Ok(None);
-    }
+    };
 
     workspace_snapshot.selected_session = session_id;
     guard.active_subagent_panel = None;
@@ -771,7 +783,18 @@ fn select_conversation_in_retained_state(
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
-    Ok(Some(guard.workbench.clone()))
+    // The RPC caller owns navigation; other clients receive the generation without switching their selection.
+    // RPC 调用方拥有导航，其他客户端收到该版本但保持各自选择。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation: guard.workbench_generation,
+        delta: WorkbenchDelta::ConversationSummaryChanged(
+            vulcan_service_api::ConversationSummaryChangedDelta {
+                conversation,
+                selected_conversation_id: None,
+            },
+        ),
+    };
+    Ok(Some((guard.workbench.clone(), envelope)))
 }
 
 /// Reprojects selected-only workbench fields from retained per-conversation caches.

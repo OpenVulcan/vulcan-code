@@ -23,6 +23,9 @@ export interface WorkbenchMergeOptions {
   // Whether a confirmed service-instance change may reset monotonically increasing revisions.
   // 已确认服务实例切换时，是否允许重置单调递增的版本。
   allowServiceRevisionReset?: boolean;
+  // Allows a full RPC response to fill in fields after its same-generation sidebar delta was applied.
+  // 同版本侧栏增量已生效时，允许完整 RPC 响应补齐字段。
+  allowSameServiceRevision?: boolean;
   // Whether local project expansion should win over incoming snapshots.
   // 本地项目展开状态是否优先于传入快照。
   preserveExpandedProjectIds?: boolean;
@@ -95,6 +98,7 @@ export function mergeWorkbenchSnapshot(
   const incomingRevision = incoming.revision ?? 0;
   if (
     !options.allowServiceRevisionReset
+    && !(options.allowSameServiceRevision && incomingRevision === currentRevision)
     && !shouldAcceptWorkbenchRevision(currentRevision, incomingRevision)
   ) {
     return current;

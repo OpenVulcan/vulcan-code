@@ -138,6 +138,31 @@ pub(crate) async fn read_session_model_projection_v1(
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<SessionModelProjectionV1, String> {
+    read_session_model_projection(controller, registry, session_id, false).await
+}
+
+/// Reads `session_id` from `controller` under the `registry` lifecycle guard for active-only publication.
+/// 使用 `controller` 在 `registry` 生命周期守卫下读取 `session_id`，用于仅活动会话的发布。
+/// Returns the guarded projection or an error if the session is archived or unavailable.
+/// 返回带守卫的投影；会话已归档或不可用时返回错误。
+pub(crate) async fn read_active_session_model_projection_v1(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+) -> Result<SessionModelProjectionV1, String> {
+    read_session_model_projection(controller, registry, session_id, true).await
+}
+
+/// Resolves `session_id` using `controller` and `registry`, rejecting archived metadata when `require_active` is set.
+/// 用 `controller` 和 `registry` 解析 `session_id`，设置 `require_active` 时拒绝已归档元数据。
+/// Returns the metadata projection with the lifecycle guard still held.
+/// 返回元数据投影并继续持有生命周期守卫。
+async fn read_session_model_projection(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+    require_active: bool,
+) -> Result<SessionModelProjectionV1, String> {
     // Lifecycle admission precedes indexed lookup, matching other metadata-only configuration access.
     // 生命周期准入先于索引查询，与其他纯元数据配置访问保持一致。
     let lifecycle = registry
@@ -152,6 +177,9 @@ pub(crate) async fn read_session_model_projection_v1(
     )
     .await
     .map_err(|error| format!("Failed to locate the session model configuration: {error}"))?;
+    if require_active && locator.is_archived().map_err(|error| error.to_string())? {
+        return Err(format!("Session `{session_id}` is already archived."));
+    }
     // A resident writer may hold a newer pending choice than the latest disk publication.
     // 常驻写入器可能持有比最新磁盘发布更新的待生效选择。
     let (active, pending, context_window_selection) = registry.with_configuration_access(

@@ -48,7 +48,7 @@ export interface ConversationSelectionNavigationOptions {
   mergeWorkbenchWithLocalCaches: (current: WorkbenchSnapshot, incoming: WorkbenchSnapshot, options?: WorkbenchMergeOptions) => WorkbenchSnapshot;
   // Passes a service snapshot through the revision gate; returns false when it is stale.
   // 让服务快照通过版本闸门；过期时返回 false。
-  acceptServiceWorkbenchSnapshot: (snapshot: WorkbenchSnapshot) => boolean;
+  acceptServiceWorkbenchSnapshot: (snapshot: WorkbenchSnapshot, options?: Pick<WorkbenchMergeOptions, "allowSameServiceRevision">) => boolean;
   // Live stream store reconciled before the new conversation subtree mounts.
   // 新会话子树挂载前完成对账的实时流存储。
   liveStreamStore: ConversationLiveStreamStore;
@@ -186,7 +186,7 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
             current,
             snapshot,
-            { selectedConversationSource: "incoming" },
+            { selectedConversationSource: "incoming", allowSameServiceRevision: true },
           ));
           return null;
         }
@@ -200,7 +200,7 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
             current,
             snapshot,
-            { selectedConversationSource: "incoming" },
+            { selectedConversationSource: "incoming", allowSameServiceRevision: true },
           ));
           setConversationNavigation({ sourceId, targetId: conversationId, phase: "waiting-owner", showLoading });
         } else {
@@ -282,11 +282,11 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
     const snapshot = await selectConversation(conversationId);
     if (observation.aborted || conversationSelectionRequestVersionRef.current !== requestVersion || pluginOwnerNavigationVersionRef.current !== ownerVersion || snapshot === null
       || snapshot.selectedConversationId !== conversationId) return false;
-    // Both projections must still contain this owner; the shared gate rejects replies older than already accepted lifecycle updates.
-    // 两份投影必须仍包含此所有者；共享闸门拒绝早于已接受生命周期更新的响应。
+    // Both projections must still contain this owner. Its sidebar delta may have arrived first at the same revision.
+    // 两份投影必须仍包含此所有者；同版本侧栏增量可能已先到达。
     if (!workbenchStateRef.current.conversations.some((conversation) => conversation.id === conversationId)
       || !snapshot.conversations.some((conversation) => conversation.id === conversationId)
-      || !acceptServiceWorkbenchSnapshot(snapshot)) return false;
+      || !acceptServiceWorkbenchSnapshot(snapshot, { allowSameServiceRevision: true })) return false;
     // Only this confirmed owner may publish a route change; sidebar fallback semantics remain separate.
     // 仅此已确认所有者可以发布路由变更；侧栏回退语义保持独立。
     handleOpenWorkspaceChat();
@@ -294,7 +294,9 @@ export function useConversationSelectionNavigation(options: ConversationSelectio
     setSelectedConversationId(conversationId);
     liveStreamStore.resetForWorkbenchSnapshot();
     liveStreamStore.flushNotifications();
-    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot, { selectedConversationSource: "incoming" }));
+    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot, {
+      selectedConversationSource: "incoming", allowSameServiceRevision: true,
+    }));
     setConversationNavigation({ sourceId, targetId: conversationId, phase: "waiting-owner", showLoading: !isConversationInitialized(conversationId) });
     // Read persistence is ancillary; a later marker snapshot must not change the exact navigation decision.
     // 已读持久化属于附属操作；迟到标记快照不得改变精确导航决定。

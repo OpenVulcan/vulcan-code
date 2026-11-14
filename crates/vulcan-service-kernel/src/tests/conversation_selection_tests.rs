@@ -42,9 +42,13 @@ async fn selecting_active_session_does_not_require_lifecycle_quiescence() {
         .expect("active session turn should start");
     let state = Arc::new(Mutex::new(service_state));
 
-    let selected = service_select_conversation(state, session_id.to_string())
-        .await
-        .expect("running session selection must remain readable");
+    let selected = service_select_conversation(
+        ServiceEventEmitter::new(Vec::new()),
+        state,
+        session_id.to_string(),
+    )
+    .await
+    .expect("running session selection must remain readable");
     // expected_session_id keeps the owned display form alive for the borrowed comparison.
     // expected_session_id 让拥有所有权的展示形式在借用比较期间保持存活。
     let expected_session_id = session_id.to_string();

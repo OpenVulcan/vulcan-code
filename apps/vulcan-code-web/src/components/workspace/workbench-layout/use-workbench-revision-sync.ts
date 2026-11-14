@@ -162,9 +162,15 @@ export function useWorkbenchRevisionGates(input: WorkbenchRevisionGatesInput) {
   }, []);
   // acceptServiceWorkbenchSnapshot reserves one service snapshot revision before applying related local state.
   // acceptServiceWorkbenchSnapshot 在应用关联本地状态前预占一个服务快照版本。
-  const acceptServiceWorkbenchSnapshot = React.useCallback((snapshot: WorkbenchSnapshot): boolean => {
+  const acceptServiceWorkbenchSnapshot = React.useCallback((
+    snapshot: WorkbenchSnapshot,
+    options?: Pick<WorkbenchMergeOptions, "allowSameServiceRevision">,
+  ): boolean => {
     const incomingRevision = snapshot.revision ?? 0;
-    if (!shouldAcceptWorkbenchRevision(acceptedWorkbenchRevisionRef.current, incomingRevision)) {
+    if (
+      !(options?.allowSameServiceRevision && incomingRevision === acceptedWorkbenchRevisionRef.current)
+      && !shouldAcceptWorkbenchRevision(acceptedWorkbenchRevisionRef.current, incomingRevision)
+    ) {
       return false;
     }
     acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, incomingRevision);

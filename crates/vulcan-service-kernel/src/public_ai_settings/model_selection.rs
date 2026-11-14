@@ -596,13 +596,14 @@ pub(crate) async fn service_create_reasoning_recovery_session(
         .await?;
         drop(transaction);
 
-        // Publish the refreshed snapshot to clients that reconnected before the task completed.
-        // 向在任务完成前已重连的客户端发布刷新后的快照。
-        let workbench = crate::workbench_refresh::refresh_workbench_snapshot_for_selected_session(
-            state, session_id,
+        crate::workbench_refresh::refresh_recovered_session(
+            &app,
+            &state,
+            &controller,
+            &registry,
+            session_id,
         )
         .await?;
-        crate::settings_runtime_projection::emit_workbench_event(&app, &workbench);
         Ok(session_id.to_string())
     })
     .await

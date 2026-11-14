@@ -734,6 +734,9 @@ pub(crate) struct ProjectAdmissionReservation {
 /// 受保护状态端点使用的保留服务生命周期诊断。
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ServiceLifecycleState {
+    /// Number of recovered session publications, independent of live stream revisions.
+    /// 恢复会话发布次数，独立于实时流版本。
+    pub(crate) recovery_publication_epoch: u64,
     /// Exact bootstrap failure retained after `update_service_failure`, if any.
     /// `update_service_failure` 之后保留的精确引导失败（如有）。
     pub(crate) last_bootstrap_failure: Option<ServiceStatusFailure>,

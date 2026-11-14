@@ -3,12 +3,85 @@ import { describe, expect, it } from "vitest";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { SessionProviderUsageSummary } from "@/types/conversation";
 import type { SessionUsageBucket } from "@/types/session-lifetime-usage";
+import type { WorkbenchDeltaEnvelope } from "@/types";
+import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
+import { workbenchEnvelopeRequiresReactProjection } from "@/state/workbench-stream-projection";
 import {
   applySubagentPanelRouteResponse,
   applySessionAddonsChangedResponse,
   applyWorkbenchDelta,
   mergeWorkbenchSnapshot,
 } from "@/state/workbench-state";
+
+// Applies the recovery broadcast to both consumers and checks that the active conversation keeps its live state.
+// 将恢复广播交给两个消费者，检查当前会话保留实时状态。
+it("adds a recovered sidebar row without clearing another conversation's live state", () => {
+  // Keep the original selected row active with independent stream projections.
+  // 保持原会话选中，并让它拥有独立的实时投影。
+  const current = {
+    ...browserFallbackSnapshot(), revision: 4, selectedConversationId: "active",
+    conversations: [{ id: "active", title: "Active", status: "running" }],
+  };
+  // Seed the four transient values that a full workbench snapshot would reset.
+  // 写入四种会被完整工作台快照清理的瞬态值。
+  const store = new ConversationLiveStreamStore(() => 1000);
+  store.applyEnvelope({ generation: 1, delta: { kind: "providerRetryStatusChanged", payload: {
+    conversationId: "active", status: { attempt: 1, maxRetries: 3, delayMs: 4000, reason: "HTTP 503" },
+  } } });
+  store.applyEnvelope({ generation: 2, delta: { kind: "transientReasoningStatusChanged", payload: {
+    conversationId: "active", status: { kind: "encrypted", reasoningTokens: 12 },
+  } } });
+  store.applyEnvelope({ generation: 3, delta: { kind: "contextCompactionPreviewChanged", payload: {
+    conversationId: "active", apiCallId: 1, text: "partial summary",
+  } } });
+  store.applyEnvelope({ generation: 4, delta: { kind: "toolRequestProgressChanged", payload: {
+    conversationId: "active", requestStreamId: "request", progress: {
+      requestStreamId: "request", toolCallId: "tool", toolName: "file", state: "receiving",
+      receivedBytes: 8, receivedCharacters: 8, apiCallId: 1, requestRevision: 1,
+    },
+  } } });
+
+  // Match the session-only envelope emitted by the service after recovery.
+  // 使用服务恢复完成后发出的单会话增量形式。
+  const recovery: WorkbenchDeltaEnvelope = { generation: 5, delta: {
+    kind: "conversationSummaryChanged",
+    payload: { conversation: { id: "recovered", title: "Recovered", status: "draft" } },
+  } };
+  expect(store.applyEnvelope(recovery)).toBe(false);
+  expect(workbenchEnvelopeRequiresReactProjection(recovery)).toBe(true);
+  // The sidebar consumes the delta while the live store keeps every seeded value.
+  // 侧栏消费该增量，实时存储保留所有已写入的值。
+  const next = applyWorkbenchDelta(current, recovery);
+  expect(next.conversations.map((row) => row.id)).toEqual(["recovered", "active"]);
+  expect(next.selectedConversationId).toBe("active");
+  expect(store.getProviderRetryStatus("active")?.retryAtMs).toBe(5000);
+  expect(store.getTransientReasoningStatus("active")?.reasoningTokens).toBe(12);
+  expect(store.getContextCompactionPreview("active", 1)).toBe("partial summary");
+  expect(store.getToolRequestProgress("active", "request")?.receivedBytes).toBe(8);
+});
+
+// The selection reply can arrive after its own summary delta has already advanced the revision.
+// 选择响应可能在其摘要增量推进版本之后到达。
+it("accepts recovery navigation controls after its same-generation sidebar delta", () => {
+  // The sidebar has both rows but still shows the source session's controls.
+  // 侧栏已有两个会话，但仍展示来源会话的控件。
+  const current = {
+    ...browserFallbackSnapshot(), revision: 6, selectedConversationId: "source",
+    conversations: [{ id: "source", title: "Source", status: "ready" },
+      { id: "recovered", title: "Recovered", status: "draft" }],
+  };
+  // Merge the selection reply at that revision, as the recovery action does.
+  // 与恢复操作一样，在该版本合入选择响应。
+  const options = { selectedConversationSource: "incoming", allowSameServiceRevision: true } as const;
+  // The RPC owns selection at revision 6 only.
+  // RPC 仅拥有第 6 版的选择结果。
+  const response = { ...current, selectedConversationId: "recovered" };
+  expect(mergeWorkbenchSnapshot(current, response, options).selectedConversationId).toBe("recovered");
+  // A completed removal is strictly newer and rejects the older navigation response.
+  // 已完成的移除版本严格更新，拒绝较早的导航响应。
+  const removed = { ...current, revision: 7, conversations: [] };
+  expect(mergeWorkbenchSnapshot(removed, response, options)).toBe(removed);
+});
 
 // Verifies a lower revision remains stale inside one service instance.
 // 验证同一服务实例内较低版本仍会被视为过期。

@@ -165,7 +165,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
                 2,
             )
             .unwrap();
-        service_select_conversation(state.clone(), session_id.to_string())
+        service_select_conversation(app.clone(), state.clone(), session_id.to_string())
             .await
             .unwrap();
     }
@@ -191,7 +191,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
     let saved = fs::read(&metadata_path).unwrap();
     // Selection must project both the top-level field and the retained frontend addon row.
     // 选择必须同时投影顶层字段及前端保留附属行。
-    let selected = service_select_conversation(state.clone(), session_id.to_string())
+    let selected = service_select_conversation(app.clone(), state.clone(), session_id.to_string())
         .await
         .unwrap();
     assert_eq!(selected.session_context_window_selection, Some(NODE4));
@@ -363,7 +363,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
     // 重新打开已显式恢复默认的会话时，绝不能复活旧显式节点。
     let reopened = cold_state(session_id, controller);
     assert!(
-        service_select_conversation(reopened, session_id.to_string())
+        service_select_conversation(app, reopened, session_id.to_string())
             .await
             .unwrap()
             .session_context_window_selection

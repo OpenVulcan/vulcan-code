@@ -6,6 +6,11 @@ use crate::pending_prompts::pending_prompt_summaries_from_process_mirror;
 use crate::vmm::hydrate_vmm_default_identity;
 use vulcan_service_api::{PendingPromptsChangedDelta, SessionProviderUsageSummary};
 
+mod recovery;
+#[cfg(test)]
+pub(crate) use recovery::publish_indexed_recovered_session;
+pub(crate) use recovery::refresh_recovered_session;
+
 /// Minimum elapsed time that makes one workbench-refresh stage worth reporting.
 /// 工作台刷新阶段需要输出诊断日志的最小耗时。
 const WORKBENCH_REFRESH_SLOW_TRACE_THRESHOLD_MS: u128 = 20;
@@ -142,6 +147,21 @@ async fn refresh_workbench_snapshot_with_selected_session(
     state: SharedServiceBridgeState,
     target_session_id: Option<SessionId>,
 ) -> Result<WorkbenchSnapshot, String> {
+    loop {
+        if let Some(workbench) = try_refresh_workbench_snapshot(&state, target_session_id).await? {
+            return Ok(workbench);
+        }
+    }
+}
+
+/// Rebuilds the workbench from `state`, optionally selecting `target_session_id`.
+/// 根据 `state` 重建工作台，可选中 `target_session_id`。
+/// Returns the committed snapshot, or `None` if recovery published during the index read and a retry is needed.
+/// 返回已提交的快照；恢复操作在索引读取期间发布并需要重试时返回 `None`。
+async fn try_refresh_workbench_snapshot(
+    state: &SharedServiceBridgeState,
+    target_session_id: Option<SessionId>,
+) -> Result<Option<WorkbenchSnapshot>, String> {
     // refresh_started_at measures the complete canonical workbench refresh.
     // refresh_started_at 测量完整的规范工作台刷新过程。
     let refresh_started_at = std::time::Instant::now();
@@ -160,6 +180,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
         session_runtime_registry,
         native_vmm_host_ai_status,
         captured_workbench_generation,
+        captured_recovery_epoch,
     ) = {
         let guard = state
             .lock()
@@ -185,6 +206,9 @@ async fn refresh_workbench_snapshot_with_selected_session(
         // captured_workbench_generation identifies whether a focused domain committed during asynchronous refresh I/O.
         // captured_workbench_generation 标识异步刷新 I/O 期间是否已有聚焦领域完成提交。
         let captured_workbench_generation = guard.workbench_generation;
+        // Only recovery publication invalidates this index read; ordinary live deltas cannot force retries.
+        // 只有恢复发布会使本次索引读取失效，普通实时增量不会迫使重试。
+        let captured_recovery_epoch = guard.service_lifecycle_state.recovery_publication_epoch;
         (
             controller_runtime,
             luaskills_catalog,
@@ -200,6 +224,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
                 .as_ref()
                 .map(crate::native_vmm::NativeVmmMaintenance::host_ai_status),
             captured_workbench_generation,
+            captured_recovery_epoch,
         )
     };
     trace_workbench_refresh_if_slow(
@@ -386,6 +411,11 @@ async fn refresh_workbench_snapshot_with_selected_session(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // Re-read the index if it may predate a recovery publication, including during project removal.
+        // 若索引可能早于恢复发布则重新读取，项目移除期间也遵循该规则。
+        if guard.service_lifecycle_state.recovery_publication_epoch != captured_recovery_epoch {
+            return Ok(None);
+        }
         // final_preserved_run_state closes the last async refresh window before the whole snapshot is replaced.
         // final_preserved_run_state 在整份快照被替换前关闭最后一个异步刷新竞态窗口。
         let active_run_sessions = active_kernel_session_ids(&guard);
@@ -463,7 +493,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             }
         ),
     );
-    Ok(workbench)
+    Ok(Some(workbench))
 }
 
 /// Reconciles every visible conversation with one lock-consistent live lifecycle revision.
@@ -1341,53 +1371,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         conversations: workspace
             .sessions
             .iter()
-            .map(|session| {
-                let run_phase = workspace
-                    .session_run_phases
-                    .get(&session.id)
-                    .copied()
-                    .unwrap_or(SessionRunPhase::Idle);
-                let effective_run_phase = run_phase;
-                let is_running = session.status == SessionState::Running
-                    || is_active_session_run_phase(run_phase);
-                let unread = workspace
-                    .session_runtime_state
-                    .get(&session.id)
-                    .is_some_and(|runtime_state| runtime_state.ui_state.unread);
-                let session_plan_mode = session_plan_mode_summary_from_runtime_state(
-                    workspace.session_runtime_state.get(&session.id),
-                );
-                // sessionIdText is shared by the exact Ask and child-task blocker checks.
-                // sessionIdText 由精确的 Ask 与子任务阻断检查共享。
-                let session_id_text = session.id.to_string();
-                ConversationSummary {
-                    id: session_id_text,
-                    title: session.title.clone(),
-                    status: if is_running {
-                        SessionState::Running.label()
-                    } else {
-                        session.status.label()
-                    }
-                    .to_string(),
-                    run_phase: effective_run_phase.to_string(),
-                    last_updated_label: session.last_updated_label.clone(),
-                    last_updated_at: session.updated_at.clone(),
-                    created_at: session.created_at.clone(),
-                    last_request_at: session.last_request_at.clone(),
-                    manual_position: session.manual_position,
-                    unread,
-                    attention: conversation_attention_summary_for_session(
-                        session.id,
-                        &pending_questions,
-                        session_plan_mode.as_ref(),
-                        unread,
-                        Some(session.updated_at.clone()),
-                    ),
-                    project_id: session_summary_project_id_owned(session),
-                    dedicated: session.dedicated,
-                    assistant_name: session.assistant_name.clone(),
-                }
-            })
+            .map(|session| workbench_conversation_summary(workspace, session, &pending_questions))
             .collect(),
         archived_projects: workspace
             .archived_task_projects
@@ -1571,6 +1555,57 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 public_ai_configuration.as_ref(),
             ),
         ),
+    }
+}
+
+/// Projects one indexed `session` with runtime and attention facts from `workspace` and `pending_questions`.
+/// 用 `workspace` 和 `pending_questions` 中的运行态及注意状态投影一条已索引 `session`。
+/// Returns the shared sidebar representation used by snapshots and session updates.
+/// 返回全量快照及会话更新共用的侧栏摘要。
+fn workbench_conversation_summary(
+    workspace: &WorkspaceSnapshot,
+    session: &SessionSummary,
+    pending_questions: &[PendingQuestionSnapshot],
+) -> ConversationSummary {
+    // The phase and unread flag belong to the same session as the indexed summary.
+    // 阶段与未读标记和索引摘要属于同一会话。
+    let run_phase = workspace
+        .session_run_phases
+        .get(&session.id)
+        .copied()
+        .unwrap_or(SessionRunPhase::Idle);
+    // The retained adapter owns live attention inputs.
+    // 保留的运行态适配器持有实时注意状态输入。
+    let runtime_state = workspace.session_runtime_state.get(&session.id);
+    let unread = runtime_state.is_some_and(|state| state.ui_state.unread);
+    let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
+    ConversationSummary {
+        id: session.id.to_string(),
+        title: session.title.clone(),
+        status:
+            if session.status == SessionState::Running || is_active_session_run_phase(run_phase) {
+                SessionState::Running.label()
+            } else {
+                session.status.label()
+            }
+            .to_string(),
+        run_phase: run_phase.to_string(),
+        last_updated_label: session.last_updated_label.clone(),
+        last_updated_at: session.updated_at.clone(),
+        created_at: session.created_at.clone(),
+        last_request_at: session.last_request_at.clone(),
+        manual_position: session.manual_position,
+        unread,
+        attention: conversation_attention_summary_for_session(
+            session.id,
+            pending_questions,
+            session_plan_mode.as_ref(),
+            unread,
+            Some(session.updated_at.clone()),
+        ),
+        project_id: session_summary_project_id_owned(session),
+        dedicated: session.dedicated,
+        assistant_name: session.assistant_name.clone(),
     }
 }
 
