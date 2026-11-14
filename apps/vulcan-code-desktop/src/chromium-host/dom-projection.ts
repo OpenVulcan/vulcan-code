@@ -26,7 +26,7 @@ type CapturedAsset = { id: string; kind: string; url: string; sequence: number }
 // 按已提交的加载器隔离资源，并保留近期加载器的索引以支持历史恢复。
 type PageAssets = { requests: Map<string, CapturedAsset>; loader: string; published: Set<string>;
   markup: Map<string, string>; documentId: string | null; blobs: Map<string, string>;
-  initialStylesheetRedirects: Map<string, string> | null };
+  initialStylesheetRedirects: Map<string, string> | null; onInitialStylesheetFinished: (() => void) | null };
 // A network response belongs to one loader and its redirect aliases.
 // 一个网络响应归属一个加载器及其重定向别名。
 type ResourceRequest = { loader: string; urls: string[]; kind: string; sequence: number; mimeType?: string };
@@ -37,7 +37,25 @@ type PasswordGeometry = [id: string, length: number, start: number, end: number,
 
 // Stable element identities survive repeated snapshots of the same document.
 // 稳定的元素标识在同一文档的多次快照中保持不变。
-type ProjectionWindow = Window & { __vulcanProjectionNodes?: SourceNodes };
+type ProjectionWindow = Window & { __vulcanProjectionNodes?: SourceNodes;
+  __vulcanPasswordFields?: { fields: WeakSet<Element>; observer: MutationObserver } };
+
+// Remember password identity even when a reveal toggle runs before the first snapshot.
+// 即使显示密码的切换发生在首个快照前，也记录密码控件的身份。
+export function observeProjectionPasswords(): void {
+  const scope = window as ProjectionWindow;
+  if (scope.__vulcanPasswordFields) return;
+  // Track DOM identities per document so detached fields and navigated documents do not accumulate.
+  // 按文档追踪 DOM 身份，避免累积已分离的字段和已导航离开的文档。
+  const fields = new WeakSet<Element>();
+  const observer = new MutationObserver(records => {
+    for (const { target, oldValue } of records) {
+      if (target instanceof HTMLInputElement && oldValue?.toLowerCase() === 'password') fields.add(target);
+    }
+  });
+  observer.observe(document, { subtree: true, attributes: true, attributeFilter: ['type'], attributeOldValue: true });
+  scope.__vulcanPasswordFields = { fields, observer };
+}
 
 // Collect the live document and viewport state inside the browser. The host sanitizes the result.
 // 在浏览器中采集实时文档和视口状态，由宿主清理采集结果。
@@ -47,6 +65,7 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
   const root = document.documentElement;
   if (!root || !document.body) return null;
   const scope = window as ProjectionWindow;
+  const passwordTracker = scope.__vulcanPasswordFields;
   const nodes = scope.__vulcanProjectionNodes ??= { id: documentId, ids: new WeakMap(), next: 0 };
   const copy = root.cloneNode(false) as Element;
   const scroll: [string, number, number][] = [];
@@ -88,7 +107,11 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
     if (element.scrollLeft || element.scrollTop) scroll.push([id, element.scrollLeft, element.scrollTop]);
     if (element === focus) focused = id;
     if (element instanceof HTMLInputElement) {
-      if (element.type === 'password') {
+      if (element.type === 'password') passwordTracker?.fields.add(element);
+      if (element.type === 'password' || passwordTracker?.fields.has(element)) {
+        // Preserve the mask even when the original site displays this same input as plain text.
+        // 即使源站将同一输入框显示为文本，投影仍保留掩码。
+        mirror.setAttribute('type', 'password');
         mirror.removeAttribute('value');
         // Read the native selection for this control while the renderer owns its value.
         // 在渲染器持有密码值期间读取控件的原生选区。
@@ -119,6 +142,9 @@ async function readDocument({ documentId, blobLimit, knownBlobs }: {
     }
     if (element.shadowRoot) {
       const shadow = element.shadowRoot;
+      passwordTracker?.observer.observe(shadow, {
+        subtree: true, attributes: true, attributeFilter: ['type'], attributeOldValue: true,
+      });
       const template = document.createElement('template');
       template.setAttribute('data-vulcan-shadow', shadow.delegatesFocus ? 'delegates-focus' : '');
       for (const hovered of Array.from(shadow.querySelectorAll(':hover'))) hover.add(hovered);
@@ -271,6 +297,14 @@ export class DomProjection {
         redirects.set(alias.url(), response.url());
       }
     });
+    context.on('requestfinished', request => {
+      if (request.resourceType() !== 'stylesheet' || request.serviceWorker()) return;
+      // Context-level completion also sees stylesheets whose requests predate the target's CDP attachment.
+      // 上下文级完成事件也能看到先于目标 CDP 附加发起的样式表请求。
+      const frame = request.frame();
+      const page = frame.page();
+      if (!page.isClosed() && frame === page.mainFrame()) this.pages.get(page)?.onInitialStylesheetFinished?.();
+    });
   }
 
   // Observe one Chromium target using loader IDs. Only a committed top-level document changes the active index.
@@ -358,19 +392,36 @@ export class DomProjection {
     // Read cached resources immediately, then pick up requests that were still in flight at attachment.
     // 立即读取已缓存的资源，之后再补采附加时仍在途的请求。
     const initialLoader = state.loader;
-    await this.seedInitialResources(page, cdp, state, initialLoader);
+    // Serialize cache scans, coalescing notifications received while a scan is running.
+    // 串行扫描缓存，并合并扫描期间收到的通知。
+    let scan: Promise<void> | null = null;
+    let needsScan = false;
+    const refresh = (): Promise<void> => {
+      needsScan = true;
+      return scan ??= (async () => {
+        while (needsScan) {
+          needsScan = false;
+          await this.seedInitialResources(page, cdp, state, initialLoader);
+        }
+      })().finally(() => { scan = null; });
+    };
+    state.onInitialStylesheetFinished = () => { void refresh().catch(() => {}); };
+    await refresh();
     // Pre-attachment styles may finish while the parser waits for them and before a slow image completes.
     // 附加前开始的样式可能在解析器等待期间完成，早于慢图片加载完成。
     void (async () => {
       await page.waitForLoadState('domcontentloaded');
-      await this.seedInitialResources(page, cdp, state, initialLoader);
+      await refresh();
       await page.waitForLoadState('load');
-      await this.seedInitialResources(page, cdp, state, initialLoader);
+      await refresh();
     })()
       .catch(() => {
         // The initial document may close or time out while waiting for its remaining resources.
         // 首个文档可能在等待剩余资源期间关闭或超时。
-      }).finally(() => { state.initialStylesheetRedirects = null; });
+      }).finally(() => {
+        state.initialStylesheetRedirects = null;
+        state.onInitialStylesheetFinished = null;
+      });
   }
 
   // Seed the initial committed loader from Chromium's cache without making new requests.
@@ -431,7 +482,7 @@ export class DomProjection {
     let state = this.pages.get(page);
     if (!state) {
       state = { requests: new Map(), loader: '', published: new Set(), markup: new Map(),
-        documentId: null, blobs: new Map(), initialStylesheetRedirects: new Map() };
+        documentId: null, blobs: new Map(), initialStylesheetRedirects: new Map(), onInitialStylesheetFinished: null };
       this.pages.set(page, state);
     }
     return state;
@@ -637,7 +688,8 @@ export async function applyDomTextEdit(
     if (field.readOnly || field.disabled
       || (field.selectionStart === null && field.type !== 'email' && field.type !== 'number')) return false;
     if (range) {
-      if (field.type === 'password' || field.selectionStart === null || field.value !== range.before) return false;
+      if (field.type === 'password' || (window as ProjectionWindow).__vulcanPasswordFields?.fields.has(field)
+        || field.selectionStart === null || field.value !== range.before) return false;
       field.setSelectionRange(range.start, range.end);
     }
     return true;

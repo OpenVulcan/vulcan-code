@@ -10,7 +10,7 @@ import process from 'node:process';
 import { createRequire } from 'node:module';
 import type net from 'node:net';
 import { chromium, type BrowserContext, type CDPSession, type Dialog, type FileChooser, type Page } from 'playwright-core';
-import { applyDomTextEdit, DomProjection } from './dom-projection.js';
+import { applyDomTextEdit, DomProjection, observeProjectionPasswords } from './dom-projection.js';
 import { PlaywrightProxy } from './playwright-proxy.js';
 import { monitorHostCrash } from './crash-report.js';
 import { observePageTitle } from './page-title.js';
@@ -930,12 +930,14 @@ class ChromiumHost {
         this.emit('pageMetadataChanged', { targetId, url, title });
       });
       await this.context.addInitScript(observePageTitle);
+      await this.context.addInitScript(observeProjectionPasswords);
       this.context.on('page', page => void this.register(page).catch(error => diagnostic(`page registration failed: ${String(error)}`)));
       const initial = this.context.pages()[0] ?? await this.context.newPage();
       await this.register(initial);
       // The initial about:blank document predates addInitScript; later pages initialize automatically.
       // 初始 about:blank 文档早于 addInitScript；后续页面会自动初始化。
       await initial.evaluate(observePageTitle);
+      await initial.evaluate(observeProjectionPasswords);
       if (this.options.initialUrl !== 'about:blank') await initial.goto(this.options.initialUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
       this.playwrightProxy = new PlaywrightProxy(browser);
       await writeControlDiscovery(this.options.controlDirectory, {

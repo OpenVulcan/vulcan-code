@@ -88,6 +88,18 @@ let dialogClicks = 0;
 // Hold popup image responses until the test observes the cached stylesheet in both clients.
 // 暂缓弹窗图片响应，直到测试在两个客户端中观察到已缓存的样式。
 const slowPopupImages = new Set();
+// Hold a late stylesheet independently from the popup image.
+// 独立于弹窗图片暂缓后续样式表。
+const latePopupStyles = new Set();
+// Complete the stylesheet while the image response remains held.
+// 保持图片响应挂起时完成样式表。
+function finishLatePopupStyles() {
+  for (const response of latePopupStyles) {
+    response.writeHead(200, { 'content-type': 'text/css' })
+      .end('main { color:rgb(23,54,91); background-image:url("popup.svg") }');
+  }
+  latePopupStyles.clear();
+}
 // Finish all held image responses so Chromium can complete the initial load.
 // 完成已暂缓的图片响应，使 Chromium 能结束初始加载。
 function finishSlowPopupImages() {
@@ -127,13 +139,14 @@ const fixture = createServer((request, response) => {
       <a id="projected-download" href="/projection-download" style="position:fixed;left:500px;top:100px">Download projection fixture</a>
       <img id="projected-blob">
       <a id="popup" style="position:fixed;left:250px;top:0;width:180px;height:60px" target="_blank" rel="noopener" href="/popup">Open popup</a>
-      <a id="popup-slow" style="position:fixed;left:500px;top:0;width:180px;height:60px" target="_blank" rel="noopener" href="/popup?slow=1">Open slow popup</a>
+      <a id="popup-slow" style="position:fixed;left:500px;top:0;width:180px;height:60px" target="_blank" rel="noopener" href="/popup?slow=late">Open slow popup</a>
       <div style="position:fixed;left:90px;top:215px">
         <projection-widget>Slotted label</projection-widget>
         <div id="hover-target" style="height:55px">Hover target <span id="hover-menu">Hover menu</span></div>
         <input type="email" id="projection-email" autocomplete="off">
         <input type="password" id="projection-password" autocomplete="off">
         <output id="password-length">0</output>
+        <button id="reveal-password" type="button">Show password</button>
         <span id="cascade-order">Cascade order</span>
       </div>
       <style>#cascade-order { color:rgb(91,23,54) }</style>
@@ -161,6 +174,10 @@ const fixture = createServer((request, response) => {
         document.querySelector('#projection-password').addEventListener('input', event => {
           document.querySelector('#password-length').textContent = event.target.value.length;
         });
+        document.querySelector('#reveal-password').onclick = event => {
+          document.querySelector('#projection-password').type = 'text';
+          event.currentTarget.textContent = 'Source shows password';
+        };
         let dragging = false;
         const item = document.querySelector('#projected');
         item.addEventListener('pointerdown', () => dragging = true);
@@ -176,10 +193,13 @@ const fixture = createServer((request, response) => {
       'content-disposition': 'attachment; filename="projection-fixture.txt"' }).end('projection fixture');
     return;
   }
-  if (request.url === '/popup' || request.url === '/popup?slow=1') {
+  if (request.url === '/popup' || request.url === '/popup?slow=1' || request.url === '/popup?slow=late') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end('<title>Projection popup</title><link rel="stylesheet" href="/popup-styles"><main>Popup reached</main>'
-      + (request.url === '/popup?slow=1' ? '<img id="slow-popup-image" src="/popup-slow.svg"><script>void 0</script>' : ''));
+    const lateStyle = request.url === '/popup?slow=late';
+    response.end('<title>Projection popup</title><link rel="stylesheet" href="'
+      + (lateStyle ? '/popup-late-styles' : '/popup-styles') + '"><main>Popup reached</main>'
+      + (request.url === '/popup' ? '' : '<img id="slow-popup-image" src="/popup-slow.svg">')
+      + (request.url === '/popup?slow=1' ? '<script>void 0</script>' : ''));
     return;
   }
   if (request.url === '/popup-slow.svg') {
@@ -188,6 +208,14 @@ const fixture = createServer((request, response) => {
   }
   if (request.url === '/popup-styles') {
     response.writeHead(302, { location: '/popup-assets/popup.css' }).end();
+    return;
+  }
+  if (request.url === '/popup-late-styles') {
+    response.writeHead(302, { location: '/popup-assets/late.css' }).end();
+    return;
+  }
+  if (request.url === '/popup-assets/late.css') {
+    latePopupStyles.add(response);
     return;
   }
   if (request.url === '/popup-assets/popup.css') {
@@ -369,7 +397,25 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
         assert.match(snapshot?.html, /id="slow-popup-image" src="vulcan-resource:/);
         return true;
       }, 5_000);
+      // Start style loading before CDP attachment and complete it after DOMContentLoaded.
+      // 在 CDP 附加前发起样式请求，在 DOMContentLoaded 之后完成。
+      const latePopup = await bootstrapContext.newPage();
+      await latePopup.goto(new URL('/popup?slow=late', pageUrl).href, { waitUntil: 'domcontentloaded' });
+      await until(() => {
+        assert.ok(latePopupStyles.size && slowPopupImages.size);
+        return true;
+      }, 5_000);
+      await projection.trackPage(latePopup, await bootstrapContext.newCDPSession(latePopup));
+      finishLatePopupStyles();
+      await until(async () => {
+        const snapshot = await projection.snapshot(latePopup, null);
+        assert.match(snapshot?.html, /href="vulcan-resource:/);
+        assert.match(snapshot?.html, /id="slow-popup-image" src="data:,"/);
+        assert.equal(await latePopup.evaluate(() => document.readyState), 'interactive');
+        return true;
+      }, 5_000);
     } finally {
+      finishLatePopupStyles();
       finishSlowPopupImages();
       await bootstrapContext.close();
     }
@@ -576,6 +622,29 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
     await controller.bringToFront();
     await controller.getByRole('button', { name: 'Take control' }).click();
     await controller.getByRole('button', { name: 'Release control' }).waitFor();
+    await password.click();
+    await password.press('Control+a');
+    await cdp.send('Input.insertText', { text: handoffPassword });
+    await until(async () => {
+      assert.equal((await passwordView(observer)).length, handoffPassword.length);
+      return true;
+    }, 5_000);
+    // Compare a conditional snapshot from before the site's reveal with a fresh snapshot after it.
+    // 比较网页显示密码之前的条件快照与切换后获取的完整快照。
+    const snapshotParams = { sessionId, pageId: originalPage.pageId };
+    const beforeReveal = await rpc('browser.dom.snapshot', { ...snapshotParams, revision: null });
+    await frame(controller).getByRole('button', { name: 'Show password' }).click();
+    for (const client of clients) {
+      await frame(client).getByRole('button', { name: 'Source shows password' }).waitFor();
+      assert.equal(await frame(client).locator('#projection-password').getAttribute('type'), 'password');
+      assert.equal(await frame(client).locator('#projection-password').inputValue(), '•'.repeat(handoffPassword.length));
+    }
+    const revealPatch = await rpc('browser.dom.snapshot', { ...snapshotParams, revision: beforeReveal.result.revision });
+    const revealFull = await rpc('browser.dom.snapshot', { ...snapshotParams, revision: null });
+    assert.ok(revealPatch.result.patch, 'The reveal must exercise incremental markup.');
+    assert.match(revealFull.result.html, /type="password" id="projection-password"/);
+    assert.equal(JSON.stringify(revealPatch.result).includes(handoffPassword), false);
+    assert.equal(JSON.stringify(revealFull.result).includes(handoffPassword), false);
     await cdp.detach();
     assert.equal(originRequests, 0, 'Neither client may fetch source resources, including inside Shadow DOM.');
     console.log('Both viewers verified committed IME insertion and replacement, including password redaction.');
@@ -598,6 +667,12 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
     // 在另一个浏览器标签页激活链接前，先显式聚焦控制端。
     await controller.bringToFront();
     await frame(controller).locator('#popup-slow').click({ timeout: 5_000 });
+    for (const client of clients) await frame(client).getByText('Popup reached').waitFor();
+    await until(() => {
+      assert.ok(latePopupStyles.size && slowPopupImages.size);
+      return true;
+    }, 5_000);
+    finishLatePopupStyles();
     for (const client of clients) {
       await until(async () => {
         const popup = frame(client).getByText('Popup reached');
@@ -694,6 +769,7 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
     console.log('Viewport presets, custom dimensions, and one-shot fitting passed in two clients.');
     console.log('Both DOM viewers followed the new Playwright tab.');
   } finally {
+    finishLatePopupStyles();
     finishSlowPopupImages();
     await browser.close().catch(() => {});
     vite.httpServer?.closeAllConnections();
@@ -809,7 +885,7 @@ try {
   // 运行其余独立用例之前关闭 WebUI 创建的弹窗。
   Object.assign(lease, await rpc('browser.lease.acquire', { sessionId: session.sessionId, holder: 'w09-acceptance' }));
   const viewerPopup = (await rpc('browser.pages.list', { sessionId: session.sessionId }))
-    .find(candidate => candidate.url === new URL('/popup?slow=1', pageUrl).href);
+    .find(candidate => candidate.url === new URL('/popup?slow=late', pageUrl).href);
   assert.ok(viewerPopup);
   await rpc('browser.page.close', { ...projectionParams, pageId: viewerPopup.pageId, leaseSecret: lease.leaseSecret });
   // Restore the original size for the legacy fixtures that use fixed click coordinates.
