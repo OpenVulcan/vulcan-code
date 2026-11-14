@@ -141,6 +141,9 @@ export interface ConversationMessage {
   // Optional composer-compatible previews for process-local optimistic content.
   // 进程内乐观内容使用的可选输入区兼容预览。
   attachments?: ComposerAttachmentSummary[];
+  // Original paths shown in a collapsed disclosure for a user prompt.
+  // 用户提示词中默认折叠显示的原始路径。
+  fileReferences?: string[];
   // Whether the V1 generation boundary permits editing this root input.
   // V1 generation 边界是否允许编辑当前根输入。
   editableUserPrompt?: boolean;

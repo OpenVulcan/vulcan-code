@@ -11,6 +11,8 @@ import {
 import { Input } from "@/ui-kit/primitives/input";
 import { Textarea } from "@/ui-kit/primitives/textarea";
 import { useI18n } from "@/i18n";
+import { appendComposerFileReferences, splitComposerFileReferences } from "@/lib/composer-file-references";
+import { ConversationPromptFileReferences } from "./conversation-prompt-file-references";
 import { runConversationControlAction } from "./conversation-control-feedback";
 
 /** The exact V1 generation action currently being edited by the dialog.
@@ -86,16 +88,21 @@ export function ConversationGenerationDialogV1(
   // submitting combines parent authority with the current local confirmation.
   // submitting 合并父组件权威状态与当前本地确认。
   const submitting = props.submitting || localSubmitting;
+  // The dialog edits the authored text and retains its original file references for replay.
+  // 对话框编辑用户原文，并保留原始文件引用供重新执行。
+  const original = React.useMemo(() => props.action?.kind === "edit"
+    ? splitComposerFileReferences(props.action.text)
+    : null, [props.action]);
 
   React.useEffect(() => {
     if (props.action?.kind === "edit") {
-      setValue(props.action.text);
+      setValue(original?.text ?? "");
     } else if (props.action?.kind === "fork") {
       setValue(props.action.title);
     } else {
       setValue("");
     }
-  }, [props.action]);
+  }, [props.action, original]);
 
   // confirmDisabled prevents blank fork titles while leaving attachment-only edits valid.
   // confirmDisabled 阻止空白分叉标题，同时保留仅附件编辑的合法性。
@@ -110,7 +117,7 @@ export function ConversationGenerationDialogV1(
     setLocalSubmitting(true);
     try {
       await runConversationControlAction(
-        () => props.onConfirm(props.action?.kind === "fork" ? value.trim() : value),
+        () => props.onConfirm(original ? appendComposerFileReferences(value, original.references) : value.trim()),
         t("conversation.control.actionFailed"),
       );
     } finally {
@@ -147,6 +154,7 @@ export function ConversationGenerationDialogV1(
             value={value}
           />
         )}
+        {original && <ConversationPromptFileReferences references={original.references} />}
         <DialogFooter>
           <Button
             disabled={submitting}

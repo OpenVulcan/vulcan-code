@@ -6,6 +6,7 @@ import type {
   AggregatedUsage,
   ResourceId,
 } from "@/service/conversation-event-window-store";
+import { splitComposerFileReferences } from "@/lib/composer-file-references";
 
 /** Token usage shown in an assistant footer; absent dimensions stay unknown.
  * 助手底栏显示的 Token 用量；缺失维度保持未知。 */
@@ -46,6 +47,9 @@ export interface AssistantLastTurn {
   /** Project resources attached to the prompt, in send order.
    * 随提示词发送的项目资源，按发送顺序。 */
   resourceIds: ResourceId[];
+  /** Original file paths in the compact transcript's collapsed attachment list.
+   * 紧凑会话折叠附件列表中的原始文件路径。 */
+  fileReferences: string[];
   steps: AssistantReplyStep[];
   /** Closed-turn total, present once the turn statistics are written.
    * 回合闭合后的总用量，写入回合统计后才存在。 */
@@ -64,11 +68,15 @@ export interface AssistantLastTurn {
  * @returns the last turn; an empty session yields no prompt and no steps. */
 export function projectAssistantLastTurn(events: readonly ConversationEventSummary[]): AssistantLastTurn {
   const start = lastTurnStartIndex(events);
-  const turn: AssistantLastTurn = { prompt: null, resourceIds: [], steps: [], total: null, durationMs: null, error: null };
+  const turn: AssistantLastTurn = { prompt: null, resourceIds: [], fileReferences: [], steps: [], total: null, durationMs: null, error: null };
   if (start < 0) return turn;
   const startEvent = events[start].event;
   if (startEvent.kind === "user_input") {
-    turn.prompt = startEvent.text;
+    // Use the same projection as the full transcript for compact assistant prompts.
+    // 紧凑助手提示词与完整会话使用相同的投影。
+    const { text, references } = splitComposerFileReferences(startEvent.text);
+    turn.prompt = text;
+    turn.fileReferences = references;
     turn.resourceIds = startEvent.resource_ids ?? [];
   }
   const steps = new Map<number, AssistantReplyStep>();

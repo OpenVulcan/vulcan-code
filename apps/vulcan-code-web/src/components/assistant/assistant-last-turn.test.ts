@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { appendComposerFileReferences } from "@/lib/composer-file-references";
 import { clientActionId, resourceId, type ConversationEventBody, type ConversationEventSummary } from "@/service/conversation-event-window-store";
 import { projectAssistantLastTurn } from "./assistant-last-turn";
 
@@ -62,8 +63,16 @@ describe("projectAssistantLastTurn", () => {
 
   it("returns an empty turn for a session without user input", () => {
     expect(projectAssistantLastTurn([])).toEqual({
-      prompt: null, resourceIds: [], steps: [], total: null, durationMs: null, error: null,
+      prompt: null, resourceIds: [], fileReferences: [], steps: [], total: null, durationMs: null, error: null,
     });
+  });
+
+  it("separates path references from the compact transcript prompt", () => {
+    // Reference paths also appear on the compact transcript when sent without text.
+    // 不带正文发送时，紧凑会话也保留引用路径。
+    const references = ["D:/Example Folder/guide.chm"];
+    expect(projectAssistantLastTurn([input(1, appendComposerFileReferences("", references))]))
+      .toMatchObject({ prompt: "", fileReferences: references });
   });
 
   it("keeps a resource-only prompt as an empty prompt with its resources", () => {

@@ -1,5 +1,7 @@
 import React from "react";
 import { useI18n } from "@/i18n";
+import { splitComposerFileReferences } from "@/lib/composer-file-references";
+import { ConversationPromptFileReferences } from "./conversation-prompt-file-references";
 import { Progress } from "@/ui-kit/primitives/progress";
 import type { DraftConversationPendingSubmission } from "@/components/workspace/workspace-resizable-body";
 
@@ -69,17 +71,21 @@ export function DraftSubmissionTranscript(props: {
   surfaceId: string;
   scrollRef: React.Ref<HTMLElement>;
 }) {
+  // Keep the optimistic echo consistent with restored user prompts.
+  // 让乐观回显与恢复后的用户提示词保持一致。
+  const { text, references } = splitComposerFileReferences(props.submission.prompt);
   return (
     <section className="vk-transcript" data-draft="" data-conversation-surface-id={props.surfaceId} ref={props.scrollRef}>
       <div className="vk-transcript-inner">
         <div className="vk-timeline">
           <article className="vk-prompt-row" data-client-action-id={props.submission.clientSubmissionId}>
+            <ConversationPromptFileReferences references={references} />
             {props.submission.attachments.length > 0 ? (
               <ul className="vk-prompt-files">
                 {props.submission.attachments.map((attachment) => <li key={attachment.fileName}>{attachment.fileName}</li>)}
               </ul>
             ) : null}
-            <div className="vk-prompt"><p className="vk-prompt-text">{props.submission.prompt}</p></div>
+            {text && <div className="vk-prompt"><p className="vk-prompt-text">{text}</p></div>}
           </article>
         </div>
       </div>

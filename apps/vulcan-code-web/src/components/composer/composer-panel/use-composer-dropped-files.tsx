@@ -1,6 +1,7 @@
 import React from "react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
+import { appendComposerFileReferences } from "@/lib/composer-file-references";
 import { readElectronClipboardFileReferences, readElectronLocalFileBridge } from "@/host-shell/electron-bridge";
 import { classifyDroppedComposerFiles, reconcileComposerAttachmentDraftLease, stageDroppedComposerFile } from "@/service/conversation-actions-service";
 import { MAX_COMPOSER_ATTACHMENTS, type ComposerModelSelectionSnapshot } from "../composer-model";
@@ -122,14 +123,6 @@ export function useComposerDroppedAssetConversion(install: (replacements: Readon
     install(replacements);
   }, [install]);
   return { remapSources, installWithSources };
-}
-
-// Serialize real paths as a list so spaces, line breaks and backslashes stay unambiguous.
-// 将真实路径序列化为列表，明确保留空格、换行及反斜杠。
-function appendReferences(input: string, references: string[]): string {
-  return references.length
-    ? [input, "Referenced files:\n" + JSON.stringify([...new Set(references)], null, 2)].filter(Boolean).join("\n\n")
-    : input;
 }
 
 // Return the one explicitly dropped URI or native path associated with a file.
@@ -517,7 +510,7 @@ export function useComposerDroppedFiles(options: DroppedFilesOptions) {
       if (!sameDropTarget(latest.current, current)) return null;
       handedToSubmission = true;
       return {
-        prompt: appendReferences(prompt, references),
+        prompt: appendComposerFileReferences(prompt, references),
         attachments: [...managed, ...attachments],
         ...(planId ? { planId } : {}),
         rollback,

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { useI18n } from "@/i18n";
+import { splitComposerFileReferences } from "@/lib/composer-file-references";
 import type { ResourceId } from "@/service/conversation-event-window-store";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import { useConversationSessionResourcesV1 } from "@/state/conversation-session-resources-v1";
@@ -8,6 +9,7 @@ import { Alert, AlertDescription } from "@/ui-kit/primitives/alert";
 import { Button } from "@/ui-kit/primitives/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { ConversationTurnShell } from "./conversation-turn-shell";
+import { ConversationPromptFileReferences } from "./conversation-prompt-file-references";
 import type { ConversationTurnWindow } from "./conversation-turn-window";
 
 // Source ranges only suppress replaced runtime events.
@@ -181,21 +183,27 @@ export function ConversationCleanedHistory({ sessionId, history, onRemove, turnW
     {history.turns.filter((turn) => turn.inputs.length > 0 || turn.answer).map((turn) => (
       <ConversationTurnShell key={turn.id} rowKey={cleanedHistoryTurnKey(turn.id)} turnWindow={turnWindow}>
         <div className="grid gap-3" data-cleaned-history-turn={turn.id}>
-          {turn.inputs.map((input) => (
-            <article className="vk-prompt-row" key={input.id}>
-              {input.supplementary && <span className="text-xs">{t("conversation.history.supplementary")}</span>}
-              {input.text && <div className="vk-prompt"><p className="vk-prompt-text">{input.text}</p></div>}
-              {input.attachments.length > 0 && <ul className="vk-prompt-files">
-                {input.attachments.map((id, occurrence) => <li key={`${id}:${occurrence}`}>{resourceLink(id)}</li>)}
-              </ul>}
-              <div className="vk-prompt-foot">
-                <time>{new Date(input.created_at_ms).toLocaleString(locale)}</time>
-                <Button size="xs" variant="ghost" onClick={() => input.supplementary ? beginRemoval(input.id, "input") : beginRemoval(turn.id, "turn")}>
-                  {t("conversation.history.remove")}
-                </Button>
-              </div>
-            </article>
-          ))}
+          {turn.inputs.map((input) => {
+            // Archived prompts use the same visible body and attachment disclosure.
+            // 归档提示词使用相同的可见正文与折叠附件。
+            const { text, references } = splitComposerFileReferences(input.text);
+            return (
+              <article className="vk-prompt-row" key={input.id}>
+                {input.supplementary && <span className="text-xs">{t("conversation.history.supplementary")}</span>}
+                <ConversationPromptFileReferences references={references} />
+                {text && <div className="vk-prompt"><p className="vk-prompt-text">{text}</p></div>}
+                {input.attachments.length > 0 && <ul className="vk-prompt-files">
+                  {input.attachments.map((id, occurrence) => <li key={`${id}:${occurrence}`}>{resourceLink(id)}</li>)}
+                </ul>}
+                <div className="vk-prompt-foot">
+                  <time>{new Date(input.created_at_ms).toLocaleString(locale)}</time>
+                  <Button size="xs" variant="ghost" onClick={() => input.supplementary ? beginRemoval(input.id, "input") : beginRemoval(turn.id, "turn")}>
+                    {t("conversation.history.remove")}
+                  </Button>
+                </div>
+              </article>
+            );
+          })}
           {turn.answer && <article className="vk-answer-row" data-role="assistant" data-final="">
             <div className="vk-flow"><div className="vk-flow-body"><MarkdownMessage content={turn.answer.text} /></div></div>
           </article>}

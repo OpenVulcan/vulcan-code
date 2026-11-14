@@ -19,6 +19,7 @@ vi.mock("./conversation-measured-collapse", async (importOriginal) => {
 });
 
 import { I18nProvider } from "@/i18n";
+import { appendComposerFileReferences } from "@/lib/composer-file-references";
 import { loadedLocaleCatalog } from "@/i18n-catalogs";
 import * as serviceRuntime from "@/service/webui-service-runtime";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
@@ -361,6 +362,43 @@ function workspaceTree(
 function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
   return renderToStaticMarkup(workspaceTree(...args));
 }
+
+it.each(["Read this", ""])("keeps file references out of the default timeline and reveals them on demand (%j)", async (body) => {
+  // Build a persistent input matching the clipboard and drop submission format.
+  // 构建符合剪贴板和拖放提交格式的持久输入。
+  const path = "E:\\Example Folder\\guide.chm";
+  const prompt = appendComposerFileReferences(body, [path]);
+  const events = [eventSummary(1, {
+    kind: "user_input", input_source: "root", input_id: 1,
+    client_action_id: clientActionId("with-file-references"), text: prompt,
+  })];
+  // Mount the actual transcript so the production disclosure handles opening and closing.
+  // 挂载实际会话视图，由生产折叠控件处理展开和收起。
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    await React.act(async () => root.render(workspaceTree(events)));
+    expect(container.querySelector(".vk-prompt-text")?.textContent ?? "").toBe(body);
+    expect(container.textContent).not.toContain(path);
+    expect(container.textContent).not.toContain("Referenced files:");
+    // The disclosure is user-controlled and shows the original path, with normal Windows separators.
+    // 折叠控件由用户控制，展示带正常 Windows 分隔符的原始路径。
+    const toggle = container.querySelector<HTMLButtonElement>('.vk-prompt-row [data-slot="inline-disclosure-trigger"]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await React.act(async () => toggle.click());
+    expect(container.querySelector(".vk-prompt-files li")?.textContent).toBe(path);
+    expect(container.querySelector(".vk-prompt-text")?.textContent ?? "").toBe(body);
+    await React.act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(events[0].event).toHaveProperty("text", prompt);
+  } finally {
+    await React.act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
 
 // appendRetryRequest adds one physical request to the test history in place.
 // appendRetryRequest 就地向测试历史追加一次物理请求。

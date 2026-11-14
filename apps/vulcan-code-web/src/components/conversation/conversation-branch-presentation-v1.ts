@@ -1,4 +1,5 @@
 import type { TranslationKey } from "@/i18n-messages";
+import { splitComposerFileReferences } from "@/lib/composer-file-references";
 import { averageTurnOutputSpeed } from "./conversation-usage-display";
 import type {
   ComposerAttachmentSummary,
@@ -738,10 +739,14 @@ function userInputMessage(
   event: UserInputBody,
   resources: ConversationSessionResourceCatalogV1,
 ): ConversationMessage {
+  // Keep the persisted input intact while projecting only the authored body into the timeline.
+  // 保持持久输入完整，只将用户撰写的正文投影到时间线。
+  const { text, references } = splitComposerFileReferences(event.text);
   return {
     ...base,
     role: "user",
-    body: event.text,
+    body: text,
+    ...(references.length ? { fileReferences: references } : {}),
     editableUserPrompt: event.input_source === "root",
     attachments: (event.resource_ids ?? []).map((resourceIdValue) => (
       composerAttachmentForResource(resourceIdValue, resources)

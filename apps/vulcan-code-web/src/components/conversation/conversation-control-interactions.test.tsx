@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "@/ui-kit/primitives/toast";
 import { I18nProvider } from "@/i18n";
+import { appendComposerFileReferences } from "@/lib/composer-file-references";
 import { MarkdownMessage } from "./conversation-markdown";
 import { MarkdownDiagramFrame } from "./conversation-diagram-frame";
 import { PlanArtifactBlock } from "./conversation-plan-artifact";
@@ -57,6 +58,34 @@ async function click(label: string): Promise<void> {
 }
 
 describe("conversation control rejection paths", () => {
+  it("edits only the authored text and preserves attached file references on replay", async () => {
+    // The wire prompt holds the original reference while the visible editor receives the body.
+    // 请求提示词保留原始引用，可见编辑器仅接收正文。
+    const path = "D:/Manuals/guide.chm";
+    const confirm = vi.fn();
+    await render(<ConversationGenerationDialogV1
+      action={{ kind: "edit", text: appendComposerFileReferences("read this", [path]) }}
+      submitting={false} onCancel={vi.fn()} onConfirm={confirm} />);
+    // This textarea is mounted in the real generation dialog portal.
+    // 此文本框挂载在真实重执行对话框的门户中。
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const input = dialog.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(input.value).toBe("read this");
+    expect(dialog.textContent).not.toContain(path);
+    // Use the native setter so React observes the edited value.
+    // 使用原生设置器，使 React 识别修改后的值。
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(input, "summarize it");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // The confirmation is the primary action in the dialog footer.
+    // 确认为对话框底部的主要操作。
+    const button = dialog.querySelector<HTMLButtonElement>('[data-slot="dialog-footer"] button:last-child')!;
+    await act(async () => button.click());
+    expect(confirm).toHaveBeenCalledExactlyOnceWith(appendComposerFileReferences("summarize it", [path]));
+  });
+
   // Detail dialogs must expose a real description even when no metadata subtitle exists.
   // 详情弹窗即使没有元数据副标题，也必须提供真实描述。
   it.each(["thinking", "tool-raw"] as const)("provides an accessible description for %s details", async (kind) => {

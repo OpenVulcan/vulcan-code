@@ -1,4 +1,5 @@
 import React from "react";
+import { ConversationPromptFileReferences } from "./conversation-prompt-file-references";
 import { useToolCollapsePreference } from "./tool-collapse-preferences";
 import { ThinkingPreview } from "./thinking-preview";
 import { MarkdownMessage } from "./conversation-markdown";
@@ -960,6 +961,7 @@ function ConversationRenderItemContent(props: ConversationRenderItemViewProps) {
     const attachments = props.item.userMessage?.attachments ?? [];
     return (
       <article className="vk-prompt-row">
+        <ConversationPromptFileReferences references={props.item.userMessage?.fileReferences ?? []} />
         {attachments.length ? (
           <ComposerAttachmentStrip
             attachments={attachments}

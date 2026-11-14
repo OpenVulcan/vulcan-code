@@ -7,6 +7,7 @@ import { useComposerAttachments } from "@/components/composer/composer-attachmen
 import { useComposerDroppedFiles } from "@/components/composer/composer-panel/use-composer-dropped-files";
 import { ComposerTextContextMenu } from "@/components/composer/composer-text-context-menu";
 import { composerAttachmentForResource } from "@/components/conversation/conversation-branch-presentation-v1";
+import { ConversationPromptFileReferences } from "@/components/conversation/conversation-prompt-file-references";
 import { runConversationControlAction } from "@/components/conversation/conversation-control-feedback";
 import { AnswerCodeSnapshotsProvider, MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
@@ -81,6 +82,7 @@ export function AssistantConversation(props: { assistant: AssistantEntry }) {
           </p>
         ) : null}
         <AssistantAttachmentStrip attachments={promptAttachments} onOpenMedia={setMediaPlayer} />
+        <ConversationPromptFileReferences references={turn.fileReferences} />
         {turn.prompt ? (
           <div className="assistant-prompt">{turn.prompt}</div>
         ) : null}

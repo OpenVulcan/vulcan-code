@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { splitComposerFileReferences } from "@/lib/composer-file-references";
 import type { ComposerSlashCommandSummary, PendingPromptSummary } from "@/types";
 import { composerSlashCommandDescriptionKey } from "@/components/composer/composer-model";
 import { composerListOptionId } from "@/components/composer/composer-panel/use-composer-textarea-keys";
@@ -152,10 +153,19 @@ function PendingPromptQueueRow(props: {
     props.entry.id,
     Boolean(props.disabled || props.entry.state === "inserted"),
   );
-  const attachmentText = props.entry.attachments.length
-    ? `  · ${formatPendingPromptTranslation(t, "pendingPrompt.attachmentCount", { count: String(props.entry.attachments.length) })}`
+  // The server preview has already flattened newlines; use the full prompt to identify file references.
+  // 服务端预览已折叠换行，使用完整提示词识别文件引用。
+  const { text, references } = splitComposerFileReferences(props.entry.prompt);
+  // Count path references and managed attachments without showing raw paths in the queue.
+  // 统计路径引用和托管附件，队列中隐藏原始路径。
+  const attachmentCount = props.entry.attachments.length + references.length;
+  const attachmentText = attachmentCount
+    ? `  · ${formatPendingPromptTranslation(t, "pendingPrompt.attachmentCount", { count: String(attachmentCount) })}`
     : "";
-  const previewText = `${props.entry.preview || props.entry.prompt || t("pendingPrompt.attachmentMessage")}${attachmentText}`;
+  // Preserve the normal server preview for prompts that do not carry a generated block.
+  // 对不含生成引用块的提示词保留原有服务端预览。
+  const preview = references.length ? text : (props.entry.preview || text);
+  const previewText = `${preview || t("pendingPrompt.attachmentMessage")}${attachmentText}`;
   return (
     <div
       className="vk-queue-row"
