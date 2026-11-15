@@ -1,0 +1,207 @@
+# Builds graphical downloads for an existing setup Preview, then updates its signed pointer.
+# 为已发布到预览通道的安装器构建图形安装包，再更新该通道的已签名指针。
+name: Release setup desktop
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Setup version already published to Preview
+        required: true
+        type: string
+      allow_unnotarized:
+        description: Publish this DMG with ad hoc signing and no Apple notarization
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Verify setup version and packaging permission
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ inputs.version }}
+      ALLOW_UNNOTARIZED: ${{ inputs.allow_unnotarized }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Check the standalone setup version
+        run: |
+          set -eu
+          manifest_version=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' apps/vulcan-code-setup/Cargo.toml)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$VERSION" == "$manifest_version" ]]
+          test "$ALLOW_UNNOTARIZED" = true
+
+  linux:
+    name: Build Linux AppImage (${{ matrix.platform }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            arch: x86_64
+            tool_sha: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            runtime_id: "657374641"
+            runtime_sha: 617aa77314d57c8b8e4fae9c3f0b35af7b30d5529cb69e98f64f92510ed98a46
+          - platform: linux-arm64
+            runner: ubuntu-22.04-arm
+            arch: aarch64
+            tool_sha: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+            runtime_id: "657373827"
+            runtime_sha: 9a72a744d221576c9347ec074243acc5c3c7568896b12714e0e82e9f0bf47900
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ inputs.version }}
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+      TOOL_SHA: ${{ matrix.tool_sha }}
+      RUNTIME_ID: ${{ matrix.runtime_id }}
+      RUNTIME_SHA: ${{ matrix.runtime_sha }}
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools libfuse2 libx11-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libfontconfig1-dev
+      - name: Build the terminal and graphical installers
+        run: |
+          set -eu
+          # The graphical binary embeds the matching portable terminal installer.
+          # 图形程序内嵌相同架构的可移植命令行安装器。
+          console_target="$ARCH-unknown-linux-musl"
+          gui_target="$ARCH-unknown-linux-gnu"
+          rustup toolchain install
+          rustup target add "$console_target" "$gui_target"
+          cargo build --locked --release -p vulcan-code-setup --target "$console_target" --bin vulcan-code-setup
+          VULCAN_SETUP_CONSOLE_IMAGE="$PWD/target/$console_target/release/vulcan-code-setup" \
+            cargo build --locked --release -p vulcan-code-setup --target "$gui_target" \
+              --features desktop-package --bin vulcan-code-setup-gui
+      - name: Package and smoke test the AppImage
+        run: |
+          set -eu
+          # Verify both downloaded packaging inputs before executing them.
+          # 执行下载的打包工具前，先校验工具和运行时。
+          tool="$RUNNER_TEMP/appimagetool"
+          runtime="$RUNNER_TEMP/appimage-runtime"
+          curl -fLsS --retry 3 "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$ARCH.AppImage" -o "$tool"
+          curl -fLsS --retry 3 -H 'Accept: application/octet-stream' \
+            "https://api.github.com/repos/AppImage/type2-runtime/releases/assets/$RUNTIME_ID" -o "$runtime"
+          printf '%s  %s\n' "$TOOL_SHA" "$tool" "$RUNTIME_SHA" "$runtime" | sha256sum --strict --check
+          chmod +x "$tool"
+          mkdir -p "$RUNNER_TEMP/desktop"
+          package="$RUNNER_TEMP/desktop/vulcan-code-setup-$VERSION-$PLATFORM.AppImage"
+          sh scripts/package-setup-gui.sh linux "target/$ARCH-unknown-linux-gnu/release/vulcan-code-setup-gui" "$package" "$tool" "$runtime"
+          test "$(APPIMAGE_EXTRACT_AND_RUN=1 "$package" --version)" = "vulcan-code-setup $VERSION"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: ${{ runner.temp }}/desktop
+          retention-days: 7
+          if-no-files-found: error
+
+  macos:
+    name: Build the universal macOS DMG
+    needs: plan
+    runs-on: macos-15
+    timeout-minutes: 75
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build both slices, package and verify the DMG
+        run: |
+          set -eu
+          rustup toolchain install
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --locked --release -p vulcan-code-setup --target "$target" --bin vulcan-code-setup
+            VULCAN_SETUP_CONSOLE_IMAGE="$PWD/target/$target/release/vulcan-code-setup" \
+              cargo build --locked --release -p vulcan-code-setup --target "$target" \
+                --features desktop-package --bin vulcan-code-setup-gui
+          done
+          # The workflow input explicitly permits a DMG without Apple notarization.
+          # 工作流入参明确允许发布未经 Apple 公证的 DMG。
+          unset VULCAN_SETUP_CODESIGN_IDENTITY
+          mkdir -p "$RUNNER_TEMP/desktop"
+          package="$RUNNER_TEMP/desktop/vulcan-code-setup-$VERSION-macos-universal.dmg"
+          sh scripts/package-setup-gui.sh macos target/aarch64-apple-darwin/release/vulcan-code-setup-gui \
+            target/x86_64-apple-darwin/release/vulcan-code-setup-gui "$package"
+          hdiutil verify "$package"
+          mount=$(mktemp -d "$RUNNER_TEMP/setup-dmg.XXXXXX")
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$package"
+          trap 'hdiutil detach "$mount"' EXIT
+          app="$mount/Vulcan Code Setup.app"
+          executable="$app/Contents/MacOS/vulcan-code-setup-gui"
+          lipo -verify_arch arm64 x86_64 "$executable"
+          codesign --verify --strict "$app"
+          test "$("$executable" --version)" = "vulcan-code-setup $VERSION"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-macos-universal
+          path: ${{ runner.temp }}/desktop
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: Publish desktop packages to setup Preview
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build the release tool
+        run: |
+          set -eu
+          rustup toolchain install
+          cargo build --locked --release -p vulcan-release-tool
+          origin=$(target/release/vulcan-release-tool origin)
+          echo "UPDATE_BASE_URL=$origin" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/desktop
+      - name: Add the desktop package set to the signed Preview pointer
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          source="$RUNNER_TEMP/base"
+          objects="$RUNNER_TEMP/objects"
+          sh scripts/release-r2.sh setup-pointer-get "$source" preview
+          target/release/vulcan-release-tool setup-desktop --source "$source" --objects "$objects" \
+            --version "$VERSION" --packages "$RUNNER_TEMP/desktop" --key-env UPDATE_SIGNING_KEY
+      - name: Upload the desktop packages before updating the Preview pointer
+        run: |
+          set -eu
+          sh scripts/release-r2.sh setup-desktop-upload "$RUNNER_TEMP/objects" "$VERSION"
+          sh scripts/release-r2.sh setup-pointer "$RUNNER_TEMP/objects" preview

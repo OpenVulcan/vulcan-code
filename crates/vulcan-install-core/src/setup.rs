@@ -30,6 +30,20 @@ pub const SETUP_PRODUCT: &str = "vulcan-code-setup";
 /// 每个安装器版本发布的安装脚本；由 `scripts/entry-scripts.mjs` 填写。
 pub const ENTRY_SCRIPTS: [&str; 2] = ["install.sh", "install.ps1"];
 
+/// The desktop package targets and their file extensions.
+/// 图形安装包的目标与各自的扩展名。
+pub const DESKTOP_SETUP_TARGETS: [(&str, &str); 3] = [
+    ("linux-x64", "AppImage"),
+    ("linux-arm64", "AppImage"),
+    ("macos-universal", "dmg"),
+];
+
+/// Returns the published file name for a setup version, target and extension.
+/// 返回指定安装器版本、目标与扩展名对应的发行文件名。
+pub fn desktop_package_file(version: &ReleaseVersion, target: &str, extension: &str) -> String {
+    format!("vulcan-code-setup-{version}-{target}.{extension}")
+}
+
 /// The file name of a platform's setup program; Windows adds `.exe`.
 /// 某平台安装器的文件名；Windows 加 `.exe`。
 pub fn program_file(version: &ReleaseVersion, platform: Platform) -> String {
@@ -75,6 +89,10 @@ pub struct SetupPointer {
     /// The setup program of every platform.
     /// 每个平台的安装器。
     pub programs: BTreeMap<Platform, SetupFile>,
+    /// A complete set of optional graphical packages, keyed by desktop target.
+    /// 可选的完整图形安装包集合，以目标平台为键。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub desktop: BTreeMap<String, SetupFile>,
     /// Both [`ENTRY_SCRIPTS`], filled for this version.
     /// 为此版本填写的两个 [`ENTRY_SCRIPTS`]。
     pub scripts: Vec<SetupFile>,
@@ -143,6 +161,28 @@ impl SetupPointer {
                 ));
             }
             check_size(program, MAX_SETUP_PROGRAM_BYTES)?;
+        }
+        if !self.desktop.is_empty() {
+            if self.desktop.len() != DESKTOP_SETUP_TARGETS.len() {
+                return invalid("does not list a complete desktop package set".to_owned());
+            }
+            for (target, extension) in DESKTOP_SETUP_TARGETS {
+                // Older pointers omit the whole set; a partial set must never be published.
+                // 旧指针可以省略整个集合，但不能发布不完整的集合。
+                let package = self.desktop.get(target).ok_or_else(|| {
+                    FormatError::invalid(
+                        "setup pointer",
+                        format!("has no {target} desktop package"),
+                    )
+                })?;
+                if package.file != desktop_package_file(&self.version, target, extension) {
+                    return invalid(format!(
+                        "the {target} desktop package is not named for {}",
+                        self.version
+                    ));
+                }
+                check_size(package, MAX_SETUP_PROGRAM_BYTES)?;
+            }
         }
         let scripts: Vec<&str> = self.scripts.iter().map(|file| file.file.as_str()).collect();
         if scripts != ENTRY_SCRIPTS {
@@ -219,6 +259,7 @@ mod tests {
                 .into_iter()
                 .map(|name| file(name.to_owned()))
                 .collect(),
+            desktop: BTreeMap::new(),
             version,
             released_at: "2026-11-20T08:00:00Z".to_owned(),
             key_id: "test-key".to_owned(),

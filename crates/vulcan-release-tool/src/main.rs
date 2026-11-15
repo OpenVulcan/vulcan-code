@@ -55,6 +55,7 @@ usage:
   vulcan-release-tool setup-publish --objects DIR --version V --channel C --programs DIR --scripts DIR
       --released-at YYYY-MM-DDTHH:MM:SSZ --key-env NAME
   vulcan-release-tool setup-promote --objects DIR --version V --from C --to C --key-env NAME
+  vulcan-release-tool setup-desktop --source DIR --objects DIR --version V --packages DIR --key-env NAME
   vulcan-release-tool setup-check --pointer FILE --channel C --platform P --program FILE
   vulcan-release-tool origin
   vulcan-release-tool origins";
@@ -74,6 +75,7 @@ fn main() -> ExitCode {
         "restore" => run_restore(arguments),
         "setup-publish" => run_setup_publish(arguments),
         "setup-promote" => run_setup_promote(arguments),
+        "setup-desktop" => run_setup_desktop(arguments),
         "setup-check" => run_setup_check(arguments),
         "origin" => {
             println!("{}", vulcan_install_core::layout::PRIMARY_ORIGIN);
@@ -320,6 +322,29 @@ fn run_setup_promote(arguments: impl Iterator<Item = String>) -> anyhow::Result<
     println!(
         "signed the {} setup pointer to {}",
         pointer.channel, pointer.version
+    );
+    Ok(())
+}
+
+/// Adds the desktop packages to the verified preview setup pointer.
+/// 将图形安装包加入已校验的预览安装器指针。
+fn run_setup_desktop(arguments: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let args = Args::parse(
+        arguments,
+        &["source", "objects", "version", "packages", "key-env"],
+    )?;
+    let secret = signing_secret(args.required("key-env")?)?;
+    let pointer = setup::add_desktop_packages(
+        &args.path("source")?,
+        &args.path("objects")?,
+        &args.required("version")?.parse()?,
+        &args.path("packages")?,
+        &secret,
+        BUILT_IN_KEYS,
+    )?;
+    println!(
+        "signed desktop package set for preview setup {}",
+        pointer.version
     );
     Ok(())
 }

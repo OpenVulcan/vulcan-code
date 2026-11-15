@@ -15,7 +15,8 @@ use vulcan_install_core::layout::{setup_file_key, setup_pointer_key, signature_k
 use vulcan_install_core::names::{Channel, Platform, ReleaseVersion, SCHEMA_VERSION};
 use vulcan_install_core::pack::write_object;
 use vulcan_install_core::setup::{
-    ENTRY_SCRIPTS, SETUP_PRODUCT, SetupFile, SetupPointer, program_file,
+    DESKTOP_SETUP_TARGETS, ENTRY_SCRIPTS, SETUP_PRODUCT, SetupFile, SetupPointer,
+    desktop_package_file, program_file,
 };
 use vulcan_install_core::signing::{TrustedKey, sign_detached, trusted_key_of};
 
@@ -69,9 +70,40 @@ pub fn publish_setup(
         version: input.version,
         released_at: input.released_at,
         programs,
+        desktop: BTreeMap::new(),
         scripts,
         key_id: key.key_id.to_owned(),
     };
+    sign_pointer(objects, &pointer, secret)?;
+    Ok(pointer)
+}
+
+/// Verifies the preview pointer in `source` and writes a signed pointer with desktop packages to `objects`.
+/// 校验 `source` 中的预览指针，并向 `objects` 写入包含图形安装包的已签名指针。
+pub fn add_desktop_packages(
+    source: &Path,
+    objects: &Path,
+    version: &ReleaseVersion,
+    packages: &Path,
+    secret: &[u8; 32],
+    keys: &[TrustedKey],
+) -> anyhow::Result<SetupPointer> {
+    // Accept a single signed base for this exact version, retaining its scripts and programs.
+    // 只接受该版本的已签名预览指针，并保留其安装脚本和程序。
+    let mut pointer = load_pointer(source, Channel::Preview, version, keys)?;
+    let mut desktop = BTreeMap::new();
+    for (target, extension) in DESKTOP_SETUP_TARGETS {
+        let name = desktop_package_file(version, target, extension);
+        desktop.insert(
+            target.to_owned(),
+            copy_file(objects, version, packages, &name)?,
+        );
+    }
+    if !pointer.desktop.is_empty() && pointer.desktop != desktop {
+        bail!("the preview pointer already describes different desktop packages");
+    }
+    pointer.desktop = desktop;
+    pointer.key_id = trusted_key_of(secret, keys)?.key_id.to_owned();
     sign_pointer(objects, &pointer, secret)?;
     Ok(pointer)
 }
@@ -87,28 +119,39 @@ pub fn promote_setup(
     secret: &[u8; 32],
     keys: &[TrustedKey],
 ) -> anyhow::Result<SetupPointer> {
-    let key = trusted_key_of(secret, keys)?;
-    let source_key = setup_pointer_key(from);
-    let source = SetupPointer::verify(
-        &read_object(objects, &source_key)?,
-        &read_object(objects, &signature_key(&source_key))?,
-        keys,
-        from,
-    )
-    .with_context(|| format!("the {from} setup pointer does not verify"))?;
-    if &source.version != version {
-        bail!(
-            "the {from} setup pointer names {} instead of {version}",
-            source.version
-        );
-    }
+    let source = load_pointer(objects, from, version, keys)?;
     let pointer = SetupPointer {
         channel: to,
-        key_id: key.key_id.to_owned(),
+        key_id: trusted_key_of(secret, keys)?.key_id.to_owned(),
         ..source
     };
     sign_pointer(objects, &pointer, secret)?;
     Ok(pointer)
+}
+
+/// Reads and verifies the named setup channel and requires the requested version.
+/// 读取并校验指定安装器通道，要求指针指向指定版本。
+fn load_pointer(
+    objects: &Path,
+    channel: Channel,
+    version: &ReleaseVersion,
+    keys: &[TrustedKey],
+) -> anyhow::Result<SetupPointer> {
+    let source_key = setup_pointer_key(channel);
+    let source = SetupPointer::verify(
+        &read_object(objects, &source_key)?,
+        &read_object(objects, &signature_key(&source_key))?,
+        keys,
+        channel,
+    )
+    .with_context(|| format!("the {channel} setup pointer does not verify"))?;
+    if &source.version != version {
+        bail!(
+            "the {channel} setup pointer names {} instead of {version}",
+            source.version
+        );
+    }
+    Ok(source)
 }
 
 /// Verifies a downloaded setup pointer of `channel` and the `platform` program beside it.
@@ -201,6 +244,8 @@ mod tests {
         }
     }
 
+    /// Exercises the complete signed desktop set while preserving the base setup files.
+    /// 验证完整的已签名图形安装包集合，并检查基础安装器文件得以保留。
     #[test]
     fn a_published_setup_is_promoted_and_checked_against_its_files() {
         let temp = tempfile::tempdir().expect("temp");
@@ -227,6 +272,37 @@ mod tests {
                 .join(setup_file_key(&version, "install.ps1"))
                 .is_file()
         );
+
+        // A pointer without desktop packages remains readable before all three files are available.
+        // 三个图形安装包齐备前，仍然可以读取基础通道指针。
+        let desktop_objects = temp.path().join("desktop-objects");
+        assert!(
+            add_desktop_packages(&objects, &desktop_objects, &version, &built, &SECRET, &keys)
+                .is_err()
+        );
+        for (target, extension) in DESKTOP_SETUP_TARGETS {
+            std::fs::write(
+                built.join(desktop_package_file(&version, target, extension)),
+                target,
+            )
+            .expect("desktop package");
+        }
+        let with_desktop =
+            add_desktop_packages(&objects, &desktop_objects, &version, &built, &SECRET, &keys)
+                .expect("sign complete desktop set");
+        assert_eq!(with_desktop.programs, preview.programs);
+        assert_eq!(with_desktop.scripts, preview.scripts);
+        assert_eq!(with_desktop.desktop.len(), DESKTOP_SETUP_TARGETS.len());
+        let stable_desktop = promote_setup(
+            &desktop_objects,
+            Channel::Preview,
+            Channel::Stable,
+            &version,
+            &SECRET,
+            &keys,
+        )
+        .expect("promote desktop packages");
+        assert_eq!(stable_desktop.desktop, with_desktop.desktop);
 
         let older: ReleaseVersion = "0.1.0".parse().expect("version");
         assert!(

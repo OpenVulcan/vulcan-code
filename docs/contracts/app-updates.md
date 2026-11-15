@@ -188,7 +188,10 @@
   用 `--features desktop-package --bin vulcan-code-setup-gui` 构建图形产物。Linux 图形产物在 GNU 目标构建。
   `sh scripts/package-setup-gui.sh linux` 接收图形产物、AppImage 输出路径、打包工具和锁定的 AppImage 运行时。
   `sh scripts/package-setup-gui.sh macos` 接收 ARM64、x64 图形产物及 DMG 输出路径，在 macOS 合成为通用安装包。
-  macOS 对外分发需要以 Developer ID 签名后送 Apple 公证，本地测试包可使用临时签名。
+  常规 macOS 分发使用 Developer ID 签名与 Apple 公证。允许分发未公证包时，需要明确授权并在下载页注明。
+- 独立安装器发布到 Preview 后，运行 `release-setup-desktop.yml` 构建 AppImage 和通用 DMG。本工作流仅支持
+  临时签名的 DMG，需为当次发布明确启用 `allow_unnotarized`。三个产物全部校验后上传，再把它们的名称、摘要和大小
+  写入已签名 Preview 指针的 `desktop` 字段。`promote-setup.yml` 将同一组产物推进到 Stable。
 
 ## 安装后的 vcode 命令
 

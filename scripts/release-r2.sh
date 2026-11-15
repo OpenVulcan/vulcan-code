@@ -19,6 +19,7 @@
 #   release-r2.sh records <artifacts>                   upload the reuse records of the build artifacts and purge
 #   release-r2.sh setup-unpublished <version>           fail when the setup version is already published
 #   release-r2.sh setup-upload <objects> <version>      upload the immutable files of a setup version
+#   release-r2.sh setup-desktop-upload <objects> <version> upload desktop packages from the signed preview pointer
 #   release-r2.sh setup-pointer <objects> <channel>     upload the channel's setup pointer, purge and read back
 #   release-r2.sh setup-pointer-get <objects> <channel> download the channel's setup pointer for a promotion
 #   release-r2.sh setup-scripts <objects> <channel>     serve the scripts the setup pointer names at the top level
@@ -65,7 +66,11 @@ put_once() {
     echo "$name is already published"
     return 0
   fi
-  case "$name" in *.json) type=application/json ;; *) type=application/octet-stream ;; esac
+  case "$name" in
+    *.json) type=application/json ;;
+    *.dmg) type=application/x-apple-diskimage ;;
+    *) type=application/octet-stream ;;
+  esac
   s3 put-object --key "$prefix/$name" --body "$2" --content-type "$type" --cache-control "$immutable" \
     --metadata "sha256=$digest,run=$GITHUB_RUN_ID" > /dev/null
 }
@@ -218,6 +223,22 @@ case "$command" in
     aws s3 sync "$objects/setup/$version/" "s3://$R2_BUCKET/$prefix/setup/$version/" --endpoint-url "$R2_ENDPOINT" \
       --only-show-errors --cache-control 'public, max-age=31536000, immutable'
     echo "uploaded setup $version"
+    ;;
+  setup-desktop-upload)
+    objects=$1
+    version=$2
+    pointer="$objects/setup/channels/preview.json"
+    # Only upload the three files in the signed desktop set. Leave the existing setup files intact.
+    # 只上传已签名图形安装包集合中的三个文件，保留已有的安装器文件。
+    desktop_files=$(jq -er '.desktop | to_entries[] | .value.file' "$pointer")
+    set --
+    for file in $desktop_files; do
+      put_once "$objects" "$objects/setup/$version/$file"
+      set -- "$@" "$base/setup/$version/$file"
+    done
+    # A request made before publication may have cached a 404.
+    # 发布前的访问可能已经缓存了 404。
+    purge "$@"
     ;;
   setup-pointer)
     put_pointers "$1" "setup/channels/$2.json"
