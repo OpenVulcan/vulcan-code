@@ -111,6 +111,17 @@ async fn prepare_child_execution_request(
             request
         }
     };
+    // The storage locator names the app's history partition. Child execution must use the
+    // user project path selected by its exact indexed project id.
+    // 存储定位器指向应用历史数据分区。子会话执行使用其精确索引项目标识对应的用户项目路径。
+    let project = crate::project_directories::active_project_directory_owner(
+        &invocation.state,
+        target.locator.project_id(),
+    )?;
+    vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
+        &project.path,
+    ))?;
+    request.workspace_path = project.path;
     // Restored children spawn under the root session's allowlist, never a wider one.
     // 恢复的子代理按根会话白名单派生，绝不放宽。
     let root_session_id = crate::parse_session_id(&profile.root_session_id)

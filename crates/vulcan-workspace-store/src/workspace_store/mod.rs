@@ -64,7 +64,7 @@ pub use persistence::{
     delete_active_project_row_v1, persist_collapsed_task_project_ids, persist_new_project,
     persist_project_icon_update, persist_project_order_update,
     persist_project_pinned_and_order_update, persist_project_session_sort_mode, rename_project,
-    restore_archived_project_row_v1,
+    replace_project_root_path, restore_archived_project_row_v1,
 };
 pub use project_attached_folders::{load_project_attached_folders, set_project_attached_folder};
 pub use project_groups::{

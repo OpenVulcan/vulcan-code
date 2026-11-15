@@ -627,3 +627,16 @@ pub enum WorkspaceOfficePdf {
     /// 服务宿主上未找到 LibreOffice 安装。
     ConverterMissing,
 }
+
+/// Current availability of the project's saved root directory.
+/// 项目保存根目录的当前可用性。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDirectoryStatus {
+    /// Original saved path, even when unavailable.
+    /// 原保存路径，即使当前不可用也返回。
+    pub path: String,
+    /// Whether the directory is currently available for execution.
+    /// 目录当前是否可用于执行。
+    pub available: bool,
+}

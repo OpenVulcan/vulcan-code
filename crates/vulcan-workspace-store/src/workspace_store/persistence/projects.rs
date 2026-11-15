@@ -818,6 +818,41 @@ RETURNING id;
     validate_project_mutation_identity_rows(project_id, &rows, "rename the project")
 }
 
+/// Updates the existing project row identified by project_id and expected_path to the canonical new_path.
+/// 将 project_id 与 expected_path 指定的现有项目行更新到规范化 new_path。
+/// Returns a conflict if the original row changed or the destination belongs to another project.
+/// 原记录变更或目标属于另一项目时返回冲突。
+pub async fn replace_project_root_path(
+    host_runtime: &HostRuntimeHandle,
+    project_id: &str,
+    expected_path: &str,
+    new_path: &str,
+) -> Result<(), String> {
+    validate_project_mutation_id(project_id, "change the project directory")?;
+    // Update only the path; stable IDs keep session storage and other project records attached.
+    // 仅更新目录；稳定标识保持会话存储及其他数据仍归属于原项目。
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
+UPDATE projects
+SET root_path = ?1, updated_at = ?2
+WHERE id = ?3 AND archived = 0 AND root_path = ?4
+RETURNING id;
+"#,
+        vec![
+            SqliteValue::Text(new_path.to_string()),
+            SqliteValue::Text(current_unix_millis_text()),
+            SqliteValue::Text(project_id.to_string()),
+            SqliteValue::Text(expected_path.to_string()),
+        ],
+    )
+    .await
+    .map_err(|error| format!("Failed to change the project directory: {error}"))?;
+    let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
+    validate_project_mutation_identity_rows(project_id, &rows, "change the project directory")
+}
+
 /// Persists one active project's complete icon override pair.
 /// 持久化单个活动项目的完整图标覆盖对。
 ///

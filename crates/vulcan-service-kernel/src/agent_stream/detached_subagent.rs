@@ -139,6 +139,18 @@ pub(crate) fn start_admitted_detached_subagent_listener(
     // Admission must finish before the caller acknowledges the Provider start barrier.
     // 准入必须在调用方确认 Provider 启动屏障之前完成。
     let admission = (|| -> Result<(), String> {
+        // A detached child is bound to the indexed project's execution directory, not its history partition.
+        // 分离子会话绑定索引项目的执行目录，历史分区仅用于存储。
+        let locator = child_handle
+            .storage_locator()
+            .map_err(|error| error.to_string())?;
+        let project = crate::project_directories::active_project_directory_owner(
+            &state,
+            locator.project_id(),
+        )?;
+        vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
+            &project.path,
+        ))?;
         crate::session_plan_runtime::emit_lifetime_usage_changed(&app, &state, &child_handle);
         agent_runtime
             .task_runtime
