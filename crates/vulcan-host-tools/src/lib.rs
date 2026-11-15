@@ -12,6 +12,7 @@ pub mod native_host_binary;
 pub mod output_decode;
 pub mod process_creation;
 pub mod process_tree;
+pub mod project_directory;
 pub mod project_temp_maintenance;
 pub mod project_terminal_runtime;
 pub mod result_format;

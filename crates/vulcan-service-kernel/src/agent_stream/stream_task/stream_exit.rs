@@ -13,6 +13,9 @@ pub(crate) enum StreamTaskExitReason {
     /// The stream ended naturally without producing a Finished event.
     /// 流在未产生 Finished 事件时自然结束。
     StreamExhausted,
+    /// The project directory disappeared during physical execution.
+    /// 项目目录在实际执行期间消失。
+    ProjectDirectoryUnavailable,
     /// A newer or stopped session-kernel generation invalidated the stream.
     /// 更新或已停止的会话内核代际使当前流失效。
     StaleKernelGeneration,
@@ -35,6 +38,7 @@ impl StreamTaskExitReason {
         match self {
             Self::FinishedEventHandled => None,
             Self::StreamExhausted => Some("stream_exhausted"),
+            Self::ProjectDirectoryUnavailable => Some("project_directory_unavailable"),
             Self::StaleKernelGeneration => Some("stale_kernel_generation"),
         }
     }
@@ -103,7 +107,8 @@ pub(crate) fn handle_stream_task_exit(
     // terminalPhase 将自然耗尽归类为失败，并将已停止代际失效归类为已停止。
     let terminal_phase = match exit_reason {
         StreamTaskExitReason::StreamExhausted => SessionRunPhase::Failed,
-        StreamTaskExitReason::StaleKernelGeneration => SessionRunPhase::Stopped,
+        StreamTaskExitReason::ProjectDirectoryUnavailable
+        | StreamTaskExitReason::StaleKernelGeneration => SessionRunPhase::Stopped,
         StreamTaskExitReason::FinishedEventHandled => unreachable!("Finished exits return above"),
     };
     let terminal_status = match terminal_phase {

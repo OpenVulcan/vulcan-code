@@ -1160,6 +1160,12 @@ pub(crate) async fn execute_shell_command_tool(
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
     rtk: &PersistedRtkConfiguration,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    // Validate the bound project before resolving an optional command-specific cwd.
+    // 在解析命令可选 cwd 前先校验绑定项目。
+    if let Some(root) = request.workspace_root.as_deref() {
+        vulcan_host_tools::project_directory::require_project_directory(root)
+            .map_err(NativeToolError::new)?;
+    }
     let vulcan_environment = child_process_environment(&request).await?;
     let job_context = ShellCommandJobContext::of_request(&request);
     let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
@@ -1243,6 +1249,43 @@ pub(crate) async fn execute_shell_command_tool(
 
 #[cfg(test)]
 mod process_option_tests {
+    /// An absolute override cannot start a shell after the owning project disappears.
+    /// 所属项目消失后，绝对路径覆盖也不能启动 Shell。
+    #[tokio::test]
+    async fn shell_cwd_cannot_bypass_a_removed_project() {
+        use super::*;
+        use crate::tooling::native::tests::test_native_request;
+
+        // The override remains usable on disk while the bound root has been removed.
+        // 绑定根目录已移除，但覆盖路径仍可在磁盘上访问。
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        let mut request = test_native_request(json!({
+            "command": "echo unexpected",
+            "title": "Check cwd admission",
+            "cwd": temp.path(),
+        }));
+        request.workspace_root = Some(root.clone());
+        let shell_support = HostCommandShellSupport::from_test_parts(Vec::new(), None);
+        let error = execute_shell_command_tool(
+            request,
+            &shell_support,
+            None,
+            &PersistedRtkConfiguration::default(),
+        )
+        .await
+        .err()
+        .expect("missing project must reject the tool");
+        assert!(
+            error
+                .message
+                .starts_with(vulcan_host_tools::project_directory::PROJECT_DIRECTORY_UNAVAILABLE)
+        );
+        assert!(error.message.contains(&root.display().to_string()));
+    }
+
     use super::*;
 
     /// Arguments of one test command.

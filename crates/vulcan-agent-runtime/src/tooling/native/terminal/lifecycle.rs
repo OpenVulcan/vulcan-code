@@ -118,6 +118,12 @@ pub(crate) async fn execute_terminal_session_start_action(
                 "The `start` action for terminal_session requires a non-empty `command`.",
             )
         })?;
+    // A terminal launch must honor the bound project even when cwd points elsewhere.
+    // 即使 cwd 指向其他目录，终端启动也必须遵守绑定项目目录。
+    if let Some(root) = request.workspace_root.as_deref() {
+        vulcan_host_tools::project_directory::require_project_directory(root)
+            .map_err(NativeToolError::new)?;
+    }
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
         parsed_args.cwd.as_deref(),

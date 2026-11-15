@@ -19,6 +19,9 @@ use crate::{
     project_conversation_services::{
         ExistingSubmissionAdmissionAuthorization, try_begin_pending_prompt_dispatch_exclusion,
     },
+    runtime_workspace_helpers::{
+        owning_project_id_for_session, workspace_task_project_for_project_id,
+    },
     session_goal_lifecycle::{
         SessionGoalDispatchAuthority, registered_session_v1_handle_from_state,
         session_goal_dispatch_authority_from_v1_handle,
@@ -1215,7 +1218,19 @@ pub(super) async fn prepare_webui_pending_prompt(
     if subagent_navigation_state_changed {
         emit_webui_subagent_navigation_changed_delta_for_parent(app, state, session_id)?;
     }
-    let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
+    // Resolve the retained owner explicitly so pending work cannot fall back to the host workspace.
+    // 明确解析保留的所有者，防止待执行回合退回宿主工作区。
+    let workspace_path =
+        if let Some(project_id) = owning_project_id_for_session(&workspace_snapshot, session_id) {
+            let project = workspace_task_project_for_project_id(&workspace_snapshot, &project_id)
+                .ok_or_else(|| format!("Project not found: {project_id}"))?;
+            vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
+                &project.path,
+            ))?;
+            project.path.clone()
+        } else {
+            workspace_path_for_session(&workspace_snapshot, session_id)
+        };
     let runtime_options = entry.runtime_options.clone();
     let entry_agent_runtime = agent_runtime_for_pending_prompt(agent_runtime, &entry);
     // Actual V1 preparation owns the ordered prompt provenance, original receipt and transfer lifecycle.
