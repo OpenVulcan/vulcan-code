@@ -299,6 +299,7 @@ mod tests {
             };
         }
         PreparedPhysicalApi::SessionV1 {
+            dispatch_lease: None,
             exact_request,
             controller_config: Default::default(),
             controller_snapshot: Default::default(),

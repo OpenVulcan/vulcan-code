@@ -52,6 +52,7 @@ impl ProviderExecutionClient {
             let ProviderWireCaptureTargets {
                 request: wire_request_capture,
                 response: wire_response_capture,
+                dispatch_lease,
             } = wire_captures;
             // wireRequestCapture remains available until the HTTP request is ready for dispatch.
             // wireRequestCapture 保留到 HTTP 请求准备分派时使用。
@@ -114,14 +115,24 @@ impl ProviderExecutionClient {
             );
             let dispatched_at_ms = provider_transport_unix_millis()
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
+            // Retain the binding through the first poll that hands the request to the HTTP client.
+            // 在首次轮询把请求交给 HTTP 客户端之前，保持目录绑定不变。
+            let mut dispatch_lease = dispatch_lease;
+            // Prepare the exact encoded request while the binding is still held.
+            // 保持目录绑定期间准备精确编码的请求。
+            let mut send = std::pin::pin!(
+                client.http.post(url.as_str()).headers(headers).json(&encoded.body).send()
+            );
+            // Directory changes may proceed while the HTTP client waits on the network.
+            // HTTP 客户端等待网络期间，允许继续更换目录。
+            let dispatch = std::future::poll_fn(|cx| {
+                let result = std::future::Future::poll(send.as_mut(), cx);
+                drop(dispatch_lease.take());
+                result
+            });
             let response = tokio::time::timeout(
                 Duration::from_millis(transport.response_headers_timeout_ms),
-                client
-                    .http
-                    .post(url.as_str())
-                    .headers(headers)
-                    .json(&encoded.body)
-                    .send(),
+                dispatch,
             )
             .await
             .map_err(|_| {

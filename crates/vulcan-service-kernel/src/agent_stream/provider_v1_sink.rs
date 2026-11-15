@@ -2251,15 +2251,27 @@ impl ProviderV1StreamSink {
         // 私有上传回执使用既有项目所有者；提示词身份仍归会话所有者。
         let resource_registry = Arc::clone(&self.project_resource_catalog_registry);
         let project_directory = self.handle.storage_locator()?.project_directory();
+        // The frozen tools and directory notice must still match after media preparation.
+        // 媒体准备后仍须核对冻结工具和目录通知对应同一当前绑定。
+        let commit_check = project.map(
+            |project| -> crate::session_runtime_registry_v1::PhysicalApiCommitCheck<'_> {
+                Box::pin(async move {
+                    crate::project_directories::commit_current_project_directory(state, project)
+                        .await
+                        .map_err(provider_projection_runtime_error)
+                })
+            },
+        );
         let receipt = self
             .handle
-            .prepare_physical_api_durable_with_manual_request(
+            .prepare_physical_api_durable_with_commit_check(
                 purpose,
                 request,
                 locked_baseline,
                 continuation_action_id,
                 prepared_at_ms,
                 self.manual_compaction_request.as_ref(),
+                commit_check,
                 move |snapshot, preparation| async move {
                     // Plan and materialize all resources before the durable API permit, outside both session locks.
                     // 在可靠API许可之前、两把会话锁之外规划和物化全部资源。
@@ -2362,6 +2374,7 @@ impl ProviderV1StreamSink {
             tool_batch_prepared: false,
         });
         Ok(PreparedPhysicalApi::SessionV1 {
+            dispatch_lease: prepared.dispatch_lease,
             exact_request: transport.exact_request,
             controller_config: transport.controller_config,
             controller_snapshot: transport.controller_snapshot,

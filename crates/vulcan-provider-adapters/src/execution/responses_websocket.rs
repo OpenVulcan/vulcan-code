@@ -183,6 +183,7 @@ impl ProviderExecutionClient {
             let ProviderWireCaptureTargets {
                 request: wire_request_capture,
                 response: wire_response_capture,
+                dispatch_lease,
             } = wire_captures;
             // wireRequestCapture remains available until the active WebSocket request is encoded.
             // wireRequestCapture 保留到活动 WebSocket 请求完成编码时使用。
@@ -318,7 +319,11 @@ impl ProviderExecutionClient {
                 .await
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             }
-            if let Err(error) = session.begin_response(encoded.body, None).await {
+            // The socket must accept the request frame before directory publication may advance.
+            // Socket 接受请求帧之后，才允许继续发布目录更换。
+            let dispatch = session.begin_response(encoded.body, None).await;
+            drop(dispatch_lease);
+            if let Err(error) = dispatch {
                 retire_failed_responses_websocket(
                     &client,
                     &mut session,

@@ -41,6 +41,16 @@ async fn project_directory_change_reaches_the_physical_request_and_durable_timel
         previous_path: r"E:\old project".into(),
         changed_at_ms: 5,
     });
+    // Install the exact binding required by the final permit check.
+    // 安装最终许可复核要求的精确绑定。
+    state
+        .lock()
+        .unwrap()
+        .workspace_snapshot
+        .as_mut()
+        .unwrap()
+        .task_projects
+        .push(project.clone());
     let facts = ProviderV1RequestFacts {
         request: ApiRequestSnapshot::new("provider-1", "model-1"),
         prepared_at_ms: 10,

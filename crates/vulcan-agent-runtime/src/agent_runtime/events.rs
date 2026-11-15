@@ -192,6 +192,9 @@ pub enum PreparedPhysicalApi {
     /// A V1 session request rebuilt from the durable event ledger and committed before dispatch.
     /// 从可靠事件账本重建并在分派前完成提交的 V1 会话请求。
     SessionV1 {
+        /// Orders publication of a changed project binding against this physical dispatch.
+        /// 将项目绑定更改的发布与本次物理派发排序。
+        dispatch_lease: Option<vulcan_provider_adapters::ProviderDispatchLease>,
         /// Exact request that is allowed to reach the transport.
         /// 允许进入传输层的精确请求。
         exact_request: AiExecutionRequest,

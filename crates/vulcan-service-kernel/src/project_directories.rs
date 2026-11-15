@@ -389,6 +389,42 @@ pub(crate) fn active_project_directory_owner(
         .ok_or_else(|| format!("Project not found: {project_id}"))
 }
 
+/// Coordinates each project's binding publication with its admitted physical requests.
+/// 协调各项目的绑定发布和已准入物理请求。
+static PROJECT_DIRECTORY_CUTOVERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::BTreeMap<String, std::sync::Weak<tokio::sync::RwLock<()>>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Returns the single live publication lock for a project.
+/// 返回每个项目唯一的实时发布锁。
+pub(crate) fn project_directory_cutover(
+    project_id: &str,
+) -> Result<std::sync::Arc<tokio::sync::RwLock<()>>, String> {
+    let mut locks = PROJECT_DIRECTORY_CUTOVERS
+        .lock()
+        .map_err(|_| String::from("The project directory publication lock is unavailable."))?;
+    if let Some(lock) = locks.get(project_id).and_then(std::sync::Weak::upgrade) {
+        return Ok(lock);
+    }
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let lock = std::sync::Arc::new(tokio::sync::RwLock::new(()));
+    locks.insert(project_id.to_owned(), std::sync::Arc::downgrade(&lock));
+    Ok(lock)
+}
+
+/// Admits a prepared binding and keeps publication ordered through dispatch handoff.
+/// 准入已准备绑定，并确保发布与派发交接有序。
+pub(crate) async fn commit_current_project_directory(
+    state: &SharedServiceBridgeState,
+    prepared: &TaskProjectSummary,
+) -> Result<Option<vulcan_provider_adapters::ProviderDispatchLease>, String> {
+    // No session lock is held while reading the live project owner.
+    // 读取实时项目所有者时不持有会话锁。
+    let cutover = project_directory_cutover(&prepared.id)?.read_owned().await;
+    let current = active_project_directory_owner(state, &prepared.id)?;
+    Ok(same_project_directory_binding(prepared, &current).then(|| std::sync::Arc::new(cutover)))
+}
+
 /// Tests whether two reads refer to the same project directory binding.
 /// 判断两次读取是否指向同一个项目目录绑定。
 pub(crate) fn same_project_directory_binding(
@@ -475,6 +511,9 @@ async fn persist_project_directory_change(
     // The workspace writer orders persistent mutations; the project reservation excludes new admissions.
     // 工作区写锁为持久化变更排序；项目预留使新准入互斥。
     let controller = controller_runtime_from_state(&state)?;
+    // Wait for admitted requests before reserving the shared workspace writer.
+    // 在占用共享工作区写锁前，先等待已经准入的请求完成交接。
+    let cutover = project_directory_cutover(&project_id)?.write_owned().await;
     let persist_lock = webui_workspace_persist_lock();
     let _persist_guard = persist_lock.lock().await;
     let snapshot =
@@ -513,6 +552,7 @@ async fn persist_project_directory_change(
         ));
     }
     if project.path == new_path && project.root_volume_id == volume_id {
+        drop(cutover);
         return refresh_workbench_snapshot(state).await;
     }
     // Persist the exact previous binding together with the replacement.
@@ -550,6 +590,7 @@ async fn persist_project_directory_change(
         let epoch = &mut guard.service_lifecycle_state.recovery_publication_epoch;
         *epoch = epoch.wrapping_add(1);
     }
+    drop(cutover);
     refresh_workbench_snapshot(state).await
 }
 

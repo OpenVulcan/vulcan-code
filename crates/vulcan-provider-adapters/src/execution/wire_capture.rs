@@ -62,6 +62,9 @@ pub(super) enum ProviderWireRequestCaptureTarget {
 /// Owns the optional request and response capture endpoints for one physical execution.
 /// 持有一次真实执行可选的请求与响应捕获端点。
 pub(super) struct ProviderWireCaptureTargets {
+    /// Optional host lease held through the initial transport handoff.
+    /// 保持到初次传输交接完成的可选宿主租约。
+    pub(super) dispatch_lease: Option<super::ProviderDispatchLease>,
     /// Optional exact request observer or acknowledged best-effort trace target.
     /// 可选的精确请求观察器或带确认的尽力追踪目标。
     pub(super) request: Option<ProviderWireRequestCaptureTarget>,

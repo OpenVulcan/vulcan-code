@@ -114,24 +114,34 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
     let (request_capture_sender, request_capture_receiver) =
         oneshot::channel::<ProviderWireRequestTraceDispatch>();
     let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+    // Hold the workspace binding while the provider request is being encoded.
+    // 编码供应商请求时保持工作目录绑定。
+    let cutover = std::sync::Arc::new(tokio::sync::RwLock::new(()));
+    // Retain the read lease until the wire request is ready to dispatch.
+    // 持有读锁直到 Wire 请求准备发出。
+    let dispatch_lease = std::sync::Arc::new(cutover.clone().read_owned().await);
+    // Observe the same binding from the trace handler.
+    // 从追踪处理器观察同一个目录绑定。
+    let trace_cutover = cutover.clone();
     // requestCaptureTask acknowledges the same durable barrier used by the runtime writer.
     // requestCaptureTask 确认与运行时写入器相同的可靠屏障。
     let request_capture_task = tokio::spawn(async move {
         let dispatch = request_capture_receiver
             .await
             .expect("transport should publish its exact encoded request");
+        assert!(trace_cutover.try_write().is_err());
         let _ = dispatch.persistence_result.send(Ok(()));
         dispatch.request
     });
     // response is the normalized stream produced by the real execution path.
     // response 是真实执行路径产生的规范化响应流。
-    let mut response = client.execute_with_wire_api_trace_capture(
+    let mut response = client.execute_with_dispatch_lease(
         route,
         request,
         secret,
         String::from("execution-wire-capture"),
-        request_capture_sender,
-        response_capture_sender,
+        Some((request_capture_sender, response_capture_sender)),
+        Some(dispatch_lease),
     );
     // completed proves the mock response reached the declared terminal protocol event.
     // completed 证明模拟响应到达已声明的协议终态事件。
@@ -163,6 +173,7 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
     let dispatched = server.await.expect("server should finish");
 
     assert!(completed);
+    assert!(cutover.try_write().is_ok());
     assert_eq!(captured.body, dispatched);
     assert_eq!(captured.body["reasoning"]["effort"], "none");
     assert_eq!(captured.transport, "http_sse");
