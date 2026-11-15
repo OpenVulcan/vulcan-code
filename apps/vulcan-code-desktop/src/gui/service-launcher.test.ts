@@ -1,9 +1,11 @@
 // Exercise service readiness against a real isolated HTTP discovery endpoint.
 // 使用真实隔离 HTTP 发现端点验证服务就绪行为。
 import { strict as assert } from 'node:assert';
+import childProcess, { type SpawnOptions } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, writeFile, unlink, rmdir } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -62,6 +64,33 @@ test('waits for business readiness without spawning a second live owner', async 
     assert.equal(instance.status, 'ready');
     assert.equal(states.length, 3);
     assert(!stages.includes('starting-service'));
+  });
+});
+
+// A debug executable still has to start windowless when the desktop client owns the launch.
+// 即便是调试版程序，由桌面客户端启动时也应保持无窗口。
+test('starts Windows Debug Core without a console', { skip: process.platform !== 'win32' }, async context => {
+  await withHealth(['ready'], async description => {
+    // Replace discovery with an absent owner and intercept only this cold launch.
+    // 用没有所有者的发现文件触发冷启动，并仅拦截此次启动。
+    await writeFile(description.discoveryPath, '{}');
+    const spawn = context.mock.method(childProcess, 'spawn',
+      (executable: string, args: readonly string[], options: SpawnOptions) => {
+        assert.equal(executable, description.executablePath);
+        assert.deepEqual(args, ['--gui-launch', '--no-debug-console']);
+        assert.equal(options.windowsHide, true);
+        assert.equal(options.detached, true);
+        assert.equal(options.stdio, 'ignore');
+        throw new Error('synthetic Core launch');
+      });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(ensureServiceInstance(description, [], () => {}), /synthetic Core launch/);
+      assert.equal(spawn.mock.callCount(), 1);
+    } finally {
+      spawn.mock.restore();
+      syncBuiltinESMExports();
+    }
   });
 });
 

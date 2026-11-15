@@ -124,6 +124,8 @@ make core-restart
 
 只想验证编译而暂不重启时，使用 `make core-build`；它只把 `vulcan-code-service` 与 LanceDB 原生库编译到 Cargo 的 Debug 目录，不替换正在运行的服务。`make core-restart` 自带增量编译，使用桌面运行入口共用的布局校验；编译和启动契约校验成功后，自动强制停止精确路径匹配的当前 Debug Core，替换 `output/bin/vulcan-code-service.exe` 及同目录的 `vulcan_lancedb_native.dll`（两者一同备份、一同恢复，不混用不同代次）并启动新 Core，无需手动退出托盘。其他发行目录或 Release 进程不在停止范围内；如果其他程序占有同一 Debug 数据目录，则拒绝重启。桌面壳与 Vite 保持运行，WebUI 断线后按新 Core 的发现信息重连。重启期间正在执行的 AI 请求会中断，应在重连后重新发起；需要优雅排空时可先自行从托盘退出服务。
 
+Windows 桌面客户端冷启动 Core 时传入 `--no-debug-console`，已安装的 TUI 以分离进程启动 Core。两种启动路径中的登录自启登记检查由无窗口的 `reg.exe` 完成，受管运行时安装和 GPU 探测也采用无窗口方式。直接以 `--gui-launch` 启动 Debug Core（包括 `make core-restart`）仍可使用诊断控制台。
+
 上述托盘及可见调试控制台行为属于 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源；新 Core 退出且尚未健康就绪时，恢复原可执行文件备份。运行布局架构版本由 `scripts/desktop-runtime.mjs` 定义并校验，核心脚本不再维护独立版本数字。
 
 核心重启保留可见的 Debug 控制台，不再隐藏窗口。宣布成功必须同时满足新进程健康身份匹配、托盘事件循环就绪以及 Windows 确认托盘注册；本次进程通过启动器指定的 `VULCAN_CORE_STARTUP_REPORT` 写入独立确认文件，位于 `target/core-restart/`。该变量只用于重启确认，不替代服务发现。Windows 可以将已注册图标放在折叠区域；图标外观改变不意味着服务未启动。关闭工作台窗口仍只结束桌面客户端，后台核心退出使用托盘菜单。
@@ -318,6 +320,16 @@ release 发行物必须自带受管 Python 与 Node。刚同步的发行目录�
 
 `scripts/install.sh`（Linux 与 macOS）与 `scripts/install.ps1`（Windows PowerShell 5.1 与 PowerShell 7）是一键安装入口的模板，只在安装器发布（`release-setup.yml`）时由 `node scripts/entry-scripts.mjs generate` 填入安装器版本、下载源、各平台安装器摘要与 Windows 签名证书指纹，发布到 `setup/<版本>/`。脚本优先运行默认目录或 `--prefix` 对应的已安装程序，并为旧版安装器开启自动自更新。未找到时按 `uname`（Apple 芯片上的 Rosetta shell 仍取 arm64）或 Windows x64 选择安装器。`--route china` 与 `--route international` 分别将首次下载限定在中国大陆镜像与国际源。自动线路先试国际源，再试中国大陆镜像。下载后校验 SHA-256（Windows 另校验 Authenticode 签名者），再把原始参数交给安装器。用户取消时退出码为 130（`CANCELLED_EXIT_CODE`），`install.ps1` 据此安静结束。安装、更新与卸载都由安装器完成，见 [`app-updates.md`](app-updates.md)。产品发布不再附带安装脚本。
 
-`node scripts/windows-installer.mjs package [--out <dir>] [--sign <命令>] [--setup <文件>]` 只打包、不编译，只支持在 Windows x64 上运行：用与 `release-package.mjs` 相同的校验检查当前 release 发行物并读取版本，然后用 Inno Setup 从同一模板生成未签名的完整安装程序 `target/release-packages/<版本>/VulcanCode-<版本>-windows-x64-setup.exe` 与更新包 `VulcanCode-<版本>-windows-x64-update.exe`，生成的 `.iss` 脚本保留在同一目录。更新包与安装程序的 AppId、快捷方式、注册表、卸载项与 `[Code]` 相同，但不含 `versions\<版本>`：它只用于跨安装纪元的应用内更新，在应用已组装好的版本上切换并刷新启动器与安装器，版本未组装完整时拒绝运行（见 [`app-updates.md`](app-updates.md)）。Inno Setup 的版本与安装器 SHA-256 锁定在 `scripts/build-inputs.lock.json` 的 `inno_setup`，首次运行时校验摘要后以便携模式静默安装到 `third_party/inno-setup/<版本>/`，不写入系统目录或卸载项。安装程序按当前用户安装到 `%LOCALAPPDATA%\Programs\VulcanCode`，不请求管理员权限，创建开始菜单快捷方式（桌面快捷方式可选），快捷方式指向桌面壳，由桌面壳按运行布局启动 Core。升级前与卸载时只清理发行物的顶层条目，安装目录中的其他文件和 `~/.vulcan` 下的用户数据保留。安装程序不进入 `SHA256SUMS`。`--setup` 给出已校验的 stable 安装器时，按原样装入安装目录的 `setup\`；本地构建不给出时安装程序不内置安装器。`node --test scripts/windows-installer.test.mjs` 验证生成脚本的命名、清理范围、权限级别与平台限制，不替代真实安装与启动验收。
+Windows 正式发版使用 `release-setup.yml` 构建并签名的统一安装器。先将支持图形发行包和 Inno 接管的安装器提升到 stable，再发布产品。产品工作流签名图形子系统的 `VulcanCode-<版本>-windows-x64-setup.exe`，内嵌 stable 安装器，并将同一 stable 安装器直接发布为 `VulcanCode-<版本>-windows-x64-update.exe`。两种资产均支持旧版更新器。
+
+在 Windows 本机验证时，先构建终端安装器，再将其路径交给桌面包构建。双击 `target/release/vulcan-code-setup-gui.exe` 打开图形安装器；在已有终端中执行 `vulcan-code-setup --ui gui` 也可打开图形安装器。
+
+```powershell
+cargo build --locked --release -p vulcan-code-setup --bin vulcan-code-setup
+$env:VULCAN_SETUP_CONSOLE_IMAGE = (Resolve-Path target/release/vulcan-code-setup.exe).Path
+cargo build --locked --release -p vulcan-code-setup --features desktop-package --bin vulcan-code-setup-gui
+```
+
+`scripts/windows-installer.mjs` 和对应测试保留生成历史 Inno 安装夹具的能力，见 [`app-updates.md`](app-updates.md)。
 
 `node --test scripts/release-package.test.mjs` 在全部平台验证归档命名、内容、链接与可执行位及索引，zip 格式只在 Windows 上验证。`node --test scripts/entry-scripts.test.mjs` 以合成安装器填写两个脚本并运行真实脚本：类 Unix 上用伪造的 `uname`/`sysctl` 验证 `install.sh` 的平台选择、下载源回退、摘要篡改与参数传递；Windows 上在本机已有的每种 PowerShell 中经本地 HTTP 服务验证 `install.ps1` 的参数与退出码传递、签名者与摘要校验。这些测试不替代各平台真实构建产物的安装与启动验收。

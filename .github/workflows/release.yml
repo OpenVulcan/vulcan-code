@@ -317,6 +317,8 @@ jobs:
           ./target/release/vulcan-release-tool.exe setup-check --pointer "$dir/stable.json" --channel stable `
             --platform windows-x64 --program "$dir/$file"
           if ($LASTEXITCODE -ne 0) { throw 'the stable setup program does not verify' }
+          & "$dir/$file" --supports-desktop-package
+          if ($LASTEXITCODE -ne 0) { throw 'promote a setup release that supports the Windows desktop package before publishing the product' }
           "SETUP_PROGRAM=$dir/$file" >> $env:GITHUB_ENV
           "### Bundled setup program $version" >> $env:GITHUB_STEP_SUMMARY
       - name: Reuse unchanged programs from a published release
@@ -352,6 +354,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'reusing the desktop executable failed' }
           node scripts/release-reuse.mjs record @common --target target/release
           if ($LASTEXITCODE -ne 0) { throw 'recording the built programs failed' }
+      # Build the graphical entry around the stable installer whose signature and digest were verified above.
+      # 使用已校验签名及摘要的 stable 安装器构建图形入口。
+      - name: Build the Windows desktop setup package
+        run: |
+          $downloads = "$env:RUNNER_TEMP/release/downloads"
+          New-Item -ItemType Directory -Force $downloads | Out-Null
+          $env:VULCAN_SETUP_CONSOLE_IMAGE = $env:SETUP_PROGRAM
+          cargo build --locked --release -p vulcan-code-setup --features desktop-package --bin vulcan-code-setup-gui
+          if ($LASTEXITCODE -ne 0) { throw 'building the desktop setup package failed' }
+          $package = "$downloads/VulcanCode-$env:VERSION-$env:PLATFORM-setup.exe"
+          Copy-Item -LiteralPath ./target/release/vulcan-code-setup-gui.exe -Destination $package
+          $probe = Start-Process -FilePath $package -ArgumentList '--supports-desktop-package' -Wait -PassThru
+          if ($probe.ExitCode -ne 0) { throw 'the desktop setup package could not run its embedded installer' }
+          "DESKTOP_SETUP=$package" >> $env:GITHUB_ENV
       - name: Install the pinned official SimplySign Desktop
         run: ./scripts/certum-signing.ps1 -Phase Install -EvidenceDirectory $env:EVIDENCE
       # Our own programs are signed before packing, so the indexes and the installer carry signed bytes;
@@ -372,8 +388,8 @@ jobs:
             Where-Object Extension -in '.exe', '.dll' | ForEach-Object FullName)
           $files += (Join-Path $root $layout.desktopExecutable)
           $files = @($files | Where-Object { $reused -notcontains [IO.Path]::GetFullPath($_) })
+          $files += $env:DESKTOP_SETUP
           "reusing $($reused.Count) signed files, signing $($files.Count)"
-          if ($files.Count -eq 0) { return }
           ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $env:EVIDENCE
           try {
             ./scripts/certum-signing.ps1 -Phase Sign -EvidenceDirectory $env:EVIDENCE -Files $files
@@ -395,27 +411,16 @@ jobs:
           ./target/release/vulcan-release-tool record --objects "$out/objects" --components "$out/components.json" `
             --version $env:VERSION --platform $env:PLATFORM --install-epoch $env:INSTALL_EPOCH --tree $root
           if ($LASTEXITCODE -ne 0) { throw 'record failed' }
-      # Inno Setup signs the installer, the update package and their uninstaller through the sign command, file
-      # by file; the update package is the in-app update across install epochs (scripts/windows-installer.mjs).
-      # Inno Setup 通过签名命令逐个为安装程序、更新包及其卸载程序签名；更新包用于跨安装纪元的应用内更新
-      # （scripts/windows-installer.mjs）。
-      - name: Compile and sign the installer and update package
+      # Both names remain usable by older updaters; the compatibility asset keeps the setup release signature.
+      # 两个产物名称均可供旧更新器调用，兼容资产保留安装器发行签名。
+      - name: Package the signed Windows installer and compatibility entry
         env:
-          CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
-          CERTUM_TOTP_SECRET: ${{ secrets.CERTUM_TOTP_SECRET }}
           CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
         run: |
           $downloads = "$env:RUNNER_TEMP/release/downloads"
-          $sign = "pwsh -NoProfile -File $PWD\scripts\certum-signing.ps1 -Phase Sign -EvidenceDirectory $env:EVIDENCE -Files `$f"
-          ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $env:EVIDENCE
-          try {
-            node scripts/windows-installer.mjs package --out $downloads --sign $sign --setup $env:SETUP_PROGRAM
-            if ($LASTEXITCODE -ne 0) { throw 'compiling the installer failed' }
-          } finally {
-            ./scripts/certum-signing.ps1 -Phase Logout -EvidenceDirectory $env:EVIDENCE
-          }
-          Remove-Item -Path "$downloads/*.iss"
-          ./scripts/certum-signing.ps1 -Phase Verify -EvidenceDirectory $env:EVIDENCE -Files (Get-ChildItem "$downloads/*.exe").FullName
+          $compatibility = "$downloads/VulcanCode-$env:VERSION-$env:PLATFORM-update.exe"
+          Copy-Item -LiteralPath $env:SETUP_PROGRAM -Destination $compatibility
+          ./scripts/certum-signing.ps1 -Phase Verify -EvidenceDirectory $env:EVIDENCE -Files @($env:DESKTOP_SETUP, $compatibility)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-windows-x64

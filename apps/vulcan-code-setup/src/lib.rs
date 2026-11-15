@@ -5,6 +5,14 @@
 //! `vulcan-install-core`（方案 18.6 节）。
 
 pub mod args;
+#[cfg(all(windows, feature = "desktop-package"))]
+mod desktop_package;
+#[cfg(all(windows, feature = "desktop-package"))]
+pub use desktop_package::run as desktop_package;
+#[cfg(windows)]
+mod gui;
+#[cfg(windows)]
+mod inno;
 mod install;
 mod integrate;
 pub mod paths;
@@ -39,6 +47,27 @@ pub const CANCELLED_EXIT_CODE: i32 = 130;
 /// Runs the setup program with the arguments after the program name; returns the exit code.
 /// 以程序名之后的参数运行安装器；返回退出码。
 pub fn run(arguments: &[String]) -> i32 {
+    #[cfg(windows)]
+    if arguments == ["--supports-inno-adoption"] {
+        return 0;
+    }
+    #[cfg(windows)]
+    if arguments == ["--supports-desktop-package"] {
+        return 0;
+    }
+    #[cfg(windows)]
+    if let [option, path, legacy @ ..] = arguments
+        && option == inno::PACKAGE_PATH_OPTION
+    {
+        return inno::run_legacy_update(legacy, Some(std::path::Path::new(path)));
+    }
+    #[cfg(windows)]
+    if arguments
+        .first()
+        .is_some_and(|argument| argument.starts_with('/'))
+    {
+        return inno::run_legacy_update(arguments, None);
+    }
     let mut command = match args::parse(arguments) {
         Ok(command) => command,
         Err(error) => {
@@ -46,6 +75,32 @@ pub fn run(arguments: &[String]) -> i32 {
             return 2;
         }
     };
+    // A desktop launch has no shared console; a redirected script still owns its arguments.
+    // 桌面启动没有与调用方共享的控制台；重定向脚本仍按其参数执行。
+    let common = match &command {
+        Command::Install(options) => Some(&options.common),
+        Command::Update(options) => Some(options),
+        Command::Uninstall(options) => Some(&options.common),
+        _ => None,
+    };
+    if let Some(common) = common {
+        if common.ui == Some(args::Ui::Tui) && !wizard::wanted(false) {
+            eprintln!("vulcan-code-setup: --ui=tui requires an interactive terminal");
+            return 2;
+        }
+        #[cfg(windows)]
+        if common.ui == Some(args::Ui::Gui)
+            || (arguments.is_empty() && windows::standalone_console())
+        {
+            windows::release_standalone_console();
+            return gui::run(command);
+        }
+        #[cfg(not(windows))]
+        if common.ui == Some(args::Ui::Gui) {
+            eprintln!("vulcan-code-setup: the graphical installer is available on Windows");
+            return 2;
+        }
+    }
     // Resolve the node before the first network request, even when a newer installer takes over.
     // 在首次联网前确定节点，即使稍后由新版安装器接管也沿用该节点。
     let updating = match &mut command {

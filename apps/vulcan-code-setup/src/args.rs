@@ -28,6 +28,7 @@ uninstall  removes everything the setup program created; --purge also removes ~/
 status     shows what is installed and how to uninstall it
 
 --yes        runs without asking; required when there is no terminal
+--ui gui     opens the Windows graphical installer; --ui tui requires a terminal
 --gui        also installs the desktop app (on Linux it needs a desktop environment); --no-gui
              installs the terminal client and the service only. The default is the desktop app
              where a graphical session runs
@@ -98,6 +99,9 @@ pub struct CommonOptions {
     /// Run without asking.
     /// 不询问直接执行。
     pub yes: bool,
+    /// An explicit installer frontend, independent of the installed desktop component.
+    /// 显式指定安装器界面，独立于是否安装桌面组件。
+    pub ui: Option<Ui>,
     /// Installation directory, when not the platform default.
     /// 安装目录（不使用平台默认值时）。
     pub prefix: Option<PathBuf>,
@@ -107,6 +111,18 @@ pub struct CommonOptions {
     /// Download route for `install` and `update`; omitted to use the recorded choice or default.
     /// `install` 和 `update` 的下载线路；省略时沿用记录的选择或默认值。
     pub route: Option<Route>,
+}
+
+/// Available interactive frontends.
+/// 可用的交互界面。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ui {
+    /// Windows graphical installer.
+    /// Windows 图形安装器。
+    Gui,
+    /// Terminal wizard.
+    /// 终端向导。
+    Tui,
 }
 
 /// Options of `install`; `None` keeps the recorded choice or the default.
@@ -248,6 +264,13 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
                 install.common.yes = true;
             }
             "--prefix" => install.common.prefix = Some(PathBuf::from(value(flag)?)),
+            "--ui" if install.common.ui.is_none() => {
+                install.common.ui = Some(match value(flag)?.as_str() {
+                    "gui" => Ui::Gui,
+                    "tui" => Ui::Tui,
+                    _ => return Err(String::from("--ui accepts gui or tui")),
+                });
+            }
             "--gui" | "--no-gui" => {
                 switch_only(flag)?;
                 choose(&mut install.gui, on, flag)?;
@@ -333,6 +356,9 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
     if self_update == Some(false) {
         install.common.self_update = SelfUpdate::Never;
     }
+    if install.common.yes && install.common.ui.is_some() {
+        return Err(String::from("--yes cannot be combined with --ui"));
+    }
     match verb {
         "install" if !purge => Ok(Command::Install(install)),
         "update" if !install_only && !purge => Ok(Command::Update(install.common)),
@@ -340,6 +366,7 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
             if !install_only
                 && !purge
                 && self_update.is_none()
+                && install.common.ui.is_none()
                 && install.common.route.is_none() =>
         {
             Ok(Command::Status(install.common))
@@ -362,7 +389,7 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
 pub(crate) fn takes_separate_value(argument: &str) -> bool {
     matches!(
         argument,
-        "--prefix" | "--mode" | "--port-range" | "--with" | "--channel" | "--route"
+        "--prefix" | "--mode" | "--port-range" | "--with" | "--channel" | "--route" | "--ui"
     )
 }
 
@@ -481,6 +508,7 @@ mod tests {
             Ok(Command::Uninstall(UninstallOptions {
                 common: CommonOptions {
                     yes: true,
+                    ui: None,
                     prefix: None,
                     self_update: SelfUpdate::Always,
                     route: None,
@@ -488,5 +516,16 @@ mod tests {
                 purge: true
             }))
         );
+    }
+
+    /// Keeps the UI selector independent from the application's desktop component.
+    /// 保证安装器界面选择与应用的桌面组件相互独立。
+    #[test]
+    fn graphical_ui_does_not_select_the_desktop_component() {
+        let options = install("install --ui gui --no-gui");
+        assert_eq!(options.common.ui, Some(Ui::Gui));
+        assert_eq!(options.gui, Some(false));
+        assert!(parse_words("update --yes --ui=gui").is_err());
+        assert!(parse_words("uninstall --ui=gui").is_ok());
     }
 }

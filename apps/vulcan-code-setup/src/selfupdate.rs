@@ -167,6 +167,13 @@ fn restart_arguments(arguments: &[String]) -> Vec<String> {
 fn restart(program: &Path, arguments: &[String]) -> Result<Outcome, String> {
     let mut command = Command::new(program);
     command.args(restart_arguments(arguments));
+    #[cfg(windows)]
+    if arguments.iter().any(|argument| argument == "--ui=gui")
+        && crate::windows::standalone_console()
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    }
     println!("Restarting the updated setup program...");
     #[cfg(unix)]
     {

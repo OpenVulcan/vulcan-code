@@ -19,14 +19,14 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
+use vulcan_host_tools::process_creation::new_background_std_command;
 use xz2::read::XzDecoder;
 use zip::ZipArchive;
 
@@ -476,7 +476,7 @@ pub fn detect_nvidia_driver() -> Result<Option<NvidiaDriver>, String> {
 /// Runs one `nvidia-smi --query-gpu` CSV query; `None` when the tool is absent or fails.
 /// 运行一次 `nvidia-smi --query-gpu` CSV 查询；工具不存在或失败时返回 `None`。
 fn query_nvidia_smi(fields: &str) -> Result<Option<String>, String> {
-    let mut command = Command::new("nvidia-smi");
+    let mut command = new_background_std_command("nvidia-smi");
     command
         .args([
             format!("--query-gpu={fields}").as_str(),
@@ -485,7 +485,6 @@ fn query_nvidia_smi(fields: &str) -> Result<Option<String>, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    apply_windows_release_no_window_to_std_command(&mut command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),

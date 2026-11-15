@@ -21,15 +21,51 @@ use crate::state::{Item, SETUP_DIR};
 /// `scripts/install.sh` 写入 `~/.local/bin` 的启动器。
 const LEGACY_LAUNCHERS: [&str; 3] = ["vulcan-code", "vulcan-code-service", "vulcan-tui"];
 
+/// The destructive operation currently awaiting the user's approval.
+/// 当前等待用户批准的破坏性操作。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Confirmation {
+    /// Remove the program and its integrations.
+    /// 移除程序及其系统集成。
+    Remove,
+    /// Erase the separate user-data directory.
+    /// 清除独立的用户数据目录。
+    Purge,
+}
+
 /// `vulcan-code-setup uninstall`.
 /// `vulcan-code-setup uninstall`。
 pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
+    remove(options, |approval| {
+        confirm(
+            match approval {
+                Confirmation::Remove => "Continue?",
+                Confirmation::Purge => "Delete it, including all sessions, settings and memory?",
+            },
+            options.common.yes,
+        )
+    })
+}
+
+/// Removes the selected installation with the caller's confirmation surface.
+/// 通过调用方提供的确认界面移除所选安装。
+pub(super) fn remove(
+    options: &UninstallOptions,
+    confirm: impl Fn(Confirmation) -> Result<bool, String>,
+) -> Result<(), String> {
     let platform = Platform::current().ok_or("this platform is not supported")?;
     let root_path = resolve_root(options.common.prefix.as_deref(), platform)?;
     let mut items = match root::ownership(&root_path)? {
         Ownership::Owned(state) => state.items,
         Ownership::Legacy => legacy_items(&root_path)?,
-        Ownership::Inno(uninstaller) => return uninstall_inno(&root_path, &uninstaller, options),
+        Ownership::Inno(_) => {
+            let Ownership::Inno(uninstaller) = root::installable(&root_path)? else {
+                return Err(String::from(
+                    "the Windows installation changed during inspection",
+                ));
+            };
+            return uninstall_inno(&root_path, &uninstaller, options, &confirm);
+        }
         Ownership::Fresh => {
             return Err(format!(
                 "Vulcan Code is not installed in {}",
@@ -58,7 +94,7 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
         Some(dir) => println!("  your data in {}", dir.display()),
         None => println!("Your sessions, settings and memory are kept; --purge removes them."),
     }
-    if !confirm("Continue?", options.common.yes)? {
+    if !confirm(Confirmation::Remove)? {
         return Err(String::from(crate::CANCELLED));
     }
     // Nothing is changed while a program of this root still runs, so a failure leaves the
@@ -89,7 +125,7 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(root_path.join(UPDATES_DIR));
 
     if let Some(dir) = user_data.filter(|dir| dir.exists()) {
-        purge(&dir, options.common.yes)?;
+        purge(&dir, &confirm)?;
     }
     remove_setup(&root_path)?;
     for problem in &problems {
@@ -196,6 +232,7 @@ fn uninstall_inno(
     root_path: &Path,
     uninstaller: &Path,
     options: &UninstallOptions,
+    confirm: &impl Fn(Confirmation) -> Result<bool, String>,
 ) -> Result<(), String> {
     let version_dir = current_version_dir(root_path)?;
     let user_data = purge_target(version_dir.as_deref(), options.purge)?;
@@ -207,7 +244,7 @@ fn uninstall_inno(
         Some(dir) => println!("  your data in {}", dir.display()),
         None => println!("Your sessions, settings and memory are kept; --purge removes them."),
     }
-    if !confirm("Continue?", options.common.yes)? {
+    if !confirm(Confirmation::Remove)? {
         return Err(String::from(crate::CANCELLED));
     }
     // The confirmation above is the only question; the uninstaller shows no dialogs of its own.
@@ -237,7 +274,7 @@ fn uninstall_inno(
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     if let Some(dir) = user_data.filter(|dir| dir.exists()) {
-        purge(&dir, options.common.yes)?;
+        purge(&dir, confirm)?;
     }
     remove_setup(root_path)?;
     println!("Vulcan Code was removed from {}.", root_path.display());
@@ -324,7 +361,10 @@ fn remove_programs(root: &Path) -> Result<(), String> {
 
 /// Deletes the user data directory after listing it.
 /// 列出用户数据目录后将其删除。
-fn purge(user_data: &Path, yes: bool) -> Result<(), String> {
+fn purge(
+    user_data: &Path,
+    confirm: &impl Fn(Confirmation) -> Result<bool, String>,
+) -> Result<(), String> {
     let mut names: Vec<String> = std::fs::read_dir(user_data)
         .map_err(|error| format!("cannot read {}: {error}", user_data.display()))?
         .flatten()
@@ -332,10 +372,7 @@ fn purge(user_data: &Path, yes: bool) -> Result<(), String> {
         .collect();
     names.sort();
     println!("{} holds: {}", user_data.display(), names.join(", "));
-    if !confirm(
-        "Delete it, including all sessions, settings and memory?",
-        yes,
-    )? {
+    if !confirm(Confirmation::Purge)? {
         println!("Kept {}.", user_data.display());
         return Ok(());
     }
@@ -379,30 +416,33 @@ fn remove_setup(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// A running program cannot delete itself on Windows, so a detached `cmd` removes the setup
+/// A running program cannot delete itself on Windows, so a detached helper removes the setup
 /// directory, and the root when it is given, once this process has exited.
-/// Windows 上运行中的程序无法删除自身，因此由分离的 `cmd` 在本进程退出后删除安装器目录，以及给出时的
+/// Windows 上运行中的程序无法删除自身，因此由分离的辅助程序在本进程退出后删除安装器目录，以及给出时的
 /// 根目录。
 #[cfg(windows)]
 fn remove_after_exit(setup: &Path, root: Option<&Path>) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, DETACHED_PROCESS};
-    // `ping` waits about two seconds without needing a console, unlike `timeout`.
-    // `ping` 无需控制台即可等待约两秒，`timeout` 则需要。
-    let mut script = format!(
-        "ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"",
-        setup.display()
-    );
-    if let Some(root) = root {
-        script.push_str(&format!(" & rmdir \"{}\" 2>nul", root.display()));
-    }
-    std::process::Command::new("cmd")
-        .args(["/d", "/c"])
-        .raw_arg(script)
-        .current_dir(std::env::temp_dir())
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-        .spawn()
-        .map_err(|error| format!("cannot start the cleanup of {}: {error}", setup.display()))?;
+    // Wait for the exact installer process, since the GUI may remain on its completion screen.
+    // 等待确切的安装器进程，因为图形界面可能停留在完成页。
+    let script = "try { $proc=[Diagnostics.Process]::GetProcessById([int]$env:VULCAN_SETUP_CLEANUP_PID); $proc.WaitForExit() } catch [ArgumentException] {}; [IO.Directory]::Delete($env:VULCAN_SETUP_CLEANUP_DIR,$true); if ($env:VULCAN_SETUP_CLEANUP_ROOT) { try { [IO.Directory]::Delete($env:VULCAN_SETUP_CLEANUP_ROOT) } catch {} }";
+    let system_root =
+        std::env::var_os("SystemRoot").ok_or("Windows does not declare SystemRoot")?;
+    std::process::Command::new(
+        PathBuf::from(system_root).join("System32/WindowsPowerShell/v1.0/powershell.exe"),
+    )
+    .args(["-NoProfile", "-NonInteractive", "-Command", script])
+    .env("VULCAN_SETUP_CLEANUP_PID", std::process::id().to_string())
+    .env("VULCAN_SETUP_CLEANUP_DIR", setup)
+    .env(
+        "VULCAN_SETUP_CLEANUP_ROOT",
+        root.unwrap_or_else(|| Path::new("")),
+    )
+    .current_dir(std::env::temp_dir())
+    .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+    .spawn()
+    .map_err(|error| format!("cannot start the cleanup of {}: {error}", setup.display()))?;
     Ok(())
 }
 

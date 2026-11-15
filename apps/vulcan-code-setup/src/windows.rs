@@ -23,12 +23,12 @@ use windows_sys::Win32::System::Registry::{
     RegSetValueExW,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-    GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-    OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    QueryFullProcessImageNameW, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_NO_WINDOW, CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
+    GetCurrentProcess, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
+    LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
@@ -41,6 +41,185 @@ const ENVIRONMENT_KEY: &str = "Environment";
 /// Parent key of the per-user uninstall entries.
 /// 每用户卸载项的父键。
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+
+/// The AppId-derived entry written by scripts/windows-installer.mjs.
+/// scripts/windows-installer.mjs 按 AppId 生成的注册项。
+pub const INNO_ENTRY: &str = "{4AA6A407-B39F-4AF7-9F9B-167D14D64368}_is1";
+
+/// Reports whether Explorer started the installer without a shared interactive console.
+/// 判断资源管理器是否在没有共享交互控制台的情况下启动了安装器。
+pub fn standalone_console() -> bool {
+    // The buffer can hold two IDs, enough to identify a shared console.
+    // 缓冲区可容纳两个进程 ID，足以判断控制台是否共享。
+    let mut processes = [0; 2];
+    let count = unsafe {
+        windows_sys::Win32::System::Console::GetConsoleProcessList(processes.as_mut_ptr(), 2)
+    };
+    count <= 1
+}
+
+/// Releases a console opened for a desktop launch, leaving the caller's console attached.
+/// 释放桌面启动附带的控制台，保留调用方的控制台。
+pub fn release_standalone_console() {
+    if standalone_console() {
+        // No handles from a shared terminal are detached.
+        // 不分离来自共享终端的句柄。
+        unsafe {
+            let console = windows_sys::Win32::System::Console::GetConsoleWindow();
+            if !console.is_null() {
+                windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                    console,
+                    windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE,
+                );
+            }
+            windows_sys::Win32::System::Console::FreeConsole();
+        }
+    }
+}
+
+/// Reports a window initialization failure when no console is available.
+/// 无控制台时使用系统对话框报告窗口初始化错误。
+pub fn setup_error(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    // Both UTF-16 buffers outlive the modal, synchronous call.
+    // 两个 UTF-16 缓冲区在同步模态调用期间始终有效。
+    let title = wide("Vulcan Code Setup");
+    let detail = wide(message);
+    unsafe {
+        MessageBoxW(
+            null_mut(),
+            detail.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        )
+    };
+}
+
+/// Returns the primary monitor work area's logical origin and size, excluding the taskbar.
+/// 返回主显示器工作区的逻辑原点及尺寸，排除任务栏。
+pub fn setup_work_area() -> Option<(iced::Point, iced::Size)> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_SYSTEM_AWARE, GetDpiForSystem, SetThreadDpiAwarenessContext,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETWORKAREA, SystemParametersInfoW, USER_DEFAULT_SCREEN_DPI,
+    };
+
+    // SPI_GETWORKAREA always reports physical coordinates, even before Iced starts its event loop.
+    // 即使 Iced 事件循环尚未启动，SPI_GETWORKAREA 也始终报告物理坐标。
+    let mut area = RECT::default();
+    if unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut area as *mut RECT).cast(), 0) } == 0
+    {
+        return None;
+    }
+    // Read the real system DPI without changing the awareness that Winit configures for its windows.
+    // 读取真实系统 DPI，同时保留 Winit 为窗口设置 DPI 感知的能力。
+    let previous = unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE) };
+    if previous.is_null() {
+        return None;
+    }
+    let dpi = unsafe { GetDpiForSystem() };
+    unsafe { SetThreadDpiAwarenessContext(previous) };
+    if dpi == 0 || area.right <= area.left || area.bottom <= area.top {
+        return None;
+    }
+    // Convert physical work-area coordinates to the logical units used by Iced settings.
+    // 将物理工作区坐标转换为 Iced 设置所用的逻辑单位。
+    let scale = USER_DEFAULT_SCREEN_DPI as f32 / dpi as f32;
+    Some((
+        iced::Point::new(area.left as f32 * scale, area.top as f32 * scale),
+        iced::Size::new(
+            (area.right - area.left) as f32 * scale,
+            (area.bottom - area.top) as f32 * scale,
+        ),
+    ))
+}
+
+/// Starts the Win32 move loop with the mouse still pressed on the custom installer.
+/// 在鼠标仍按住自绘安装器时启动 Win32 移动循环。
+pub fn drag_setup(owner: std::num::NonZeroIsize) {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, HTCAPTION, PostMessageW, SC_MOVE, WM_SYSCOMMAND,
+    };
+
+    // A mouse-initiated SC_MOVE takes the pointer's screen coordinates as packed signed words.
+    // 鼠标发起的 SC_MOVE 接收以有符号字打包的屏幕坐标。
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        return;
+    }
+    // The low nibble marks a caption drag, as produced by DefWindowProc for a native title bar.
+    // 低四位标识标题栏拖动，复现 DefWindowProc 处理原生标题栏时的行为。
+    let coords = i32::from(point.x as u16) | (i32::from(point.y as u16) << 16);
+    unsafe {
+        ReleaseCapture();
+        PostMessageW(
+            owner.get() as _,
+            WM_SYSCOMMAND,
+            (SC_MOVE | HTCAPTION) as usize,
+            coords as isize,
+        );
+    }
+}
+
+/// Shows the native folder picker owned by the installer window and returns the chosen path.
+/// 打开由安装器窗口拥有的系统目录选择器并返回选中的路径。
+pub fn select_directory(
+    owner: std::num::NonZeroIsize,
+    initial: &Path,
+) -> windows::core::Result<Option<PathBuf>> {
+    use windows::Win32::Foundation::{ERROR_CANCELLED, HWND};
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoTaskMemFree, CoUninitialize,
+    };
+    use windows::Win32::UI::Shell::{
+        FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
+        SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+    };
+    use windows::core::{HRESULT, PCWSTR};
+
+    // The window event thread owns the modal dialog and its COM objects until Show returns.
+    // 窗口事件线程持有模态对话框及其 COM 对象，直到 Show 返回。
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()? };
+    // Drop the interfaces before balancing the apartment initialization.
+    // 在平衡线程单元初始化之前释放接口。
+    let result = unsafe {
+        (|| {
+            // Request filesystem folders so the engine always receives an ordinary path.
+            // 只允许选择文件系统目录，使安装引擎始终收到普通路径。
+            let dialog: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+            dialog.SetOptions(dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
+            // An uncreated install directory cannot be preselected by the system dialog.
+            // 系统对话框无法预选尚未创建的安装目录。
+            if initial.is_dir() {
+                // Keep the wide string alive while Shell resolves it.
+                // Shell 解析路径时保留宽字符串。
+                let path = wide(initial.as_os_str());
+                let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None)?;
+                dialog.SetFolder(&item)?;
+            }
+            match dialog.Show(Some(HWND(owner.get() as *mut std::ffi::c_void))) {
+                Err(error) if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => {
+                    return Ok(None);
+                }
+                other => other?,
+            }
+            // COM allocates the string; copy it before releasing the task memory.
+            // 字符串由 COM 分配，释放任务内存前先复制。
+            let name = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+            let path = PathBuf::from(OsString::from_wide(name.as_wide()));
+            CoTaskMemFree(Some(name.0.cast()));
+            Ok(Some(path))
+        })()
+    };
+    unsafe { CoUninitialize() };
+    result
+}
 
 /// Per-user key of the programs Windows starts at sign-in.
 /// Windows 在登录时启动的程序所在的每用户键。
@@ -72,6 +251,31 @@ impl Drop for Key {
 }
 
 impl Key {
+    /// Opens an existing user key for inspection without creating it.
+    /// 只读打开已有的用户注册项，避免创建注册项。
+    fn existing(path: &str) -> Result<Option<Self>, String> {
+        // Keep the name alive through the native call.
+        // 在原生调用结束前保留名称。
+        let name = wide(path);
+        let mut key = null_mut();
+        // The API writes a handle through the supplied pointer only on success.
+        // API 只在成功时通过给定指针写入句柄。
+        let status = unsafe {
+            windows_sys::Win32::System::Registry::RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                name.as_ptr(),
+                0,
+                KEY_READ,
+                &mut key,
+            )
+        };
+        match status {
+            ERROR_SUCCESS => Ok(Some(Self(key))),
+            ERROR_FILE_NOT_FOUND => Ok(None),
+            _ => Err(format!("cannot open HKCU\\{path}: Windows error {status}")),
+        }
+    }
+
     /// Opens or creates `HKCU\<path>` for reading and writing.
     /// 以读写方式打开或创建 `HKCU\<path>`。
     fn open(path: &str) -> Result<Self, String> {
@@ -466,7 +670,7 @@ pub fn run_with_only(
             null(),
             null(),
             1,
-            EXTENDED_STARTUPINFO_PRESENT,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
             null(),
             null(),
             &startup.StartupInfo,
@@ -501,6 +705,160 @@ pub fn run_with_only(
 fn same_dir(left: &str, right: &str) -> bool {
     left.trim_end_matches('\\')
         .eq_ignore_ascii_case(right.trim_end_matches('\\'))
+}
+
+/// Compares registered Windows paths without case or trailing separator differences.
+/// 比较已登记的 Windows 路径，忽略大小写及末尾分隔符差异。
+pub fn same_install_dir(left: &Path, right: &Path) -> bool {
+    same_dir(&left.to_string_lossy(), &right.to_string_lossy())
+}
+
+/// Rejects a Windows reparse point at any managed path before writing through it.
+/// 写入任一受管理路径前拒绝 Windows 重解析点。
+pub fn reject_reparse_point(path: &Path) -> Result<(), String> {
+    use std::os::windows::fs::MetadataExt;
+    // FILE_ATTRIBUTE_REPARSE_POINT applies to junctions as well as symbolic links.
+    // FILE_ATTRIBUTE_REPARSE_POINT 同时涵盖目录联接与符号链接。
+    const REPARSE_POINT: u32 = 0x400;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_attributes() & REPARSE_POINT != 0 => {
+            Err(format!("{} is a reparse point", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot inspect {}: {error}", path.display())),
+    }
+}
+
+/// Checks an existing shell link without resolving it or launching the program.
+/// 检查现有快捷方式，避免解析或启动其程序。
+pub fn shortcut_targets(path: &Path, target: &Path) -> Result<bool, String> {
+    shortcut_matches(path, |found| same_install_dir(found, target))
+}
+
+/// Reports whether a shortcut launches anything inside the selected installation.
+/// 判断快捷方式启动的程序是否位于所选安装内。
+pub fn shortcut_belongs_to(path: &Path, root: &Path) -> Result<bool, String> {
+    shortcut_matches(path, |found| below(&found.to_string_lossy(), root))
+}
+
+/// Reads a shortcut and compares its raw target with the caller's ownership predicate.
+/// 读取快捷方式，并用调用方的归属条件核对未经解析的目标。
+fn shortcut_matches(path: &Path, accepts: impl FnOnce(&Path) -> bool) -> Result<bool, String> {
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize, IPersistFile,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, SLGP_RAWPATH, ShellLink};
+    use windows::core::{Interface, PCWSTR};
+
+    if !path.is_file() {
+        return Ok(false);
+    }
+    // Use an STA for this short, synchronous COM operation and balance successful initialization.
+    // 使用 STA 执行这项短暂的同步 COM 操作，并在成功初始化后成对退出。
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() }
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let result = (|| -> windows::core::Result<bool> {
+        let link: IShellLinkW =
+            unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)? };
+        let file: IPersistFile = link.cast()?;
+        let source = wide(path);
+        let mut raw_target = vec![0; 32768];
+        // The COM object owns no references to these input/output buffers after either call.
+        // 两次调用结束后，COM 对象均不会持有这些输入输出缓冲区。
+        unsafe {
+            file.Load(
+                PCWSTR(source.as_ptr()),
+                windows::Win32::System::Com::STGM_READ,
+            )?;
+            link.GetPath(&mut raw_target, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32)?;
+        }
+        let path_length = raw_target
+            .iter()
+            .position(|ch| *ch == 0)
+            .unwrap_or(raw_target.len());
+        Ok(accepts(Path::new(&String::from_utf16_lossy(
+            &raw_target[..path_length],
+        ))))
+    })();
+    unsafe { CoUninitialize() };
+    result.map_err(|error| format!("cannot read {}: {error}", path.display()))
+}
+
+/// Reads the location attached to a specific uninstall identity.
+/// 读取指定卸载标识所登记的安装位置。
+pub fn uninstall_location(key: &str) -> Result<Option<PathBuf>, String> {
+    match Key::existing(&format!("{UNINSTALL_KEY}\\{key}"))? {
+        Some(entry) => entry
+            .string("InstallLocation")
+            .map(|path| path.map(PathBuf::from)),
+        None => Ok(None),
+    }
+}
+
+/// Verifies the old registered uninstaller points at the candidate installation.
+/// 验证旧注册项中的卸载程序确实指向待接管的安装。
+pub fn registered_inno(root: &Path) -> Result<Option<PathBuf>, String> {
+    let Some(entry) = Key::existing(&format!("{UNINSTALL_KEY}\\{INNO_ENTRY}"))? else {
+        return Ok(None);
+    };
+    let location = entry
+        .string("InstallLocation")?
+        .ok_or("Inno has no InstallLocation")?;
+    if !same_dir(&location, &root.to_string_lossy()) {
+        return Ok(None);
+    }
+    let command = entry
+        .string("UninstallString")?
+        .ok_or("Inno has no UninstallString")?;
+    let path = command
+        .trim()
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .ok_or("Inno uninstall command must be one quoted executable path")?;
+    let path = PathBuf::from(path);
+    let name = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let valid_name = name.strip_prefix("unins").is_some_and(|digits| {
+        digits.len() == 3 && digits.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    if !valid_name
+        || path.extension().and_then(OsStr::to_str) != Some("exe")
+        || !path
+            .parent()
+            .is_some_and(|parent| same_dir(&parent.to_string_lossy(), &location))
+    {
+        return Err(format!(
+            "Inno uninstall command points outside {} or names an unexpected program",
+            root.display()
+        ));
+    }
+    Ok(Some(path))
+}
+
+/// Reads whether the installation's command directory and service are registered for this user.
+/// 读取此安装是否为当前用户登记了命令目录和服务。
+pub fn inno_integration(root: &Path, cli: &Path) -> Result<(bool, bool), String> {
+    let path = Key::existing(ENVIRONMENT_KEY)?
+        .map(|key| key.string("Path"))
+        .transpose()?
+        .flatten();
+    let login = Key::existing(RUN_KEY)?
+        .map(|key| key.string(RUN_VALUE))
+        .transpose()?
+        .flatten();
+    Ok((
+        path.is_some_and(|value| {
+            value
+                .split(';')
+                .any(|part| same_dir(part, &cli.to_string_lossy()))
+        }),
+        login.is_some_and(|value| below(value.trim().trim_start_matches('"'), root)),
+    ))
 }
 
 /// Adds `dir` to the user `PATH`; returns false when it was already there.
@@ -548,9 +906,16 @@ pub fn write_uninstall_entry(
     key: &str,
     display_version: &str,
     install_location: &Path,
-    uninstall: &str,
+    setup: &Path,
     icon: Option<&Path>,
 ) -> Result<(), String> {
+    if uninstall_location(key)?
+        .is_some_and(|existing| !same_install_dir(&existing, install_location))
+    {
+        return Err(String::from(
+            "the Windows uninstall registration belongs to another location",
+        ));
+    }
     let entry = Key::open(&format!("{UNINSTALL_KEY}\\{key}"))?;
     entry.set_string("DisplayName", "Vulcan Code", REG_SZ)?;
     entry.set_string("DisplayVersion", display_version, REG_SZ)?;
@@ -560,10 +925,20 @@ pub fn write_uninstall_entry(
         &install_location.display().to_string(),
         REG_SZ,
     )?;
-    if let Some(icon) = icon {
-        entry.set_string("DisplayIcon", &icon.display().to_string(), REG_SZ)?;
-    }
-    entry.set_string("UninstallString", uninstall, REG_SZ)
+    entry.set_string(
+        "DisplayIcon",
+        &format!("\"{}\",0", icon.unwrap_or(setup).display()),
+        REG_SZ,
+    )?;
+    // Explicitly pin the directory because the installed command may manage a custom location.
+    // 显式指定目录，因为已安装的命令可能管理自定义位置。
+    let command = format!(
+        "\"{}\" uninstall --prefix \"{}\"",
+        setup.display(),
+        install_location.to_string_lossy().trim_end_matches('\\')
+    );
+    entry.set_string("UninstallString", &format!("{command} --ui=gui"), REG_SZ)?;
+    entry.set_string("QuietUninstallString", &format!("{command} --yes"), REG_SZ)
 }
 
 /// Deletes `HKCU\<path>` with its subkeys; a missing key is not an error.
@@ -589,7 +964,7 @@ pub fn delete_uninstall_entry(key: &str) -> Result<(), String> {
 /// Deletes the COM registration of the notification activator `clsid` (in braces), which the
 /// desktop app writes at its first start; a missing one is not an error.
 /// 删除通知激活器 `clsid`（带花括号）的 COM 注册，该注册由桌面应用在首次启动时写入；不存在不算错误。
-pub fn delete_toast_activator(clsid: &str) -> Result<(), String> {
+pub fn delete_toast_activator(clsid: &str, root: &Path) -> Result<(), String> {
     let valid = clsid.len() == 38
         && clsid.starts_with('{')
         && clsid.ends_with('}')
@@ -599,7 +974,15 @@ pub fn delete_toast_activator(clsid: &str) -> Result<(), String> {
     if !valid {
         return Err(format!("{clsid} is not a CLSID"));
     }
-    delete_tree(&format!(r"Software\Classes\CLSID\{clsid}"))
+    let registration = format!(r"Software\Classes\CLSID\{clsid}");
+    if let Some(server) = Key::existing(&format!(r"{registration}\LocalServer32"))?
+        && server
+            .string("")?
+            .is_some_and(|command| below(command.trim().trim_start_matches('"'), root))
+    {
+        delete_tree(&registration)?;
+    }
+    Ok(())
 }
 
 /// Notification identity a shortcut carries.
@@ -708,6 +1091,145 @@ fn broadcast_environment() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies real registry and installer behavior on copies of published Windows releases.
+    /// 使用已发布 Windows 版本的副本验证真实注册表及安装器行为。
+    #[test]
+    #[ignore = "requires extracted official Windows releases and network access"]
+    fn published_inno_installations_upgrade_directly() {
+        // Redirect HKCU in this process so live registration, PATH and login entries stay isolated.
+        // 在当前进程重定向 HKCU，使真实安装的注册项、PATH 和登录项保持隔离。
+        struct IsolatedRegistry(Key, String);
+        impl Drop for IsolatedRegistry {
+            /// Restores the predefined handle and removes only this test's registry subtree.
+            /// 恢复预定义句柄，并仅删除本测试的注册表子树。
+            fn drop(&mut self) {
+                unsafe {
+                    windows_sys::Win32::System::Registry::RegOverridePredefKey(
+                        HKEY_CURRENT_USER,
+                        null_mut(),
+                    )
+                };
+                let _ = &self.0;
+                let _ = delete_tree(&self.1);
+            }
+        }
+        let root = PathBuf::from(
+            std::env::var_os("VULCAN_SETUP_MIGRATION_FIXTURE")
+                .expect("isolated copied installation"),
+        );
+        // The ignored test exercises real removal; accept only a dedicated temporary fixture.
+        // 此忽略测试执行真实移除，因此只接受专用临时夹具。
+        let fixtures = std::env::temp_dir()
+            .join("vulcan-setup-validation")
+            .canonicalize()
+            .expect("fixture directory");
+        let canonical = root.canonicalize().expect("fixture root");
+        assert!(canonical != fixtures && canonical.starts_with(fixtures));
+        let target = std::env::var("VULCAN_SETUP_MIGRATION_TARGET")
+            .expect("published target version")
+            .parse()
+            .expect("version syntax");
+        let key_name = format!(
+            "Software\\OpenVulcan\\SetupMigrationTest-{}",
+            std::process::id()
+        );
+        let key = Key::open(&key_name).expect("temporary registry");
+        assert_eq!(
+            unsafe {
+                windows_sys::Win32::System::Registry::RegOverridePredefKey(HKEY_CURRENT_USER, key.0)
+            },
+            ERROR_SUCCESS
+        );
+        let _registry = IsolatedRegistry(key, key_name);
+        let entry = Key::open(&format!("{UNINSTALL_KEY}\\{INNO_ENTRY}"))
+            .expect("fixture uninstall registry");
+        entry
+            .set_string("InstallLocation", &format!("{}\\", root.display()), REG_SZ)
+            .expect("registered path");
+        entry
+            .set_string(
+                "UninstallString",
+                &format!("\"{}\"", root.join("unins000.exe").display()),
+                REG_SZ,
+            )
+            .expect("registered uninstaller");
+        drop(entry);
+        let installed = vulcan_install_core::install_root::InstallRoot::new(&root);
+        let previous = installed
+            .current_version()
+            .expect("current pointer")
+            .expect("old version");
+        assert!(target > previous);
+        assert!(root.is_absolute());
+        assert!(
+            crate::state::SetupState::read(&root)
+                .expect("fixture state")
+                .is_none()
+        );
+        assert_eq!(
+            crate::install::resolve_root(None, vulcan_install_core::names::Platform::WindowsX64)
+                .expect("registered discovery"),
+            root
+        );
+        // The recent updater supplies a complete target directory before invoking its bridge.
+        // 较新的更新器会在调用兼容入口前提供完整目标目录。
+        let cached_target = installed.version_dir(&target).is_dir();
+        // The fixture's unrelated file represents user content kept even through uninstall.
+        // 夹具中无关的文件代表即使卸载也应保留的用户内容。
+        let user_file = root.join("user-data-keep.txt");
+        std::fs::write(&user_file, "keep me").expect("user content");
+        crate::install::adopt_release(&root, &target, vulcan_install_core::names::Channel::Stable)
+            .expect("direct upgrade");
+        assert_eq!(
+            installed.current_version().expect("updated pointer"),
+            Some(target.clone())
+        );
+        assert!(installed.version_dir(&previous).is_dir());
+        assert!(installed.setup_owned());
+        assert!(uninstall_location(INNO_ENTRY).expect("old key").is_none());
+        assert!(!root.join("unins000.exe").exists());
+        let key = crate::integrate::windows_uninstall_key(&root).expect("new key");
+        let entry = Key::existing(&format!("{UNINSTALL_KEY}\\{key}"))
+            .expect("key read")
+            .expect("new uninstall registration");
+        assert_eq!(
+            entry.string("DisplayVersion").expect("registry version"),
+            Some(target.to_string())
+        );
+        let interactive = entry
+            .string("UninstallString")
+            .expect("registry string")
+            .expect("GUI command");
+        let quiet = entry
+            .string("QuietUninstallString")
+            .expect("registry string")
+            .expect("quiet command");
+        assert!(interactive.ends_with("--ui=gui"));
+        assert!(quiet.ends_with("--yes"));
+        for command in [interactive, quiet] {
+            assert!(command.contains(&format!("--prefix \"{}\"", root.display())));
+        }
+        drop(entry);
+        crate::uninstall::uninstall(&crate::args::UninstallOptions {
+            common: crate::args::CommonOptions {
+                prefix: Some(root.clone()),
+                yes: true,
+                ..Default::default()
+            },
+            purge: false,
+        })
+        .expect("uninstall adopted root");
+        assert!(uninstall_location(&key).expect("new key").is_none());
+        assert_eq!(
+            std::fs::read_to_string(user_file).expect("preserved user content"),
+            "keep me"
+        );
+        assert!(!root.join("versions").exists());
+        println!(
+            "Verified published Windows {previous} -> {target}; cached target: {cached_target}; registry and preserved data verified"
+        );
+    }
 
     #[test]
     fn arguments_survive_the_command_line() {

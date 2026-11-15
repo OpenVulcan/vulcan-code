@@ -9,14 +9,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use vulcan_install_core::assemble::{Assembly, PreparedAssembly};
+use vulcan_install_core::assemble::Assembly;
 use vulcan_install_core::fetch::{Downloader, Route};
 use vulcan_install_core::index::ComponentIndex;
 use vulcan_install_core::install_root::{CURRENT_LINK, InstallLock, InstallRoot, UPDATES_DIR};
 use vulcan_install_core::manifest::ReleaseManifest;
 use vulcan_install_core::names::{Channel, ComponentName, Platform, ReleaseVersion};
 use vulcan_install_core::record::RECORD_FILE_NAME;
+use vulcan_install_core::repair::prepare_repair;
 use vulcan_install_core::signing::BUILT_IN_KEYS;
+use vulcan_install_core::update::read_manifest;
 use vulcan_install_core::update::{find_update, read_indexes};
 
 use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions, check_port_range};
@@ -223,11 +225,8 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
     check_system(platform)?;
     let root = resolve_root(options.common.prefix.as_deref(), platform)?;
     let ownership = root::installable(&root)?;
-    let recorded = match &ownership {
-        Ownership::Owned(state) => Some(state),
-        _ => None,
-    };
-    let start = Choices::resolve(options, recorded, platform, graphical(platform))?;
+    let recorded = recorded_choices(&root, &ownership)?;
+    let start = Choices::resolve(options, recorded.as_ref(), platform, graphical(platform))?;
     if !wizard::wanted(options.common.yes) {
         let reporter = Plain::new(options.common.yes);
         return apply(platform, &root, &ownership, &start, &reporter)
@@ -256,6 +255,28 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
     let outcome = interactive(&mut screen, platform, draft, browser);
     drop(screen);
     outcome.map(|outcome| outcome.print())
+}
+
+/// Resolves and runs the same install engine for the Windows graphical frontend.
+/// 为 Windows 图形前端解析选项并运行同一安装引擎。
+#[cfg(windows)]
+pub(super) fn graphical_run(
+    options: &InstallOptions,
+    update: bool,
+    reporter: &dyn Reporter,
+) -> Result<Outcome, String> {
+    let platform = Platform::WindowsX64;
+    let root = resolve_root(options.common.prefix.as_deref(), platform)?;
+    let ownership = root::installable(&root)?;
+    let recorded = recorded_choices(&root, &ownership)?;
+    if update && recorded.is_none() {
+        return Err(format!(
+            "Vulcan Code is not installed in {}",
+            root.display()
+        ));
+    }
+    let choices = Choices::resolve(options, recorded.as_ref(), platform, true)?;
+    apply(platform, &root, &ownership, &choices, reporter)
 }
 
 /// The wizard, then the run with its pages; going back from the review returns to the wizard's
@@ -308,7 +329,7 @@ pub fn update(options: &CommonOptions) -> Result<(), String> {
     check_system(platform)?;
     let root = resolve_root(options.prefix.as_deref(), platform)?;
     let ownership = root::installable(&root)?;
-    let Ownership::Owned(state) = &ownership else {
+    let Some(state) = recorded_choices(&root, &ownership)? else {
         return Err(format!(
             "{} was not installed by the setup program; run `vulcan-code-setup install`",
             root.display()
@@ -319,7 +340,7 @@ pub fn update(options: &CommonOptions) -> Result<(), String> {
             common: options.clone(),
             ..InstallOptions::default()
         },
-        Some(state),
+        Some(&state),
         platform,
         false,
     )?;
@@ -339,6 +360,35 @@ pub fn update(options: &CommonOptions) -> Result<(), String> {
 /// The install root: `--prefix` or the platform default, absolute and usable in launchers.
 /// 安装根目录：`--prefix` 或平台默认值，为绝对路径且可用于启动器。
 pub fn resolve_root(prefix: Option<&Path>, platform: Platform) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    if prefix.is_none() && platform.is_windows() {
+        // An installed command stays bound to its own root even when it has a custom location.
+        // 已安装命令始终绑定自己的安装根，即使使用自定义目录。
+        let program = std::env::current_exe().map_err(|error| error.to_string())?;
+        if program
+            .file_name()
+            .is_some_and(|name| name == SETUP_PROGRAM)
+            && let Some(setup_dir) = program.parent().filter(|path| path.ends_with(SETUP_DIR))
+            && let Some(root) = setup_dir.parent()
+            && (InstallRoot::new(root).setup_owned()
+                || crate::windows::registered_inno(root)?.is_some())
+        {
+            return Ok(root.to_path_buf());
+        }
+        // Prefer a legacy registration to migrate it at its original location, including custom prefixes.
+        // 优先处理旧登记，以原目录迁移，包括自定义目录。
+        let managed = crate::windows::uninstall_location(integrate::UNINSTALL_ENTRY)?;
+        let inno = crate::windows::uninstall_location(crate::windows::INNO_ENTRY)?;
+        if let Some(location) = inno.or(managed) {
+            if !location.is_absolute() {
+                return Err(format!(
+                    "registered installation directory is not absolute: {}",
+                    location.display()
+                ));
+            }
+            return Ok(location);
+        }
+    }
     let root = match prefix {
         Some(prefix) => paths::absolute(prefix)?,
         None => paths::default_root(platform)?,
@@ -358,6 +408,20 @@ pub fn resolve_root(prefix: Option<&Path>, platform: Platform) -> Result<PathBuf
         }
     }
     Ok(root)
+}
+
+/// Reads the installation choices for a managed or registered Inno root.
+/// 读取已管理或已登记 Inno 目录的安装选择。
+fn recorded_choices(root: &Path, ownership: &Ownership) -> Result<Option<SetupState>, String> {
+    match ownership {
+        Ownership::Owned(state) => Ok(Some(state.clone())),
+        #[cfg(windows)]
+        Ownership::Inno(_) => crate::inno::choices(root).map(Some),
+        _ => {
+            let _ = root;
+            Ok(None)
+        }
+    }
 }
 
 /// Whether `text` can be embedded in double quotes in launchers and menu entries.
@@ -433,7 +497,23 @@ fn apply(
     choices: &Choices,
     reporter: &dyn Reporter,
 ) -> Result<Outcome, String> {
+    apply_target(platform, root_path, ownership, choices, reporter, None)
+}
+
+/// Runs an update, or adopts the exact version already installed by a legacy release entry point.
+/// 运行更新，或接管旧版发布入口已安装的确切版本。
+fn apply_target(
+    platform: Platform,
+    root_path: &Path,
+    ownership: &Ownership,
+    choices: &Choices,
+    reporter: &dyn Reporter,
+    target: Option<&ReleaseVersion>,
+) -> Result<Outcome, String> {
     let root = InstallRoot::new(root_path);
+    // Capture the legacy settings before the current pointer can change.
+    // 在当前版本指针变更前捕获旧安装的设置。
+    let prior = recorded_choices(root_path, ownership)?;
     let current = if root_path.exists() {
         root::current(&root)?
     } else {
@@ -455,19 +535,33 @@ fn apply(
     let cancel = downloader.cancel_flag();
     reporter.cancel_with(Arc::clone(&cancel));
     reporter.stage(Stage::Checking(choices.channel));
-    let offer = find_update(
-        &mut downloader,
-        BUILT_IN_KEYS,
-        platform,
-        choices.channels(),
-        &floor,
-    )
-    .map_err(|error| failure(&cancel, error))?;
+    let offer = if let Some(target) = target {
+        if target < &floor {
+            return Err(format!("cannot move {floor} back to {target}"));
+        }
+        if target == &floor {
+            None
+        } else {
+            Some(
+                read_manifest(&mut downloader, BUILT_IN_KEYS, target, platform)
+                    .map_err(|error| failure(&cancel, error))?,
+            )
+        }
+    } else {
+        find_update(
+            &mut downloader,
+            BUILT_IN_KEYS,
+            platform,
+            choices.channels(),
+            &floor,
+        )
+        .map_err(|error| failure(&cancel, error))?
+        .map(|offer| offer.manifest)
+    };
     let work = match (offer, &installed) {
-        (Some(offer), _) => {
+        (Some(manifest), _) => {
             let own = selfupdate::version()?;
-            if let Some(minimum) = offer
-                .manifest
+            if let Some(minimum) = manifest
                 .min_setup_version
                 .as_ref()
                 .filter(|minimum| **minimum > own)
@@ -475,13 +569,13 @@ fn apply(
                 return Err(format!(
                     "{} needs setup program {minimum} or newer, and this one is {own}; update the \
                      setup program first (it updates itself unless --no-self-update is given)",
-                    offer.manifest.version
+                    manifest.version
                 ));
             }
-            let indexes = read_indexes(&mut downloader, &offer.manifest, &components)
+            let indexes = read_indexes(&mut downloader, &manifest, &components)
                 .map_err(|error| failure(&cancel, error))?;
             Work::Assemble {
-                manifest: Box::new(offer.manifest),
+                manifest: Box::new(manifest),
                 indexes,
             }
         }
@@ -553,6 +647,13 @@ fn apply(
     std::fs::create_dir_all(root_path)
         .map_err(|error| format!("cannot create {}: {error}", root_path.display()))?;
     let lock = root.lock().map_err(|error| error.to_string())?;
+    // A concurrent setup may have completed while this run was reading release objects.
+    // 本次读取发布对象时，另一个安装进程可能已经完成。
+    if root::current(&root)? != current || &root::installable(root_path)? != ownership {
+        return Err(String::from(
+            "the installation changed while preparing the update; retry",
+        ));
+    }
     let switched = match assemble(
         &root,
         &lock,
@@ -578,12 +679,11 @@ fn apply(
 
     reporter.stage(Stage::Integrating);
     let installed_version = Version::read(&root.version_dir(&version))?;
-    let previous_items: &[Item] = match ownership {
-        Ownership::Owned(state) => &state.items,
-        _ => &[],
-    };
+    // A migration adopts only verified integrations and retains the registered user's choices.
+    // 迁移只接管已核验的集成，并保留已登记的用户选择。
+    let previous_items: &[Item] = prior.as_ref().map_or(&[], |state| &state.items);
     let mut recorder = Recorder::new(previous_items);
-    if switched && plan.service {
+    if (switched || matches!(ownership, Ownership::Inno(_))) && plan.service {
         // Marked before anything can fail, so that a repeated run registers the new version.
         // 在任何步骤可能失败之前标记，使重跑会注册新版本。
         let dir = root_path.join(SETUP_DIR);
@@ -632,8 +732,42 @@ fn apply(
             state.add(item.clone());
         }
     }
-    state.write(root_path)?;
-    integrated?;
+    #[cfg(windows)]
+    if matches!(ownership, Ownership::Inno(_)) {
+        if let Err(error) = integrated {
+            if let Some(previous) = installed.as_ref() {
+                root.switch_to(&lock, previous)
+                    .map_err(|restore| format!("{error}; cannot restore {previous}: {restore}"))?;
+            }
+            crate::inno::remove_new_entry(root_path)?;
+            return Err(error);
+        }
+        if let Err(error) = crate::inno::complete(root_path, &state) {
+            // A committed state is recoverable through the unified installer; an uncommitted one
+            // must keep the previous version and legacy uninstall entry usable.
+            // 已提交状态可由统一安装器恢复；未提交时须保留旧版本和卸载入口。
+            if !root.setup_owned() {
+                if let Some(previous) = installed.as_ref() {
+                    root.switch_to(&lock, previous).map_err(|restore| {
+                        format!("{error}; cannot restore {previous}: {restore}")
+                    })?;
+                }
+                crate::inno::remove_new_entry(root_path)?;
+            }
+            return Err(error);
+        }
+    } else {
+        state.write(root_path)?;
+        integrated?;
+        // A process interrupted after writing its new state can finish retiring Inno on retry.
+        // 写入新状态后意外中断时，可在重试时完成旧安装器的退役。
+        crate::inno::retire(root_path)?;
+    }
+    #[cfg(not(windows))]
+    {
+        state.write(root_path)?;
+        integrated?;
+    }
 
     reporter.stage(Stage::Cleaning);
     let removed = root
@@ -674,6 +808,34 @@ fn apply(
     })
 }
 
+/// Finishes adoption of the exact release assembled by the legacy Windows update protocol.
+/// 完成旧 Windows 更新协议已组装确切版本的接管。
+#[cfg(windows)]
+pub(crate) fn adopt_release(
+    prefix: &Path,
+    target: &ReleaseVersion,
+    channel: Channel,
+) -> Result<(), String> {
+    let platform = Platform::WindowsX64;
+    let root = resolve_root(Some(prefix), platform)?;
+    let ownership = root::installable(&root)?;
+    let state = recorded_choices(&root, &ownership)?.ok_or("no installation to adopt")?;
+    let options = InstallOptions {
+        channel: Some(channel),
+        ..InstallOptions::default()
+    };
+    let choices = Choices::resolve(&options, Some(&state), platform, true)?;
+    apply_target(
+        platform,
+        &root,
+        &ownership,
+        &choices,
+        &Plain::new(true),
+        Some(target),
+    )
+    .map(|outcome| outcome.print())
+}
+
 /// Prepares the assembly of `work`, asks for `review` with the exact download, then downloads and
 /// switches to `version`; returns whether the current version changed.
 /// 准备 `work` 的组装，以确切的下载量请求 `review`，然后下载并切换到 `version`；返回当前版本是否改变。
@@ -696,50 +858,81 @@ fn assemble(
         Work::Assemble { manifest, indexes } => (manifest, indexes),
     };
     let version_dir = root.version_dir(version);
+    #[cfg(windows)]
+    crate::windows::reject_reparse_point(&version_dir)?;
     // A version assembled by an earlier run that did not switch is complete already.
     // 更早一次未切换的运行已组装好的版本已经完整。
-    let prepared = if version_dir.join(RECORD_FILE_NAME).is_file() {
-        None
-    } else {
-        reporter.stage(Stage::Preparing);
-        let prepared = Assembly::new(root, lock, &manifest, indexes)
-            .and_then(Assembly::prepare)
+    if version_dir.join(RECORD_FILE_NAME).is_file() {
+        // The legacy updater may have assembled this exact target before invoking setup.
+        // 旧更新器可能在调用安装器前已组装确切目标版本。
+        let record = vulcan_install_core::record::InstallRecord::read(&version_dir)
             .map_err(|error| error.to_string())?;
-        Some(prepared)
-    };
-    review.download = prepared
-        .as_ref()
-        .map_or(0, PreparedAssembly::download_bytes);
-    decide(reporter, &review)?;
-    if let Some(prepared) = prepared {
-        reporter.stage(Stage::Downloading);
-        let total = prepared.download_bytes();
-        let counter = downloader.received_counter();
-        let start = counter.load(Ordering::Relaxed);
-        let done = AtomicBool::new(false);
-        let result = std::thread::scope(|scope| {
-            if total > 0 {
-                scope.spawn(|| {
-                    loop {
-                        let finished = done.load(Ordering::Relaxed);
-                        let received = counter.load(Ordering::Relaxed).saturating_sub(start);
-                        reporter.progress(received.min(total), total);
-                        if finished {
-                            break;
-                        }
-                        std::thread::sleep(PROGRESS_INTERVAL);
-                    }
-                });
-            }
-            let result = prepared.complete(downloader);
-            done.store(true, Ordering::Relaxed);
-            result
-        });
-        result.map_err(|error| failure(cancel, error))?;
-        if let Err(error) = check_release_build(&version_dir) {
-            let _ = std::fs::remove_dir_all(&version_dir);
-            return Err(error);
+        if record.version != *version
+            || record.platform != manifest.platform
+            || record.install_epoch != manifest.install_epoch
+            || record.components.len() != indexes.len()
+            || indexes.iter().any(|index| {
+                manifest
+                    .components
+                    .get(&index.component)
+                    .is_none_or(|part| record.components.get(&index.component) != Some(&part.index))
+            })
+        {
+            return Err(format!(
+                "{} does not match the signed target manifest",
+                version_dir.display()
+            ));
         }
+        reporter.stage(Stage::Preparing);
+        let repair =
+            prepare_repair(root, lock, &manifest, indexes).map_err(|error| error.to_string())?;
+        review.download = repair.download_bytes();
+        decide(reporter, &review)?;
+        if repair.damaged_count() > 0 {
+            reporter.stage(Stage::Downloading);
+            repair
+                .complete(downloader)
+                .map_err(|error| failure(cancel, error))?;
+        }
+        check_release_build(&version_dir)?;
+        reporter.stage(Stage::Switching);
+        root.switch_to(lock, version)
+            .map_err(|error| error.to_string())?;
+        return Ok(true);
+    }
+    reporter.stage(Stage::Preparing);
+    let prepared = Assembly::new(root, lock, &manifest, indexes)
+        .and_then(Assembly::prepare)
+        .map_err(|error| error.to_string())?;
+    review.download = prepared.download_bytes();
+    decide(reporter, &review)?;
+    reporter.stage(Stage::Downloading);
+    let total = prepared.download_bytes();
+    let counter = downloader.received_counter();
+    let start = counter.load(Ordering::Relaxed);
+    let done = AtomicBool::new(false);
+    let result = std::thread::scope(|scope| {
+        if total > 0 {
+            scope.spawn(|| {
+                loop {
+                    let finished = done.load(Ordering::Relaxed);
+                    let received = counter.load(Ordering::Relaxed).saturating_sub(start);
+                    reporter.progress(received.min(total), total);
+                    if finished {
+                        break;
+                    }
+                    std::thread::sleep(PROGRESS_INTERVAL);
+                }
+            });
+        }
+        let result = prepared.complete(downloader);
+        done.store(true, Ordering::Relaxed);
+        result
+    });
+    result.map_err(|error| failure(cancel, error))?;
+    if let Err(error) = check_release_build(&version_dir) {
+        let _ = std::fs::remove_dir_all(&version_dir);
+        return Err(error);
     }
     reporter.stage(Stage::Switching);
     root.switch_to(lock, version)

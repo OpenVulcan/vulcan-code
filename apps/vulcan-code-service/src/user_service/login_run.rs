@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use vulcan_host_tools::process_creation::new_background_std_command;
 
 use super::{data_root_is_free, registered_executable, require_distribution, wait_until_ready};
 use crate::launch::ARG_SERVICE;
@@ -37,10 +38,12 @@ fn reg() -> PathBuf {
         .join("reg.exe")
 }
 
-/// Runs `reg.exe` with `args` and returns its output.
-/// 以 `args` 运行 `reg.exe` 并返回其输出。
+/// Runs `reg.exe` with `args` as a background command and returns its output.
+/// 在后台以 `args` 运行 `reg.exe` 并返回其输出。
 fn run_reg(args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new(reg())
+    // The Core checks this registration during every startup, including unattended GUI and TUI launches.
+    // Core 每次启动都会检查此登记，包括 GUI 和 TUI 的后台启动。
+    new_background_std_command(reg())
         .args(args)
         .stdin(Stdio::null())
         .output()

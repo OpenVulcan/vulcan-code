@@ -69,7 +69,31 @@ pub const CLI_DIR: &str = "cli";
 /// Name of the per-user uninstall entry on Windows; distinct from the Inno installer's entry.
 /// Windows 上每用户卸载项的名称；与 Inno 安装器的卸载项不同。
 #[cfg(windows)]
-const UNINSTALL_ENTRY: &str = "VulcanCode.Setup";
+pub(crate) const UNINSTALL_ENTRY: &str = "VulcanCode.Setup";
+
+/// Registry ownership of the primary entry or a second installation under a different root.
+/// 主安装注册项，或同一用户下不同目录的第二套安装注册项。
+#[cfg(windows)]
+pub(crate) fn windows_uninstall_key(root: &Path) -> Result<String, String> {
+    // Keep a secondary installation's identity even if the primary is later uninstalled.
+    // 即使主安装随后卸载，也保留第二套安装原有的标识。
+    let normalized = root.to_string_lossy().trim_end_matches('\\').to_lowercase();
+    let secondary = format!(
+        "{UNINSTALL_ENTRY}.{}",
+        vulcan_install_core::Sha256Digest::of(normalized.as_bytes())
+    );
+    if crate::windows::uninstall_location(&secondary)?
+        .is_some_and(|location| crate::windows::same_install_dir(&location, root))
+    {
+        return Ok(secondary);
+    }
+    if crate::windows::uninstall_location(UNINSTALL_ENTRY)?
+        .is_none_or(|location| crate::windows::same_install_dir(&location, root))
+    {
+        return Ok(String::from(UNINSTALL_ENTRY));
+    }
+    Ok(secondary)
+}
 
 /// Name of the application bundle, menu entry and shortcuts.
 /// 应用程序包、菜单项与快捷方式的名称。
@@ -77,7 +101,7 @@ const APP_NAME: &str = "Vulcan Code";
 
 /// File name of the Windows shortcuts, the same as the Inno installer's.
 /// Windows 快捷方式的文件名，与 Inno 安装程序相同。
-const WINDOWS_SHORTCUT: &str = "Vulcan Code.lnk";
+pub(crate) const WINDOWS_SHORTCUT: &str = "Vulcan Code.lnk";
 
 /// Linux application id of the desktop app. The packaged app declares `desktopName` as this id
 /// plus `.desktop` (`scripts/desktop-runtime.mjs`), and Electron then takes the window class
@@ -551,16 +575,15 @@ fn integrate_windows(
         integrate_desktop_windows(plan, version, &launcher, recorder)?;
     }
     let setup = plan.root.join(SETUP_DIR).join(SETUP_PROGRAM);
+    let key = windows_uninstall_key(plan.root)?;
     crate::windows::write_uninstall_entry(
-        UNINSTALL_ENTRY,
+        &key,
         plan.version,
         plan.root,
-        &format!("\"{}\" uninstall", setup.display()),
+        &setup,
         plan.gui.then_some(launcher.as_path()),
     )?;
-    recorder.add(Item::UninstallEntry {
-        key: String::from(UNINSTALL_ENTRY),
-    });
+    recorder.add(Item::UninstallEntry { key });
     Ok(())
 }
 
@@ -1274,7 +1297,13 @@ pub fn remove(
             }
             Ok(())
         }
-        Item::Shortcut { path } => remove_file(path),
+        Item::Shortcut { path } => {
+            #[cfg(windows)]
+            if !crate::windows::shortcut_belongs_to(path, root)? {
+                return Ok(());
+            }
+            remove_file(path)
+        }
         Item::Bundle { path } => {
             if marked_for(&path.join("Contents/MacOS").join(BUNDLE_EXECUTABLE), root) {
                 std::fs::remove_dir_all(path).map_err(|error| fail(path, error))?;
@@ -1293,7 +1322,7 @@ pub fn remove(
         #[cfg(not(unix))]
         Item::ShellPath { .. } => Ok(()),
         Item::UninstallEntry { key } => remove_uninstall_entry(key),
-        Item::ToastActivator { clsid } => remove_toast_activator(clsid),
+        Item::ToastActivator { clsid } => remove_toast_activator(clsid, root),
         Item::UserService => match version {
             Some(version) => run_service(&version.service(), &[UNINSTALL_USER_SERVICE]).map(|_| ()),
             // Without a version to ask, the sign-in value that starts a program of this root is
@@ -1378,14 +1407,14 @@ fn remove_uninstall_entry(_key: &str) -> Result<(), String> {
 /// Removes the COM registration of the notification activator `clsid`.
 /// 移除通知激活器 `clsid` 的 COM 注册。
 #[cfg(windows)]
-fn remove_toast_activator(clsid: &str) -> Result<(), String> {
-    crate::windows::delete_toast_activator(clsid)
+fn remove_toast_activator(clsid: &str, root: &Path) -> Result<(), String> {
+    crate::windows::delete_toast_activator(clsid, root)
 }
 
 /// Notification activators only exist on Windows.
 /// 只有 Windows 有通知激活器。
 #[cfg(not(windows))]
-fn remove_toast_activator(_clsid: &str) -> Result<(), String> {
+fn remove_toast_activator(_clsid: &str, _root: &Path) -> Result<(), String> {
     Ok(())
 }
 

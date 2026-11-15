@@ -26,8 +26,8 @@ pub fn status(options: &CommonOptions) -> Result<(), String> {
         }
         Ownership::Inno(_) => {
             println!(
-                "installed by: the Windows installer (VulcanCode-Setup.exe); the app keeps it up to \
-                 date, and `uninstall` runs its uninstaller"
+                "installed by: Inno Setup; `update` takes over at this location and `uninstall` uses \
+                 the registered uninstaller until then"
             );
             None
         }

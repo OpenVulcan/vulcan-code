@@ -35,8 +35,8 @@
     切换并刷新它在版本目录之外安装的内容（见下文“经安装器完成”）。根目录缺少安装器程序或清单缺少已安装
     组件时不可由应用安装（`installable: false`、`setupManaged: true`），界面只提示运行
     `vulcan-code-setup update`。安装器拥有的根目录绝不运行 Inno 安装包，避免产生第二个卸载项并使安装器状态失真。
-  - 不归安装器所有的 Windows 根目录由 Inno 安装包创建，只有 Inno 能改写它自己的注册表、卸载项、快捷方式与根
-    启动器。纪元升高且清单含全部已安装组件与 **Inno 更新包**（清单字段 `innoUpdate`）时同为 `kind: setup`：
+  - 旧 Windows 根目录由 Inno 安装包创建。纪元升高且清单含全部已安装组件与 Windows 兼容更新包
+    （清单字段 `innoUpdate`）时同为 `kind: setup`：
     下载阶段先组装 `versions/<新版本>`（不切换、不写试运行标记），再下载更新包，下载量为变化的文件加更新包；
     重启时按完整安装包的方式运行更新包（见下文“经 Inno 更新包完成”）。更新包与完整安装包一样，SHA-256 来自
     签名清单，Authenticode 签名者须为发布证书；组装后更新包下载或校验失败时，已组装的版本留给下一次尝试复用，
@@ -92,13 +92,11 @@
    `--install-user-service`。桌面端等待旧 Core 退出后继续等待下一个 Core（最多 15 分钟），再从稳定入口重新
    启动；TUI 与浏览器自动重连。此路径没有试运行标记，与 Inno 安装包相同。下载完成但未重启时组装的版本只在
    内存中就绪，下一次服务启动会按清理规则删除它。
-   **经 Inno 更新包完成**（`kind: setup` 且根目录不归安装器所有，事件 `reason` 为 `installer`）：与完整安装包
-   相同，桌面端只退出，更新包以 `INSTALLER_ARGUMENTS` 分离运行，结束后由 `RelaunchRequested` 启动应用。更新包
-   由 `scripts/windows-installer.mjs` 以同一模板、同一 AppId 生成，含根启动器、PATH 转发器、内置安装器与相同的
-   `[Icons]`、`[Registry]`、`[UninstallDelete]`、`[Run]`，但不含 `versions\<版本>`。它在任何改名之前检查
-   `versions\<版本>\.vulcan-install.json`，缺少即拒绝（静默运行时以 Inno 的准备失败退出，不做任何改动），
-   因此不能用于全新安装；它不把该版本目录移开，切换与旧版本清理同完整安装包（保留新版本与它替换的版本）。
-   Inno 以追加方式写卸载记录，卸载项与快捷方式因此仍归 Inno 管理。
+   **经 Windows 兼容入口完成**（`kind: setup` 且根目录不归安装器所有，事件 `reason` 为 `installer`）：
+   旧 Core 以 `INSTALLER_ARGUMENTS` 分离启动签名资产。统一安装器从 `updates/installers/<版本资产>` 获取安装根和
+   确切目标版本，验证该版本的签名清单，使用已组装的 `versions/<版本>` 或组装缺失的文件，并从根启动器重新打开应用。
+   更早的 Core 读取 `downloads` 的 `inno` 项并以相同参数启动 `-setup.exe`，缺少目标版本时由同一入口完成组装。
+   历史版本提供的 Inno 资产仍按其原有方式运行。兼容资产随每个目标版本发布，以支持直接跳过中间版本。
 4. Windows 启动器每次桌面启动计一次尝试；`previous` 或试运行版本的服务可执行文件（各自 `runtime-layout.json`
    的 `serviceExecutable`）正在运行时本次既不计数也不回退，因为桌面端会复用该 Core，新版本并未被启动
    （运行判断依据 Windows 对运行中映像写访问的共享冲突，其他结果按未运行处理）；`attempts` 达到 `max_attempts` 而标记仍在时，把
@@ -143,9 +141,11 @@
   安装器读取通道（preview 同时读 stable）的已签名安装器指针，与自身版本比较。
   有新版本时自动下载、校验、替换并重启，无需确认。显式 `--no-self-update` 跳过。替换后保留原安装参数并用
   `--no-self-update` 防止重复检查。组装前仍按所装版本的 `minSetupVersion` 检查，不满足即停止。
-- **Inno 安装包**：产品发布在构建前下载 stable 安装器指针与 Windows 程序，经 `vulcan-release-tool setup-check`
-  校验后按原样装入完整安装包与 Inno 更新包的 `{app}\setup\vulcan-code-setup.exe`（不再签名），卸载时删除；stable 安装器指针缺失或校验
-  失败时产品发布停止。
+- **Windows 下载及兼容资产**：产品发布验证 stable 安装器指针、安装器摘要与 Authenticode，并探测安装器兼容性。
+  `-setup.exe` 为签名的 Windows 图形子系统程序，内嵌同一签名安装器，在独立的临时目录解包并无窗口启动。
+  双击打开 Iced 图形界面；旧版更新器调用时保留原资产名称、路径、参数和退出状态。`-update.exe` 直接使用同一份签名安装器。
+  图形窗口使用自绘标题栏，启动尺寸按主屏工作区及系统缩放调整。标题栏和面板空白处可拖动，控件和滚动内容保持独立交互。
+  交互式终端默认使用 TUI，`--ui gui` 显式进入图形界面，`--yes` 保持无人值守。`--gui` 控制是否安装桌面组件。
 - **安装选项**（实现权威 `args.rs`、`integrate.rs`）：所有平台都可选 GUI（`--gui`，Linux 无桌面环境时仍可安装，
   只是无法运行）、开始菜单/应用菜单（`--menu`）、桌面快捷方式（`--desktop-shortcut`）、PATH（`--path`）、用户服务
   （`--service`，调用 Core `--install-user-service`）与 Linux linger（`--linger`，经 `loginctl enable-linger`，
@@ -160,6 +160,10 @@
 - **Windows 桌面集成**：GUI 安装时把 `bin/vulcan-code-launcher.exe` 复制为 `<root>\VulcanCode.exe`，快捷方式用
   运行布局（schema 4）的 `desktopIdentity` 写入 AppUserModelID 与通知激活 CLSID，与 Inno 安装包一致；同时把
   安装器放入 PATH 并作为卸载入口的 `DisplayIcon`/卸载命令。完成与 `status` 时告知卸载命令。
+- **Windows 接管**：读取固定 Inno AppId 的当前用户注册项，并核对安装位置、卸载程序与当前版本记录。
+  GUI、TUI 和旧客户端更新入口复用同一安装操作，保留原目录、用户数据和可识别的集成。写入安装器状态后停用旧卸载程序及注册项。
+  新的 `UninstallString` 显式传递安装目录和 `--ui=gui`，`QuietUninstallString` 使用同一目录及 `--yes`。
+  卸载仅清除确实指向当前根目录的快捷方式和通知注册。
 - **安装记录**：`installation.json` 为 v4，新增 Shell PATH 区块所在文件。读取 v1 至 v3 时先备份原字节到带原版本号的文件，再升级写回。
   只记录本程序创建的文件、目录与系统集成，卸载时只撤销这些项。
 - **卸载**：Windows 无法删除运行中的程序，因此确认后、任何改动之前先结束程序位于安装根目录下的进程（桌面应用、
@@ -211,7 +215,8 @@
 
 - 试运行与回退标记的文件名、字段在 `install_root.rs` 与启动器 `trial.rs` 中各写一次（启动器只依赖
   `serde_json`），修改时两处同时改；尝试上限只在 `MAX_STARTUP_ATTEMPTS` 定义并随标记写出。
-- `/RELAUNCH=1` 在 `INSTALLER_ARGUMENTS` 与 `scripts/windows-installer.mjs` 的 `RelaunchRequested` 中成对出现。
+- `/RELAUNCH=1` 仍由 `INSTALLER_ARGUMENTS` 发送，统一安装器通过 `inno::run_legacy_update` 接收；历史 Inno 包由
+  `scripts/windows-installer.mjs` 的 `RelaunchRequested` 接收。
 - Inno 更新包的文件名在 `vulcan-install-core` 的 `InnoUpdate::file_name` 与 `windows-installer.mjs` 的
   `updateAssetName` 中各写一次，完整安装包的文件名同理在 `DownloadKind::allowed_files` 与 `installerAssetName`；
   `release.yml` 按 `-setup.exe` 与 `-update.exe` 后缀把两者分别交给 `--download inno=` 与 `--inno-update`，

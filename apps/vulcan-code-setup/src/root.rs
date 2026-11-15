@@ -43,25 +43,45 @@ pub enum Ownership {
     /// Installed by the archive-based `scripts/install.sh`.
     /// 由基于归档的 `scripts/install.sh` 安装。
     Legacy,
-    /// Installed by the Windows installer (`scripts/windows-installer.mjs`), whose uninstaller is
-    /// this file; it updates through the app and uninstalls through that uninstaller.
-    /// 由 Windows 安装程序（`scripts/windows-installer.mjs`）安装，其卸载程序为此文件；它通过应用更新，
-    /// 通过该卸载程序卸载。
+    /// Installed by an Inno package; the registered uninstaller is used until adoption.
+    /// 由 Inno 安装包安装；接管前使用已登记的卸载程序。
     Inno(PathBuf),
 }
 
-/// Like [`ownership`], but refuses a root the Windows installer owns, which this program does not
-/// install into.
-/// 与 [`ownership`] 相同，但拒绝 Windows 安装程序所属的根目录，本程序不向其中安装。
+/// Checks that the candidate root is safe to install into or to take over.
+/// 验证候选目录可安全安装或接管。
 pub fn installable(root: &Path) -> Result<Ownership, String> {
-    match ownership(root)? {
-        Ownership::Inno(_) => Err(format!(
-            "{} was installed by the Windows installer (VulcanCode-Setup.exe), which the app keeps \
-             up to date; uninstall it first to install here with this program",
-            root.display()
-        )),
-        ownership => Ok(ownership),
+    // File names alone never authorize adopting an Inno installation.
+    // 仅凭文件名绝不授权接管 Inno 安装。
+    #[cfg(windows)]
+    {
+        crate::windows::reject_reparse_point(root)?;
+        for directory in [
+            VERSIONS_DIR,
+            UPDATES_DIR,
+            SETUP_DIR,
+            crate::integrate::CLI_DIR,
+        ] {
+            crate::windows::reject_reparse_point(&root.join(directory))?;
+        }
     }
+    let owner = ownership(root)?;
+    #[cfg(windows)]
+    {
+        if matches!(owner, Ownership::Inno(_)) {
+            let registered = crate::windows::registered_inno(root)?
+                .filter(|uninstaller| uninstaller.is_file())
+                .ok_or_else(|| {
+                    format!(
+                        "{} has no matching Vulcan Code Inno registration",
+                        root.display()
+                    )
+                })?;
+            crate::windows::reject_reparse_point(&registered)?;
+            return Ok(Ownership::Inno(registered));
+        }
+    }
+    Ok(owner)
 }
 
 /// The uninstaller Inno Setup writes at the top of the root it installed: `unins000.exe`, or a

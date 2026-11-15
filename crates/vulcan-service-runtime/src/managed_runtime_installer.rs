@@ -11,10 +11,10 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::time::{Duration, Instant};
 use tar::Archive;
-use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
+use vulcan_host_tools::process_creation::new_background_std_command;
 use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 use xz2::read::XzDecoder;
 use zip::ZipArchive;
@@ -482,7 +482,7 @@ where
     let process_cache_root = vulcan_runtime_assets::native_host_path(&cache_root);
     // install_command owns the Release-aware uv invocation that installs Python.
     // install_command 持有带 Release 无控制台处理的 uv Python 安装调用。
-    let mut install_command = Command::new(&process_uv_executable);
+    let mut install_command = new_background_std_command(&process_uv_executable);
     install_command
         .args([
             "python",
@@ -495,7 +495,6 @@ where
         .env("UV_CACHE_DIR", &process_cache_root)
         .env("UV_MANAGED_PYTHON", "1")
         .env("UV_NO_CONFIG", "1");
-    apply_windows_release_no_window_to_std_command(&mut install_command);
     let install_output = install_command.output().map_err(|error| {
         format!(
             "failed to start managed uv {}: {error}",
@@ -507,14 +506,13 @@ where
     // find_output 解析精确暂存根内安装的解释器。
     // find_command owns the Release-aware uv invocation that locates Python.
     // find_command 持有带 Release 无控制台处理的 uv Python 定位调用。
-    let mut find_command = Command::new(&process_uv_executable);
+    let mut find_command = new_background_std_command(&process_uv_executable);
     find_command
         .args(["python", "find", request.python_version])
         .env("UV_PYTHON_INSTALL_DIR", &process_staging)
         .env("UV_CACHE_DIR", &process_cache_root)
         .env("UV_MANAGED_PYTHON", "1")
         .env("UV_NO_CONFIG", "1");
-    apply_windows_release_no_window_to_std_command(&mut find_command);
     let find_output = find_command
         .output()
         .map_err(|error| format!("failed to resolve managed Python interpreter: {error}"))?;
@@ -1713,9 +1711,8 @@ where
         .collect::<Vec<_>>();
     // command owns the Release-aware executable version-check invocation.
     // command 持有带 Release 无控制台处理的可执行文件版本校验调用。
-    let mut command = Command::new(&process_executable);
+    let mut command = new_background_std_command(&process_executable);
     command.args(&process_arguments);
-    apply_windows_release_no_window_to_std_command(&mut command);
     let output = command
         .output()
         .map_err(|error| format!("failed to start {}: {error}", executable.display()))?;
@@ -2061,7 +2058,7 @@ mod tests {
         // 目录联接不要求开发者模式，且复现 uv 在 Windows 创建的实际别名。
         // status confirms native junction creation before testing alias removal.
         // status 在测试别名清理前确认原生目录联接已创建。
-        let status = Command::new("cmd")
+        let status = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(&alias)
             .arg(&interpreter_root)

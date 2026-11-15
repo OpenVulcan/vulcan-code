@@ -87,7 +87,7 @@
         }
         if ($Arg -clike '--prefix=*') { $Root = $Arg.Substring('--prefix='.Length) }
         if ($Arg -clike '--route=*') { $Route = $Arg.Substring('--route='.Length) }
-        if ($Arg -cin @('--prefix', '--mode', '--port-range', '--with', '--channel', '--route')) { $ValueFor = $Arg }
+        if ($Arg -cin @('--prefix', '--mode', '--port-range', '--with', '--channel', '--route', '--ui')) { $ValueFor = $Arg }
         if ($Arg -cin @('--self-update', '--no-self-update')) { $AutoUpdate = $false }
     }
     if ($ValueFor -ceq '--route') { throw '--route needs a value' }

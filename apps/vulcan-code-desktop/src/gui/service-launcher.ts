@@ -314,14 +314,16 @@ export async function ensureServiceInstance(
     report({ stage: 'starting-service', message: text.startingService });
     // The service is started detached so that closing this GUI never terminates Core.
     // 服务以分离方式启动，因此关闭本 GUI 绝不会终止 Core。
-    // Debug Core owns one visible diagnostic console; Release Core stays windowless.
-    // Debug Core 持有一个可见诊断控制台；Release Core 保持无窗口。
-    const showDebugConsole = process.platform === 'win32' && description.profile === 'debug'
-      && !forwardedArguments.includes('--no-debug-console');
+    // A background launch must also prevent Debug Core from allocating its own console.
+    // 后台启动还需阻止 Debug Core 主动分配控制台。
+    const serviceArguments = ['--gui-launch', ...forwardedArguments];
+    if (process.platform === 'win32' && !serviceArguments.includes('--no-debug-console')) {
+      serviceArguments.push('--no-debug-console');
+    }
     const child = spawn(
       description.executablePath,
-      ['--gui-launch', ...forwardedArguments],
-      { detached: true, stdio: 'ignore', windowsHide: !showDebugConsole },
+      serviceArguments,
+      { detached: true, stdio: 'ignore', windowsHide: true },
     );
     child.unref();
     child.once('error', (error) => {
