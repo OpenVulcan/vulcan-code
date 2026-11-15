@@ -20,7 +20,12 @@ pub fn volume_identity(path: &Path) -> io::Result<Option<String>> {
         .map(str::trim)
         .ok_or_else(|| io::Error::other("The directory descriptor did not report a mount id"))?;
     let mounts = fs::read("/proc/self/mountinfo")?;
-    let (device, target, filesystem, source) = mount_identity_row(&mounts, mount_id.as_bytes())
+    let MountIdentityRow {
+        device,
+        target,
+        filesystem,
+        source,
+    } = mount_identity_row(&mounts, mount_id.as_bytes())
         .ok_or_else(|| io::Error::other("The directory's mount is no longer present"))?;
     // The UUID follows local filesystems even when the same disk receives a different device number.
     // 即使同一磁盘被分配不同设备号，UUID 仍随本地文件系统保持稳定。
@@ -38,12 +43,26 @@ pub fn volume_identity(path: &Path) -> io::Result<Option<String>> {
     )))
 }
 
-/// Reads the device, target, filesystem type and source of the exact mount_id from mountinfo.
-/// 从 mountinfo 读取 mount_id 对应的设备、目标、文件系统类型及来源。
-fn mount_identity_row<'a>(
-    contents: &'a [u8],
-    mount_id: &[u8],
-) -> Option<(&'a [u8], &'a [u8], &'a [u8], &'a [u8])> {
+/// Holds the borrowed fields that identify a single mountinfo row.
+/// 保存标识一条 mountinfo 记录所需的借用字段。
+struct MountIdentityRow<'a> {
+    /// The kernel's major and minor device numbers as printed in mountinfo.
+    /// mountinfo 中记录的内核主、次设备号。
+    device: &'a [u8],
+    /// The mount point in the current mount namespace.
+    /// 当前挂载命名空间中的挂载点。
+    target: &'a [u8],
+    /// The filesystem type recorded after the separator.
+    /// 分隔符之后记录的文件系统类型。
+    filesystem: &'a [u8],
+    /// The source backing this mount.
+    /// 支撑此挂载点的来源。
+    source: &'a [u8],
+}
+
+/// Finds the row with the exact mount_id in contents and returns its identity fields if present.
+/// 在 contents 中查找 mount_id 完全匹配的行，字段齐全时返回该行的标识信息。
+fn mount_identity_row<'a>(contents: &'a [u8], mount_id: &[u8]) -> Option<MountIdentityRow<'a>> {
     let line = contents
         .split(|byte| *byte == b'\n')
         .find(|line| line.split(|byte| *byte == b' ').next() == Some(mount_id))?;
@@ -51,7 +70,12 @@ fn mount_identity_row<'a>(
     let device = fields.nth(2)?;
     let target = fields.nth(1)?;
     let mut details = fields.skip_while(|field| *field != b"-").skip(1);
-    Some((device, target, details.next()?, details.next()?))
+    Some(MountIdentityRow {
+        device,
+        target,
+        filesystem: details.next()?,
+        source: details.next()?,
+    })
 }
 
 /// Matches the kernel's device number to the filesystem UUID symlink maintained by udev.
