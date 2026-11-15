@@ -528,12 +528,16 @@ fn push_topic_suffix(output: &mut String, entry: &LuaSkillPromptEntry) {
     }
 }
 
-/// Renders structured Markdown help from one object-shaped JSON Schema.
-/// 从对象形 JSON Schema 渲染结构化 Markdown 说明。
+/// Renders the dispatchable properties of an argument-object schema as Markdown and returns
+/// `None` when there are no properties or constraints to display.
+/// 将参数对象 Schema 中可传入的属性渲染为 Markdown，无可展示的属性或约束时返回 `None`。
 pub fn render_luaskill_schema_markdown(schema: &Value) -> Option<String> {
+    // The dispatcher receives one argument per top-level property.
+    // 调度器将每个顶层属性接收为一个独立参数。
     let mut output = String::new();
-    render_schema_node("input", schema, 0, true, &mut output);
-    (!output.trim().is_empty()).then(|| output.trim().to_string())
+    render_schema_properties(schema, 0, &mut output);
+    push_schema_constraints(schema, 0, &mut output);
+    (!output.is_empty()).then(|| output.trim_end().to_string())
 }
 
 /// Renders one compact type label from a JSON Schema property.
@@ -585,32 +589,36 @@ fn render_schema_node(
     output.push('\n');
 
     push_schema_constraints(schema, depth + 1, output);
+    render_schema_properties(schema, depth + 1, output);
 
+    if let Some(items) = schema.get("items") {
+        render_schema_node("[]", items, depth + 1, true, output);
+    }
+}
+
+/// Appends the named properties of `schema` at `depth` to `output`, applying this object's
+/// own required list to its children.
+/// 将 `schema` 的具名属性按 `depth` 写入 `output`，以当前对象的必填列表标注其子属性。
+fn render_schema_properties(schema: &Value, depth: usize, output: &mut String) {
     if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        // Required names apply only to properties of the current object.
+        // 必填名称仅适用于当前对象的属性。
         let required_names = schema
             .get("required")
             .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
         for (property_name, property_schema) in properties {
             render_schema_node(
                 property_name,
                 property_schema,
-                depth + 1,
-                required_names.contains(property_name),
+                depth,
+                required_names.contains(property_name.as_str()),
                 output,
             );
         }
-    }
-
-    if let Some(items) = schema.get("items") {
-        render_schema_node("[]", items, depth + 1, true, output);
     }
 }
 
@@ -915,6 +923,86 @@ mod tests {
             "Pick candidate files first."
         );
         assert_eq!(compact_whitespace("  \n\t  "), "");
+    }
+
+    /// Verifies that the Markdown lists dispatch arguments at the root and keeps nested required fields.
+    /// 验证 Markdown 在顶层列出调度参数，并保留嵌套字段的必填状态。
+    #[test]
+    fn schema_markdown_starts_with_actual_dispatch_arguments() {
+        // The form writer accepts the path and fields as separate parameters.
+        // 表单写入工具分别接收路径和字段列表。
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "include_values": {"type": "boolean"},
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "value": {"type": "string"}
+                        },
+                        "required": ["name", "value"]
+                    }
+                }
+            },
+            "required": ["path", "fields"]
+        });
+        // The first level must match the names sent to the dispatcher.
+        // 第一层必须与传给调度器的参数名称一致。
+        let markdown = render_luaskill_schema_markdown(&schema).expect("argument help");
+        assert!(
+            markdown
+                .lines()
+                .any(|line| line == "- `path` (string, required)")
+        );
+        assert!(
+            markdown
+                .lines()
+                .any(|line| line == "- `include_values` (boolean, optional)")
+        );
+        assert!(
+            markdown
+                .lines()
+                .any(|line| line == "- `fields` (array, required)")
+        );
+        assert!(
+            markdown
+                .lines()
+                .any(|line| line == "  - `[]` (object, required)")
+        );
+        assert!(
+            markdown
+                .lines()
+                .any(|line| line == "    - `name` (string, required)")
+        );
+        assert!(
+            markdown
+                .lines()
+                .any(|line| line == "    - `value` (string, required)")
+        );
+        assert!(!markdown.contains("`input`"));
+    }
+
+    /// Verifies that an actual parameter named `input` is shown and that an empty schema has no arguments.
+    /// 验证实际名为 `input` 的参数会展示，并且空 Schema 没有参数。
+    #[test]
+    fn schema_markdown_distinguishes_real_input_from_an_empty_object() {
+        assert_eq!(
+            render_luaskill_schema_markdown(&json!({
+                "type": "object",
+                "properties": {"input": {"type": "string"}},
+                "required": ["input"]
+            }))
+            .as_deref(),
+            Some("- `input` (string, required)")
+        );
+        assert_eq!(
+            render_luaskill_schema_markdown(&json!({"type": "object", "properties": {}})),
+            None
+        );
     }
 
     /// Verifies complex schema branches are rendered as Markdown instead of raw JSON.

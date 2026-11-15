@@ -199,6 +199,7 @@ LuaSkills 技能列表仅对声明了配置的技能显示配置入口，并显�
   依据最终可见工具集生成。
 - 模型可见帮助工具只有 `luaskill_help`，不保留 `luaskill` 别名：`{skill}` 返回 `main` 与主题索引，
   `{skill, topic}` 返回单个主题，`{name}` 返回入口的主题；隐式入口另附隐藏宿主管理字段后的参数 Schema。
+  参数帮助直接列出 Schema 的顶层属性，与 `call_luaskill` 的具名参数逐项对应；对象和数组内部仍按原层级展示。
 - 技能包作者编写的 `main` 与主题必须与调用方式无关：使用 canonical 入口名，不写宿主工具名、调度器
   或注册方式，这些由宿主调用说明负责。
 - 随包引导配置 `config/luaskills_root_skills.yaml` 通过生效的 LuaSkills Hub 安装 `vulcan-work` 到 ROOT 层。
