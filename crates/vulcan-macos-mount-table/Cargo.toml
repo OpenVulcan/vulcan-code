@@ -1,0 +1,15 @@
+[package]
+name = "vulcan-macos-mount-table"
+description = "Narrow safe interface to the macOS kernel mount table."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true

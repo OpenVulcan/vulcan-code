@@ -10233,6 +10233,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-macos-mount-table"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "vulcan-markdown-memory"
 version = "0.1.0"
 dependencies = [
@@ -10620,6 +10627,7 @@ dependencies = [
  "vulcan-lancedb-engine",
  "vulcan-llm-core",
  "vulcan-luaskills-config",
+ "vulcan-macos-mount-table",
  "vulcan-markdown-memory",
  "vulcan-mcp-service",
  "vulcan-memorymesh-core",

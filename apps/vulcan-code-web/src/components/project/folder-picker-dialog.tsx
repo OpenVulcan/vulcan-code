@@ -146,10 +146,12 @@ export function FolderPickerSidebar(props: {
             disabled={props.busy}
             key={root.path}
             onClick={() => props.onOpen(root.path)}
+            title={root.path}
             type="button"
           >
             <HardDrive size={15} />
             <span>{root.label}</span>
+            {props.roots.some((other) => other.path !== root.path && other.label === root.label) ? <small>{root.path}</small> : null}
           </button>
         ))}
         {props.loaded && props.roots.length === 0 ? (
@@ -158,6 +160,26 @@ export function FolderPickerSidebar(props: {
       </section>
     </aside>
   );
+}
+
+// projectFolderPickerActiveRoot returns the most specific displayed root for the service path.
+// projectFolderPickerActiveRoot 为服务路径返回最具体的可见卷根。
+export function projectFolderPickerActiveRoot(path: string | undefined, roots: readonly ProjectFolderPickerCrumb[]): string | null {
+  if (path === undefined) return null;
+  // Unix mount paths preserve case and literal backslashes; Windows aliases share their existing key.
+  // Unix 挂载路径保留大小写和字面反斜杠；Windows 别名沿用已有归一化规则。
+  const key = (value: string) => value.startsWith("/") && !value.startsWith("//")
+    ? (value.replace(/\/+$/u, "") || "/") : projectPathKey(value);
+  const current = key(path);
+  let match: { path: string; length: number } | null = null;
+  for (const root of roots) {
+    const candidate = key(root.path);
+    const prefix = candidate === "/" ? "/" : `${candidate}/`;
+    if ((current === candidate || current.startsWith(prefix)) && candidate.length > (match?.length ?? -1)) {
+      match = { path: root.path, length: candidate.length };
+    }
+  }
+  return match?.path ?? null;
 }
 
 // ProjectFolderPickerDialogProps groups service-backed project directory picker inputs.
@@ -267,20 +289,10 @@ export function ProjectFolderPickerDialog({
   const currentKey = listing ? projectPathKey(listing.path) : null;
   // activeRootPath stores the root currently owning the displayed directory.
   // activeRootPath 保存当前显示目录所属的根目录路径。
-  const activeRootPath = React.useMemo(() => {
-    if (currentKey === null) return null;
-    let matchedPath: string | null = null;
-    let matchedLength = -1;
-    for (const root of directoryRoots) {
-      const rootKey = projectPathKey(root.path);
-      const rootMatches = rootKey === "/" ? currentKey.startsWith("/") : currentKey === rootKey || currentKey.startsWith(`${rootKey}/`);
-      if (rootMatches && rootKey.length > matchedLength) {
-        matchedPath = root.path;
-        matchedLength = rootKey.length;
-      }
-    }
-    return matchedPath;
-  }, [currentKey, directoryRoots]);
+  const activeRootPath = React.useMemo(
+    () => projectFolderPickerActiveRoot(listing?.path, directoryRoots),
+    [listing?.path, directoryRoots],
+  );
   const hiddenCount = listing?.entries.filter((entry) => entry.hidden).length ?? 0;
   // visibleEntries applies the hidden toggle and the name filter to the browsed directory.
   // visibleEntries 对当前目录应用隐藏开关与名称筛选。
