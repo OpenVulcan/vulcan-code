@@ -1,4 +1,10 @@
 {
+  "setup.gui.modifyInstall": "Modifier l’installation",
+  "setup.processes.title": "Fermez Vulcan Code pour continuer",
+  "setup.processes.closeDetail": "Enregistrez votre travail et fermez les programmes ci-dessous. Si Core est toujours en cours d’exécution, quittez-le depuis la zone de notification, puis vérifiez à nouveau.",
+  "setup.processes.forceDetail": "Certains programmes sont toujours en cours d’exécution. Vous pouvez les fermer vous-même ou confirmer leur fermeture forcée. Une fermeture forcée peut interrompre des tâches ou entraîner la perte de modifications non enregistrées.",
+  "setup.processes.retry": "Vérifier à nouveau",
+  "setup.processes.force": "Forcer la fermeture",
   "setup.launcher.help.title": "Commandes de Vulcan Code",
   "setup.launcher.help.gui": "Ouvre l’application de bureau installée.",
   "setup.launcher.help.tui": "Ouvre le client terminal installé dans ce terminal.",

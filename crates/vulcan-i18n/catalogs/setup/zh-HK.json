@@ -1,4 +1,10 @@
 {
+  "setup.gui.modifyInstall": "更改安裝選項",
+  "setup.processes.title": "關閉 Vulcan Code 以繼續",
+  "setup.processes.closeDetail": "儲存工作並關閉下列程式。如 Core 仍在執行，請從系統匣選單退出，再重新檢查。",
+  "setup.processes.forceDetail": "部分程式仍在執行。你可以自行關閉，或確認強制關閉。強制關閉可能中斷工作及遺失未儲存的變更。",
+  "setup.processes.retry": "重新檢查",
+  "setup.processes.force": "強制關閉",
   "setup.launcher.help.title": "Vulcan Code 指令說明",
   "setup.launcher.help.gui": "開啟已安裝的桌面應用程式。",
   "setup.launcher.help.tui": "在目前的終端機開啟已安裝的 TUI。",

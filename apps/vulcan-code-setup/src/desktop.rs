@@ -1,5 +1,5 @@
-//! Windows desktop entry that never allocates a console.
-//! 从不分配控制台的 Windows 桌面入口。
+//! File-manager entry for the graphical installation package.
+//! 从文件管理器打开图形安装包的入口。
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 /// Starts the packaged installer and propagates its exit status.
@@ -8,6 +8,10 @@ fn main() {
     #[cfg(windows)]
     std::process::exit(vulcan_code_setup::desktop_package(include_bytes!(concat!(
         env!("OUT_DIR"),
-        "/console-setup.exe"
+        "/console-setup"
     ))));
+    #[cfg(unix)]
+    std::process::exit(vulcan_code_setup::unix_desktop_package(include_bytes!(
+        concat!(env!("OUT_DIR"), "/console-setup")
+    )));
 }

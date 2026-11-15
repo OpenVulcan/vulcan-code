@@ -60,15 +60,22 @@ const RAIL_ACTIVE: Color = color!(0x23282f);
 // Frame underneath the fallback one-pixel edge of the custom window.
 // 自绘窗口的一像素外框底色。
 const FRAME: Color = color!(0x343942);
+// Default body text uses the platform's UI family.
+// 正文默认使用平台界面字体族。
+#[cfg(windows)]
+pub(super) const BODY_FONT: Font = Font::with_name("Segoe UI");
+#[cfg(unix)]
+pub(super) const BODY_FONT: Font = Font::DEFAULT;
+
 // Installer display headings in the native UI family.
 // 使用原生界面字体的安装器标题。
 const HEADING: Font = Font {
     weight: font::Weight::Semibold,
-    ..Font::with_name("Segoe UI")
+    ..BODY_FONT
 };
 // Directory and command text share the desktop monospace fallback.
 // 目录和命令文字共用桌面等宽后备字体。
-const MONO: Font = Font::with_name("Consolas");
+const MONO: Font = Font::MONOSPACE;
 
 /// Decodes the existing Vulcan Code mark into RGBA for the window and branded navigation.
 /// 将现有 Vulcan Code 标志解码为 RGBA，供窗口和品牌导航使用。
@@ -225,7 +232,7 @@ impl Setup {
     pub(super) fn view(&self) -> Element<'_, Message> {
         // The active step follows the worker state and never gets ahead of signed review.
         // 当前步骤跟随安装线程状态，始终等待实际签名清单审阅。
-        let (step, body, footer) = if let Some(confirmation) = &self.confirmation {
+        let (step, mut body, footer) = if let Some(confirmation) = &self.confirmation {
             (
                 1,
                 self.review_page(confirmation),
@@ -242,6 +249,9 @@ impl Setup {
         } else {
             (0, self.options_page(), self.options_footer())
         };
+        if !self.warnings.is_empty() {
+            body = body.push(card(text(self.warnings.join("\n")).size(13).color(DANGER)));
+        }
         // Iced offers each press to the children first, so normal controls keep their own input.
         // Iced 先将按下事件交给子控件，因此正常控件保留自己的输入行为。
         mouse_area(
@@ -362,10 +372,14 @@ impl Setup {
             column![
                 items,
                 space::vertical().height(Length::Fill),
-                text(format!("Windows  ·  v{}", crate::selfupdate::SETUP_VERSION))
-                    .font(MONO)
-                    .size(12)
-                    .color(RAIL_TEXT)
+                text(format!(
+                    "{}  ·  v{}",
+                    std::env::consts::OS,
+                    crate::selfupdate::SETUP_VERSION
+                ))
+                .font(MONO)
+                .size(12)
+                .color(RAIL_TEXT)
             ]
             .spacing(12),
         )
@@ -381,7 +395,8 @@ impl Setup {
     fn options_page(&self) -> Column<'_, Message> {
         // Existing installations primarily offer update and removal in place.
         // 现有安装主要提供原地更新和卸载。
-        let manage = self.installed || self.initial.is_some();
+        let editing = self.before_edit.is_some();
+        let manage = (self.installed || self.initial.is_some()) && !editing;
         // An explicit Windows uninstall entry takes the removal path immediately.
         // Windows 显式卸载入口直接进入卸载路径。
         let removing = self.initial == Some(Operation::Uninstall);
@@ -389,6 +404,8 @@ impl Setup {
         // 按当前路径呈现对应标题及摘要。
         let title = if removing {
             "setup.gui.uninstall"
+        } else if editing {
+            "setup.gui.modifyInstall"
         } else if manage {
             "setup.gui.manage"
         } else {
@@ -415,7 +432,7 @@ impl Setup {
         };
         // Windows Settings supplies the exact registered directory when it starts removal.
         // Windows 设置启动卸载时提供准确的已登记安装目录。
-        let path: Element<'_, Message> = if removing {
+        let path: Element<'_, Message> = if removing || editing {
             text(&self.directory).font(MONO).size(13).into()
         } else {
             row![
@@ -600,10 +617,9 @@ impl Setup {
                         checkbox(desktop && self.options.desktop_shortcut.unwrap_or(false))
                             .label(self.text("setup.integration.desktopShortcut"))
                             .size(15)
-                            .on_toggle_maybe(desktop.then_some(|checked| Message::Option(
-                                OptionField::Shortcut,
-                                checked
-                            )))
+                            .on_toggle_maybe((desktop && !self.platform.is_macos()).then_some(
+                                |checked| Message::Option(OptionField::Shortcut, checked)
+                            ))
                     ]
                     .spacing(6)
                     .width(Length::FillPortion(1)),
@@ -645,7 +661,10 @@ impl Setup {
             checkbox(checked)
                 .label(self.text(title))
                 .size(15)
-                .on_toggle(move |value| Message::Option(field, value))
+                .on_toggle_maybe(
+                    (!(self.before_edit.is_some() && matches!(field, OptionField::Browser)))
+                        .then_some(move |value| Message::Option(field, value)),
+                )
         ]
         .spacing(3);
         if let Some(detail) = detail {
@@ -660,7 +679,10 @@ impl Setup {
     /// Presents the available action for the current installation state.
     /// 按当前安装状态显示可执行操作。
     fn options_footer(&self) -> Row<'_, Message> {
-        if self.advanced && !self.installed && self.initial.is_none() {
+        if self.advanced
+            && (!self.installed || self.before_edit.is_some())
+            && self.initial.is_none()
+        {
             return row![
                 space::horizontal(),
                 action(
@@ -677,6 +699,8 @@ impl Setup {
         // 展示确切影响范围后才确认不可逆卸载。
         let (operation, title) = if self.initial == Some(Operation::Uninstall) {
             (Operation::Uninstall, "setup.gui.continue")
+        } else if self.before_edit.is_some() {
+            (Operation::Install, "setup.gui.continue")
         } else if self.legacy {
             (Operation::Update, "setup.gui.takeOver")
         } else if self.installed || self.initial == Some(Operation::Update) {
@@ -686,7 +710,13 @@ impl Setup {
         };
         // Management exposes removal alongside update.
         // 管理页同时提供更新与卸载。
-        let secondary_action = if self.installed && operation != Operation::Uninstall {
+        let secondary_action = if self.before_edit.is_some() {
+            action(
+                self.text("setup.gui.back"),
+                Some(Message::EditInstallation),
+                secondary,
+            )
+        } else if self.installed && operation != Operation::Uninstall {
             action(
                 self.text("setup.gui.uninstall"),
                 Some(Message::SelectRemoval),
@@ -708,6 +738,13 @@ impl Setup {
         // Keep advanced settings reachable without making the common flow scroll.
         // 让高级设置可达，同时避免常用流程必须滚动。
         let mut footer = row![secondary_action].spacing(10);
+        if self.installed && !self.legacy && self.initial.is_none() && self.before_edit.is_none() {
+            footer = footer.push(action(
+                self.text("setup.gui.modifyInstall"),
+                Some(Message::EditInstallation),
+                secondary,
+            ));
+        }
         if operation == Operation::Install {
             footer = footer.push(action(
                 self.text("setup.advanced.title"),
@@ -727,6 +764,17 @@ impl Setup {
     fn review_page<'a>(&'a self, confirmation: &'a Confirmation) -> Column<'a, Message> {
         match confirmation {
             Confirmation::Install(review, _) => self.install_review(review),
+            Confirmation::WaitForExit(names, offer_force, _) => column![
+                heading(
+                    self.text("setup.processes.title"),
+                    self.text(if *offer_force {
+                        "setup.processes.forceDetail"
+                    } else {
+                        "setup.processes.closeDetail"
+                    })
+                ),
+                card(text(names.join("\n")).font(MONO).size(13)),
+            ],
             Confirmation::Remove(purge, _) => column![
                 heading(
                     self.text(if *purge {
@@ -834,7 +882,34 @@ impl Setup {
     fn review_footer(&self, confirmation: &Confirmation) -> Row<'_, Message> {
         // Removal has its own destructive confirmation.
         // 卸载使用独立的危险操作确认。
+        if let Confirmation::WaitForExit(_, offer_force, _) = confirmation {
+            let mut footer = row![
+                action(
+                    self.text("setup.gui.cancel"),
+                    Some(Message::Answer(false)),
+                    secondary
+                ),
+                space::horizontal(),
+                action(
+                    self.text("setup.processes.retry"),
+                    Some(Message::Answer(true)),
+                    button::primary
+                ),
+            ]
+            .spacing(8);
+            if *offer_force {
+                footer = footer.push(action(
+                    self.text("setup.processes.force"),
+                    Some(Message::ForceClose),
+                    button::danger,
+                ));
+            }
+            return footer;
+        }
         let (key, style): (_, fn(&Theme, button::Status) -> button::Style) = match confirmation {
+            Confirmation::WaitForExit(..) => {
+                unreachable!("process confirmation has its own controls")
+            }
             Confirmation::Remove(true, _) => ("setup.gui.eraseData", button::danger),
             Confirmation::Remove(..) => ("setup.gui.uninstall", button::danger),
             Confirmation::Install(review, _) => match review.action {
@@ -959,14 +1034,18 @@ impl Setup {
                                 "setup.done.terminal",
                                 &[("command", &outcome.terminal)]
                             ))
-                            .size(14),
-                            text(self.text("setup.done.uninstallWindows"))
-                                .size(13)
-                                .color(MUTED)
+                            .size(14)
                         ]
                         .spacing(10)
                     )
                 ];
+                if outcome.platform.is_windows() {
+                    page = page.push(
+                        text(self.text("setup.done.uninstallWindows"))
+                            .size(13)
+                            .color(MUTED),
+                    );
+                }
                 if !outcome.notes.is_empty() {
                     page = page.push(card(text(outcome.notes.join("\n")).size(13).color(MUTED)));
                 }

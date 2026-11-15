@@ -1,5 +1,5 @@
-//! Identifies the installed Core by its executable path and operating system process identity.
-//! 通过可执行文件路径及操作系统进程标识识别已安装的 Core。
+//! Identifies the desktop, terminal client and Core by their installed executable paths.
+//! 通过安装后的可执行文件路径识别桌面、终端客户端和 Core。
 use std::path::{Path, PathBuf};
 
 use vulcan_install_core::install_root::{RUNTIME_LAYOUT_FILE, VERSIONS_DIR};
@@ -19,9 +19,29 @@ pub struct Running {
     birth: (u64, u64),
 }
 
-/// Finds live Core processes under the install root, including older installed versions.
-/// 查找安装根目录下运行中的 Core，包括较早的已安装版本。
-fn scan_core(root: &Path) -> Result<Vec<Running>, String> {
+/// Determines which installed binaries a process scan is allowed to match.
+/// 决定进程扫描可匹配哪些已安装的可执行文件。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// Match only the installed Core executable.
+    /// 只匹配已安装的 Core。
+    Core,
+    /// Match Core and installed workbench clients for installer changes.
+    /// 安装变更时匹配 Core 及已安装的工作台客户端。
+    #[cfg(any(windows, all(unix, feature = "desktop-package")))]
+    Product,
+}
+
+/// Returns the running product programs for this installation, including older installed versions.
+/// 返回此安装正在运行的产品程序，包括较早已安装版本。
+#[cfg(any(windows, all(unix, feature = "desktop-package")))]
+pub fn scan(root: &Path) -> Result<Vec<Running>, String> {
+    scan_scope(root, Scope::Product)
+}
+
+/// Finds live OS processes for the binaries allowed by `scope` under the install `root`.
+/// 查找安装根 `root` 下由 `scope` 允许的可执行文件所对应的系统进程。
+fn scan_scope(root: &Path, scope: Scope) -> Result<Vec<Running>, String> {
     let versions = root.join(VERSIONS_DIR);
     let entries = match std::fs::read_dir(&versions) {
         Ok(entries) => entries,
@@ -47,17 +67,33 @@ fn scan_core(root: &Path) -> Result<Vec<Running>, String> {
         {
             continue;
         }
-        let program = crate::root::Version::read(&dir)?.service();
-        match program.canonicalize() {
-            Ok(path) if path.starts_with(&canonical_dir) => targets.push(path),
-            Ok(_) => {
-                return Err(format!(
-                    "{} leaves its installed version",
-                    program.display()
-                ));
+        let version = crate::root::Version::read(&dir)?;
+        for relative in [
+            Some(version.layout.service_executable),
+            version
+                .layout
+                .tui_executable
+                .filter(|_| scope != Scope::Core),
+            version
+                .layout
+                .desktop_executable
+                .filter(|_| scope != Scope::Core),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let program = dir.join(relative);
+            match program.canonicalize() {
+                Ok(path) if path.starts_with(&canonical_dir) => targets.push(path),
+                Ok(_) => {
+                    return Err(format!(
+                        "{} leaves its installed version",
+                        program.display()
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(format!("cannot inspect {}: {error}", program.display())),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-            Err(error) => return Err(format!("cannot inspect {}: {error}", program.display())),
         }
     }
     if targets.is_empty() {
@@ -95,11 +131,11 @@ fn scan_core(root: &Path) -> Result<Vec<Running>, String> {
 /// Stops Core processes of this installation, returning whether any were running.
 /// 停止此安装的 Core 进程，返回是否有运行中的进程。
 pub fn stop_core(root: &Path) -> Result<bool, String> {
-    let approved = scan_core(root)?;
+    let approved = scan_scope(root, Scope::Core)?;
     if approved.is_empty() {
         return Ok(false);
     }
-    let remaining = force_core(root, &approved)?;
+    let remaining = force_scope(root, &approved, Scope::Core)?;
     if !remaining.is_empty() {
         return Err(String::from("Core is still running or was restarted"));
     }
@@ -115,12 +151,19 @@ fn same_path(left: &Path, right: &Path) -> bool {
     return left == right;
 }
 
-/// Stops the approved Core process identities and returns any remaining Core processes.
-/// 停止已获授权的 Core 进程，并返回其余 Core 进程。
-fn force_core(root: &Path, approved: &[Running]) -> Result<Vec<Running>, String> {
+/// Sends a force-stop request to each approved process and polls for observed exit.
+/// 向每个已获授权的进程发送强制停止请求，并轮询确认退出。
+#[cfg(any(windows, all(unix, feature = "desktop-package")))]
+pub fn force(root: &Path, approved: &[Running]) -> Result<Vec<Running>, String> {
+    force_scope(root, approved, Scope::Product)
+}
+
+/// Stops the approved process identities and returns remaining processes within `scope`.
+/// 停止已获授权的进程标识，返回 `scope` 范围内仍在运行的进程。
+fn force_scope(root: &Path, approved: &[Running], scope: Scope) -> Result<Vec<Running>, String> {
     use std::time::{Duration, Instant};
 
-    let present = scan_core(root)?;
+    let present = scan_scope(root, scope)?;
     #[cfg(unix)]
     unix::stop_managed_service(&present, approved)?;
     for process in present.iter().filter(|process| approved.contains(process)) {
@@ -133,7 +176,7 @@ fn force_core(root: &Path, approved: &[Running]) -> Result<Vec<Running>, String>
     // 为等待设置上限，以便显示权限错误或自动拉起的服务。
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let present = scan_core(root)?;
+        let present = scan_scope(root, scope)?;
         if !present.iter().any(|process| approved.contains(process)) || Instant::now() >= deadline {
             return Ok(present);
         }

@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{fmt, io::Write};
 
 use vulcan_install_core::fetch::{Downloader, Route};
 use vulcan_install_core::layout::setup_file_key;
@@ -48,14 +49,40 @@ pub enum Outcome {
     Finished(i32),
 }
 
+/// The caller's interface, which determines how progress and the replacement process are shown.
+/// 调用方的界面类型，决定如何显示更新进度并启动替换进程。
+#[derive(Clone, Copy)]
+pub enum Surface {
+    /// Report progress to the terminal and keep it attached across the restart.
+    /// 向终端报告进度，重启后仍连接同一终端。
+    Terminal,
+    /// Run on behalf of an installer window that may have no valid standard streams.
+    /// 代表可能没有有效标准流的安装窗口运行。
+    #[cfg(windows)]
+    Graphical,
+}
+
+impl Surface {
+    /// Writes a progress message when a terminal is in use. An output error cannot stop updating.
+    /// 使用终端时写入一条进度消息。输出错误不能中断更新。
+    fn announce(self, message: fmt::Arguments<'_>) {
+        if matches!(self, Self::Terminal) {
+            let _ = writeln!(std::io::stdout().lock(), "{message}");
+        }
+    }
+}
+
 /// Checks `channel` unless opted out, then verifies, replaces and restarts with `arguments`.
+/// The `surface` controls progress output and how the child is launched.
 /// 未关闭自更新时检查 `channel`，校验后替换本程序并以 `arguments` 重启。
+/// `surface` 控制进度输出和子进程的启动方式。
 pub fn check(
     platform: Platform,
     channel: Channel,
     route: Route,
     choice: SelfUpdate,
     arguments: &[String],
+    surface: Surface,
 ) -> Result<Outcome, String> {
     let program = std::env::current_exe()
         .map_err(|error| format!("cannot find the setup program: {error}"))?;
@@ -66,7 +93,7 @@ pub fn check(
     let own = version()?;
     // The lookup reaches the network before anything else is shown, so it says what it is doing.
     // 该查询在显示任何其他内容之前访问网络，因此先说明正在做什么。
-    println!("Looking for a newer setup program...");
+    surface.announce(format_args!("Looking for a newer setup program..."));
     let mut downloader =
         Downloader::new(route.origins(), USER_AGENT).map_err(|error| error.to_string())?;
     let pointer = match find_setup_update(&mut downloader, BUILT_IN_KEYS, channels(channel), &own) {
@@ -75,7 +102,9 @@ pub fn check(
         // The release itself still checks `minSetupVersion` before anything is installed.
         // 安装任何内容之前，版本本身仍会检查 `minSetupVersion`。
         Err(error) => {
-            println!("Could not look for a newer setup program: {error}");
+            surface.announce(format_args!(
+                "Could not look for a newer setup program: {error}"
+            ));
             return Ok(Outcome::Continue);
         }
     };
@@ -83,12 +112,12 @@ pub fn check(
     let file = pointer
         .program(platform)
         .map_err(|error| error.to_string())?;
-    println!(
+    surface.announce(format_args!(
         "Downloading setup program {newer} ({})...",
         megabytes(file.size)
-    );
+    ));
     replace(&mut downloader, &program, &pointer, file)?;
-    restart(&program, arguments)
+    restart(&program, arguments, surface)
 }
 
 /// Where the running program is moved before it is replaced on Windows.
@@ -162,19 +191,25 @@ fn restart_arguments(arguments: &[String]) -> Vec<String> {
     next
 }
 
-/// Runs the updated program in place of this one.
-/// 以更新后的程序代替本程序运行。
-fn restart(program: &Path, arguments: &[String]) -> Result<Outcome, String> {
+/// Runs the updated `program` with `arguments` and preserves the caller's interface.
+/// 使用 `arguments` 运行更新后的 `program`，保留调用方的界面类型。
+fn restart(program: &Path, arguments: &[String], surface: Surface) -> Result<Outcome, String> {
     let mut command = Command::new(program);
     command.args(restart_arguments(arguments));
     #[cfg(windows)]
-    if arguments.iter().any(|argument| argument == "--ui=gui")
-        && crate::windows::standalone_console()
-    {
+    if matches!(surface, Surface::Graphical) {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        use std::process::Stdio;
+
+        // A GUI relaunch must not inherit handles left behind by FreeConsole.
+        // 图形界面重启时不能继承 FreeConsole 留下的失效句柄。
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     }
-    println!("Restarting the updated setup program...");
+    surface.announce(format_args!("Restarting the updated setup program..."));
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

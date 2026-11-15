@@ -172,6 +172,22 @@
   管道会一直保持打开；同理，Windows 上安装器以显式句柄列表启动 Core，只交出 NUL 与这两个文件（Windows
   PowerShell 等会把其输出的额外可继承副本交给安装器），调用方经管道读取安装器输出时不会被服务挂住。
 
+## Linux 和 macOS 图形安装包
+
+- Linux 从文件管理器运行对应架构的 AppImage。下载后如果文件管理器未保留执行权限，可在文件属性中允许执行。
+  运行依赖桌面会话和可用的 FUSE。macOS 从 Finder 打开 DMG，再打开里面的 `Vulcan Code Setup.app`。
+- 安装、更新和卸载与终端共用同一个引擎，读取同一套签名发布对象。可以保留图形安装包，重新打开后管理现有安装。
+  图形包内嵌同架构的终端安装器，首次安装时写入现有的 `setup/` 位置，已有的终端安装器由其自身升级流程维护。
+  图形安装包通过下载新版替换。
+- 三个平台的图形安装器在变更安装前，按版本布局中的可执行文件路径检查当前安装下的桌面、TUI 与 Core。
+  审阅后先提示正常退出，重新检查仍有进程时提供单独的强制关闭确认。强制关闭只针对已确认的进程，
+  再次检查全部退出后继续。下载完成、切换版本之前会重复检查。
+- 打包时先构建 `vulcan-code-setup`，再以 `VULCAN_SETUP_CONSOLE_IMAGE` 指向同架构的终端产物，
+  用 `--features desktop-package --bin vulcan-code-setup-gui` 构建图形产物。Linux 图形产物在 GNU 目标构建。
+  `sh scripts/package-setup-gui.sh linux` 接收图形产物、AppImage 输出路径、打包工具和锁定的 AppImage 运行时。
+  `sh scripts/package-setup-gui.sh macos` 接收 ARM64、x64 图形产物及 DMG 输出路径，在 macOS 合成为通用安装包。
+  macOS 对外分发需要以 Developer ID 签名后送 Apple 公证，本地测试包可使用临时签名。
+
 ## 安装后的 vcode 命令
 
 - 裸 `vcode` 与不受支持的命令显示帮助及安装管理器版本。用 `vcode tui` 或 `vcode gui` 启动对应客户端。
@@ -192,7 +208,8 @@
 - **唯一实现**：配置文本、路径常量、比较（`Current`/`Missing`/`Outdated`/`Foreign`）与命令都在
   `vulcan-install-core` 的 `apparmor.rs`；标记行 `GENERATED_MARKER` 与布局文件名 `RUNTIME_LAYOUT_FILE` 在
   `install_root.rs`；桌面组件名 `DESKTOP_COMPONENT` 在 `names.rs`。安装器与 Core 写出的字节完全相同。
-- **安装器**：GUI 安装且限制开启时，在终端中经 `sudo` 安装并记录为 `Item::AppArmorProfile`；拒绝密码时
+- **安装器**：安装桌面组件且限制开启时，经系统鉴权安装并记录为 `Item::AppArmorProfile`。终端界面使用
+  `sudo`，图形界面使用 `pkexec --disable-internal-agent`，由桌面 Polkit 代理提供授权窗口。授权失败时
   只在提示中留下命令。无标记的同名文件属于他人，不覆盖、不删除。卸载时，未被记录但带标记且指向本根目录的
   配置（由 Core 安装）同样移除。
 - **Core**：只在 Linux、已安装 `gui` 组件、限制开启且配置为 `Missing` 或 `Outdated` 时，快照给出

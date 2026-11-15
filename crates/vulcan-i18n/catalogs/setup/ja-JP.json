@@ -1,4 +1,10 @@
 {
+  "setup.gui.modifyInstall": "インストール設定を変更",
+  "setup.processes.title": "Vulcan Code を終了して続行",
+  "setup.processes.closeDetail": "作業を保存し、以下のプログラムを終了してください。Core が起動中の場合はトレイメニューから終了し、再確認してください。",
+  "setup.processes.forceDetail": "一部のプログラムが起動中です。自分で終了するか、強制終了を選択してください。強制終了すると、タスクの中断や未保存の作業の消失が起こる場合があります。",
+  "setup.processes.retry": "再確認",
+  "setup.processes.force": "強制終了",
   "setup.launcher.help.title": "Vulcan Code のコマンド",
   "setup.launcher.help.gui": "インストール済みのデスクトップアプリを開きます。",
   "setup.launcher.help.tui": "現在の端末でインストール済みの TUI を開きます。",

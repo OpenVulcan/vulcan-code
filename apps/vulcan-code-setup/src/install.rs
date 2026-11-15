@@ -24,7 +24,9 @@ use vulcan_install_core::update::{find_update, read_indexes};
 use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions, check_port_range};
 use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
 use crate::paths;
-use crate::report::{Action, BACK, Decision, DesktopWay, Outcome, Plain, Reporter, Review, Stage};
+use crate::report::{
+    Action, BACK, Change, Decision, DesktopWay, Outcome, Plain, Reporter, Review, Stage,
+};
 use crate::root::{self, Current, Description, LEGACY_MARKER, Ownership, Version};
 use crate::screen::Screen;
 use crate::selfupdate;
@@ -257,15 +259,17 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
     outcome.map(|outcome| outcome.print())
 }
 
-/// Resolves and runs the same install engine for the Windows graphical frontend.
-/// 为 Windows 图形前端解析选项并运行同一安装引擎。
-#[cfg(windows)]
+/// Runs the shared install engine with an optional bundled console executable.
+/// 使用可选的内嵌终端可执行文件运行共用安装引擎。
+#[cfg(any(windows, all(unix, feature = "desktop-package")))]
 pub(super) fn graphical_run(
     options: &InstallOptions,
     update: bool,
     reporter: &dyn Reporter,
+    console_image: Option<&[u8]>,
 ) -> Result<Outcome, String> {
-    let platform = Platform::WindowsX64;
+    let platform = Platform::current().ok_or("this platform is not supported")?;
+    check_system(platform)?;
     let root = resolve_root(options.common.prefix.as_deref(), platform)?;
     let ownership = root::installable(&root)?;
     let recorded = recorded_choices(&root, &ownership)?;
@@ -276,7 +280,15 @@ pub(super) fn graphical_run(
         ));
     }
     let choices = Choices::resolve(options, recorded.as_ref(), platform, true)?;
-    apply(platform, &root, &ownership, &choices, reporter)
+    apply_target(
+        platform,
+        &root,
+        &ownership,
+        &choices,
+        reporter,
+        None,
+        console_image,
+    )
 }
 
 /// The wizard, then the run with its pages; going back from the review returns to the wizard's
@@ -412,7 +424,10 @@ pub fn resolve_root(prefix: Option<&Path>, platform: Platform) -> Result<PathBuf
 
 /// Reads the installation choices for a managed or registered Inno root.
 /// 读取已管理或已登记 Inno 目录的安装选择。
-fn recorded_choices(root: &Path, ownership: &Ownership) -> Result<Option<SetupState>, String> {
+pub(super) fn recorded_choices(
+    root: &Path,
+    ownership: &Ownership,
+) -> Result<Option<SetupState>, String> {
     match ownership {
         Ownership::Owned(state) => Ok(Some(state.clone())),
         #[cfg(windows)]
@@ -497,7 +512,9 @@ fn apply(
     choices: &Choices,
     reporter: &dyn Reporter,
 ) -> Result<Outcome, String> {
-    apply_target(platform, root_path, ownership, choices, reporter, None)
+    apply_target(
+        platform, root_path, ownership, choices, reporter, None, None,
+    )
 }
 
 /// Runs an update, or adopts the exact version already installed by a legacy release entry point.
@@ -509,6 +526,7 @@ fn apply_target(
     choices: &Choices,
     reporter: &dyn Reporter,
     target: Option<&ReleaseVersion>,
+    console_image: Option<&[u8]>,
 ) -> Result<Outcome, String> {
     let root = InstallRoot::new(root_path);
     // Capture the legacy settings before the current pointer can change.
@@ -693,7 +711,7 @@ fn apply_target(
     }
     // The setup program is copied first, so the service registered below never outlives it.
     // 先复制安装器，使下面注册的服务绝不会比安装器存在得更久。
-    let integrated = copy_self(root_path).and_then(|()| {
+    let integrated = copy_self(root_path, console_image).and_then(|()| {
         integrate::integrate(&plan, &installed_version, switched, &mut recorder, reporter)
     });
     let mut state = SetupState {
@@ -832,6 +850,7 @@ pub(crate) fn adopt_release(
         &choices,
         &Plain::new(true),
         Some(target),
+        None,
     )
     .map(|outcome| outcome.print())
 }
@@ -853,6 +872,7 @@ fn assemble(
     let (manifest, indexes) = match work {
         Work::Refresh(_) => {
             decide(reporter, &review)?;
+            reporter.before_change(root.path(), Change::Apply)?;
             return Ok(false);
         }
         Work::Assemble { manifest, indexes } => (manifest, indexes),
@@ -888,6 +908,7 @@ fn assemble(
             prepare_repair(root, lock, &manifest, indexes).map_err(|error| error.to_string())?;
         review.download = repair.download_bytes();
         decide(reporter, &review)?;
+        reporter.before_change(root.path(), Change::Apply)?;
         if repair.damaged_count() > 0 {
             reporter.stage(Stage::Downloading);
             repair
@@ -895,6 +916,7 @@ fn assemble(
                 .map_err(|error| failure(cancel, error))?;
         }
         check_release_build(&version_dir)?;
+        reporter.before_change(root.path(), Change::Apply)?;
         reporter.stage(Stage::Switching);
         root.switch_to(lock, version)
             .map_err(|error| error.to_string())?;
@@ -906,6 +928,7 @@ fn assemble(
         .map_err(|error| error.to_string())?;
     review.download = prepared.download_bytes();
     decide(reporter, &review)?;
+    reporter.before_change(root.path(), Change::Apply)?;
     reporter.stage(Stage::Downloading);
     let total = prepared.download_bytes();
     let counter = downloader.received_counter();
@@ -934,6 +957,7 @@ fn assemble(
         let _ = std::fs::remove_dir_all(&version_dir);
         return Err(error);
     }
+    reporter.before_change(root.path(), Change::Apply)?;
     reporter.stage(Stage::Switching);
     root.switch_to(lock, version)
         .map_err(|error| error.to_string())?;
@@ -1097,9 +1121,14 @@ fn check_release_build(version_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Copies the running setup program into `<root>/setup` unless it already runs from there.
-/// 将正在运行的安装器复制到 `<root>/setup`，除非它已从那里运行。
-fn copy_self(root: &Path) -> Result<(), String> {
+/// Installs the console executable into the root, preserving an existing Unix console installation.
+/// 将终端可执行文件安装到根目录，保留 Unix 上已有的终端安装器。
+fn copy_self(root: &Path, _console_image: Option<&[u8]>) -> Result<(), String> {
+    #[cfg(unix)]
+    if let Some(image) = _console_image {
+        copy_embedded_console(root, image)?;
+        return copy_gui_manager(root);
+    }
     let running = std::env::current_exe()
         .map_err(|error| format!("cannot find the setup program: {error}"))?;
     let dir = root.join(SETUP_DIR);
@@ -1127,6 +1156,88 @@ fn copy_self(root: &Path) -> Result<(), String> {
     std::fs::rename(&partial, &target).map_err(fail)
 }
 
+/// Retains the native graphical manager for subsequent `vcode manager gui` calls.
+/// 保留原生图形管理器，以支持后续的 `vcode manager gui` 调用。
+#[cfg(unix)]
+fn copy_gui_manager(root: &Path) -> Result<(), String> {
+    let source = std::env::current_exe()
+        .map_err(|error| format!("cannot locate graphical manager: {error}"))?;
+    let directory = root.join(SETUP_DIR);
+    let target = directory.join(crate::launcher::GUI_MANAGER);
+    if target.canonicalize().is_ok_and(|path| path == source) {
+        return Ok(());
+    }
+    let install = || -> std::io::Result<()> {
+        let staged = tempfile::NamedTempFile::new_in(&directory)?;
+        std::fs::copy(source, staged.path())?;
+        staged.as_file().sync_all()?;
+        staged.persist(&target).map_err(|error| error.error)?;
+        Ok(())
+    };
+    install().map_err(|error| format!("cannot install {}: {error}", target.display()))
+}
+
+/// Publishes the embedded terminal installer, preserving any independently installed newer copy.
+/// 安装内嵌终端安装器，保留已经独立安装的更新版本。
+#[cfg(unix)]
+fn copy_embedded_console(root: &Path, image: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    // Keep the installed terminal entry point independent of the portable graphical package.
+    // 保持安装后的终端入口独立于便携图形安装包。
+    let directory = root.join(SETUP_DIR);
+    let target = directory.join(SETUP_PROGRAM);
+    let fail = |error: std::io::Error| format!("cannot write {}: {error}", target.display());
+    let replace = match std::fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.is_file() => {
+            if console_version(&target)? >= selfupdate::version()? {
+                return Ok(());
+            }
+            true
+        }
+        Ok(_) => return Err(format!("{} is not a regular file", target.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(fail(error)),
+    };
+    std::fs::create_dir_all(&directory).map_err(fail)?;
+    let mut staged = tempfile::NamedTempFile::new_in(directory).map_err(fail)?;
+    staged.write_all(image).map_err(fail)?;
+    staged
+        .as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o755))
+        .map_err(fail)?;
+    staged.as_file().sync_all().map_err(fail)?;
+    if replace {
+        staged.persist(&target).map_err(|error| fail(error.error))?;
+    } else {
+        staged
+            .persist_noclobber(&target)
+            .map_err(|error| fail(error.error))?;
+    }
+    Ok(())
+}
+
+/// Queries the local console installer's documented version output.
+/// 查询本地终端安装器已定义的版本输出。
+#[cfg(unix)]
+fn console_version(program: &Path) -> Result<ReleaseVersion, String> {
+    let output = std::process::Command::new(program)
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("cannot read version of {}: {error}", program.display()))?;
+    let fail = || format!("{} did not report a valid setup version", program.display());
+    if !output.status.success() {
+        return Err(fail());
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .strip_prefix("vulcan-code-setup ")
+        .ok_or_else(fail)?
+        .parse()
+        .map_err(|_| fail())
+}
+
 /// Component names separated by commas.
 /// 以逗号分隔的组件名。
 fn join(components: &BTreeSet<ComponentName>) -> String {
@@ -1141,6 +1252,32 @@ fn join(components: &BTreeSet<ComponentName>) -> String {
 mod tests {
     use super::*;
     use crate::state::tests::plain_state;
+
+    /// Checks that the graphical package upgrades an old executable and preserves a current one.
+    /// 验证图形安装包会升级旧命令行安装器，并保留当前版本。
+    #[cfg(unix)]
+    #[test]
+    fn graphical_install_preserves_the_installed_console_program() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("isolated installation root");
+        let target = directory.path().join(SETUP_DIR).join(SETUP_PROGRAM);
+        let old = b"#!/bin/sh\nprintf 'vulcan-code-setup 0.1.0\\n'\n";
+        copy_embedded_console(directory.path(), old).expect("install older console");
+        let metadata = std::fs::metadata(&target).expect("installed console metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
+
+        let current = format!(
+            "#!/bin/sh\nprintf 'vulcan-code-setup {}\\n'\n",
+            selfupdate::SETUP_VERSION
+        );
+        copy_embedded_console(directory.path(), current.as_bytes()).expect("upgrade console");
+        copy_embedded_console(directory.path(), old).expect("preserve current console");
+        assert_eq!(
+            std::fs::read(target).expect("installed console"),
+            current.as_bytes()
+        );
+    }
 
     fn platform(name: &str) -> Platform {
         Platform::ALL

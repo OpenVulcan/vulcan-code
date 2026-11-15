@@ -81,6 +81,12 @@ pub fn installable(root: &Path) -> Result<Ownership, String> {
             return Ok(Ownership::Inno(registered));
         }
     }
+    // An Inno directory can be visible from Unix, including through a WSL mount.
+    // Unix 也可能看到 Inno 安装目录，例如通过 WSL 挂载。
+    #[cfg(not(windows))]
+    if matches!(owner, Ownership::Inno(_)) {
+        return Err(format!("{} is a Windows Inno installation", root.display()));
+    }
     Ok(owner)
 }
 

@@ -1,4 +1,10 @@
 {
+  "setup.gui.modifyInstall": "Installation ändern",
+  "setup.processes.title": "Vulcan Code zum Fortfahren schließen",
+  "setup.processes.closeDetail": "Speichern Sie Ihre Arbeit und beenden Sie die unten aufgeführten Programme. Wenn Core noch läuft, beenden Sie ihn über das Menü im Infobereich und prüfen Sie erneut.",
+  "setup.processes.forceDetail": "Einige Programme laufen noch. Sie können sie selbst schließen oder das erzwungene Beenden bestätigen. Dabei können Aufgaben unterbrochen werden oder ungespeicherte Änderungen verloren gehen.",
+  "setup.processes.retry": "Erneut prüfen",
+  "setup.processes.force": "Beenden erzwingen",
   "setup.launcher.help.title": "Vulcan Code – Befehle",
   "setup.launcher.help.gui": "Öffnet die installierte Desktop-App.",
   "setup.launcher.help.tui": "Öffnet den installierten Terminalclient in diesem Terminal.",

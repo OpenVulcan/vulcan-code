@@ -252,6 +252,14 @@ impl Outcome {
 /// Receives the steps of a run and asks for its confirmation.
 /// 接收运行的各步骤并请求确认。
 pub trait Reporter: Sync {
+    /// Ensures the installation can be changed; terminal uninstall retains its existing policy.
+    /// 确认安装可变更；终端卸载沿用现有关闭策略。
+    fn before_change(&self, root: &std::path::Path, change: Change) -> Result<(), String> {
+        if change == Change::Uninstall {
+            crate::uninstall::close_programs(root)?;
+        }
+        Ok(())
+    }
     /// A step begins.
     /// 某步骤开始。
     fn stage(&self, stage: Stage);
@@ -268,6 +276,21 @@ pub trait Reporter: Sync {
     /// password; returns whether every command succeeded.
     /// 以管理员权限运行 `request`，所在终端可供 `sudo` 询问密码；返回是否每条命令都成功。
     fn privileged(&self, request: &Privileged) -> bool;
+}
+
+/// The installation mutation guarded by the reporter.
+/// 由报告器保护的安装变更操作。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// Switch a version or refresh its integration.
+    /// 切换版本或刷新其系统集成。
+    Apply,
+    /// Remove a managed installation.
+    /// 移除受管安装。
+    Uninstall,
+    /// Delegate to a registered Windows Inno uninstaller.
+    /// 交由已登记的 Windows Inno 卸载器执行。
+    UninstallInno,
 }
 
 /// Commands that need administrator rights, and why they run.

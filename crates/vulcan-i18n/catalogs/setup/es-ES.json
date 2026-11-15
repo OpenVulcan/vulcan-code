@@ -1,4 +1,10 @@
 {
+  "setup.gui.modifyInstall": "Cambiar la instalación",
+  "setup.processes.title": "Cierra Vulcan Code para continuar",
+  "setup.processes.closeDetail": "Guarda tu trabajo y cierra los programas indicados. Si Core sigue en ejecución, ciérralo desde el menú de la bandeja y vuelve a comprobarlo.",
+  "setup.processes.forceDetail": "Todavía hay programas en ejecución. Puedes cerrarlos manualmente o confirmar el cierre forzado. El cierre forzado puede interrumpir tareas o hacer que se pierdan cambios sin guardar.",
+  "setup.processes.retry": "Volver a comprobar",
+  "setup.processes.force": "Forzar el cierre",
   "setup.launcher.help.title": "Comandos de Vulcan Code",
   "setup.launcher.help.gui": "Abre la aplicación de escritorio instalada.",
   "setup.launcher.help.tui": "Abre el cliente de terminal instalado en este terminal.",

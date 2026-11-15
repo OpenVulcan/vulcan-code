@@ -37,7 +37,9 @@ path = "src/desktop.rs"
 required-features = ["desktop-package"]
 
 [features]
-desktop-package = []
+# Keep the graphical dependencies out of the static Linux console installer.
+# 静态链接的 Linux 终端安装器不引入图形依赖。
+desktop-package = ["dep:iced", "dep:image", "dep:rfd"]
 
 # The setup program is linked statically on Linux and downloaded before anything else, so it keeps a
 # deliberately small dependency list and stays outside workspace-hack (see `.config/hakari.toml`).
@@ -65,10 +67,32 @@ tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 tempfile.workspace = true
-# Keep the graphical frontend out of the static Unix installer.
-# 图形前端不进入静态 Unix 安装器。
 iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "advanced-shaping", "tokio", "image-without-codecs"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(unix)'.dependencies.iced]
+version = "0.14.0"
+default-features = false
+features = ["tiny-skia", "advanced-shaping", "tokio", "image-without-codecs"]
+optional = true
+
+[target.'cfg(unix)'.dependencies.image]
+version = "0.25"
+default-features = false
+features = ["png"]
+optional = true
+
+[target.'cfg(unix)'.dependencies.rfd]
+version = "0.15.4"
+default-features = false
+features = ["xdg-portal", "tokio"]
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.iced]
+version = "0.14.0"
+default-features = false
+features = ["x11", "wayland"]
+optional = true
 
 [target.'cfg(windows)'.build-dependencies]
 winresource.workspace = true

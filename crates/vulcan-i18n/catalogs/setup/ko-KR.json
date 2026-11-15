@@ -1,4 +1,10 @@
 {
+  "setup.gui.modifyInstall": "설치 변경",
+  "setup.processes.title": "계속하려면 Vulcan Code를 종료하세요",
+  "setup.processes.closeDetail": "작업을 저장하고 아래 프로그램을 종료하세요. Core가 실행 중이면 트레이 메뉴에서 종료한 후 다시 확인하세요.",
+  "setup.processes.forceDetail": "일부 프로그램이 실행 중입니다. 직접 종료하거나 강제 종료를 확인하세요. 강제 종료하면 작업이 중단되거나 저장하지 않은 내용이 손실될 수 있습니다.",
+  "setup.processes.retry": "다시 확인",
+  "setup.processes.force": "강제 종료",
   "setup.launcher.help.title": "Vulcan Code 명령 도움말",
   "setup.launcher.help.gui": "설치된 데스크톱 앱을 엽니다.",
   "setup.launcher.help.tui": "현재 터미널에서 설치된 TUI를 엽니다.",

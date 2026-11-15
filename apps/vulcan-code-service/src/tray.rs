@@ -70,7 +70,6 @@ const MENU_OPEN_WEBUI: &str = "open-webui";
 
 /// Menu item identifier that opens the terminal client in a new console window.
 /// 在新控制台窗口中打开终端客户端的菜单项标识。
-#[cfg(windows)]
 const MENU_OPEN_TERMINAL: &str = "open-terminal";
 
 /// Menu item identifier that reveals the service log location.
@@ -286,7 +285,6 @@ pub fn run_with_tray() {
             Event::UserEvent(TrayEvent::Menu(event)) => match event.id.as_ref() {
                 MENU_OPEN_CLIENT => open_desktop_client(&text),
                 MENU_OPEN_WEBUI => open_webui_in_browser(&handles, &text),
-                #[cfg(windows)]
                 MENU_OPEN_TERMINAL => open_terminal_client(&text),
                 MENU_OPEN_LOGS => open_log_location(&text),
                 MENU_QUIT_SERVICE => quit_service(&handles, &proxy, &text),
@@ -408,13 +406,14 @@ fn create_service_tray(
         |id: &str, key: &'static str| (MenuItem::with_id(id, text.get(key), true, None), key);
     // open_actions opens a client; service_actions act on the service itself. Only Windows adds the terminal entry.
     // open_actions 打开客户端；service_actions 作用于服务本身。只有 Windows 追加终端入口。
-    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut open_actions = vec![
         action(MENU_OPEN_CLIENT, keys::OPEN_DESKTOP_CLIENT),
         action(MENU_OPEN_WEBUI, keys::OPEN_WEBUI),
     ];
-    #[cfg(windows)]
-    open_actions.push(action(MENU_OPEN_TERMINAL, keys::OPEN_TERMINAL_CLIENT));
+    let terminal_available = terminal_client().is_ok();
+    if terminal_available {
+        open_actions.push(action(MENU_OPEN_TERMINAL, keys::OPEN_TERMINAL_CLIENT));
+    }
     let service_actions = [
         action(MENU_OPEN_LOGS, keys::OPEN_LOG_LOCATION),
         action(MENU_QUIT_SERVICE, keys::QUIT_SERVICE),
@@ -436,6 +435,7 @@ fn create_service_tray(
         let submenu = Submenu::new(text.get(keys::DOUBLE_CLICK_OPENS), true);
         let targets: Vec<(CheckMenuItem, TrayOpenTarget, &'static str)> = OPEN_TARGETS
             .iter()
+            .filter(|(target, _, _)| *target != TrayOpenTarget::Terminal || terminal_available)
             .map(|(target, id, key)| {
                 let item = CheckMenuItem::with_id(
                     format!("{MENU_OPEN_TARGET_PREFIX}{id}"),
@@ -801,7 +801,6 @@ fn service_discovery_path() -> std::path::PathBuf {
 /// 在新控制台窗口中打开终端客户端，并绑定到此 Core 的发现根目录。
 /// `text` words any failure in the active language.
 /// `text` 以当前语言组织失败文案。
-#[cfg(windows)]
 fn open_terminal_client(text: &TrayText) {
     if let Err(reason) = launch_terminal_client() {
         report_tray_failure(&text.with_reason(keys::TERMINAL_CLIENT_FAILED, &reason));
@@ -812,8 +811,29 @@ fn open_terminal_client(text: &TrayText) {
 /// 针对此 Core 的精确发现根目录启动清单声明的终端客户端。
 /// Returns a diagnostic when the manifest, the executable or the process start fails.
 /// 清单、可执行文件或进程启动失败时返回诊断。
-#[cfg(windows)]
 fn launch_terminal_client() -> Result<(), String> {
+    let executable = terminal_client()?;
+    // The client reads `<root>/code/webui-service.json`, so pass the owning discovery root.
+    // 客户端读取 `<root>/code/webui-service.json`，因此传入拥有该发现文件的根目录。
+    let discovery = service_discovery_path();
+    let service_root = discovery
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| format!("Discovery path {} has no root.", discovery.display()))?;
+    #[cfg(windows)]
+    return vulcan_host_tools::process_creation::new_console_std_command(&executable)
+        .arg("--service-root")
+        .arg(service_root)
+        .spawn()
+        .map(drop)
+        .map_err(|error| error.to_string());
+    #[cfg(unix)]
+    terminal_launch::open(&executable, service_root)
+}
+
+/// Resolves the terminal executable declared by this Core's runtime layout.
+/// 解析此 Core 运行布局中声明的终端可执行文件。
+fn terminal_client() -> Result<std::path::PathBuf, String> {
     use crate::runtime_layout::{
         explicit_runtime_layout_path, read_runtime_layout_manifest_from,
         read_runtime_layout_manifest_with_path, resolve_layout_entry, runtime_layout_root,
@@ -834,18 +854,11 @@ fn launch_terminal_client() -> Result<(), String> {
     }
     // The client reads `<root>/code/webui-service.json`, so it gets the root two levels up.
     // 客户端读取 `<root>/code/webui-service.json`，因此传入上两级的根目录。
-    let discovery = service_discovery_path();
-    let service_root = discovery
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or_else(|| format!("Discovery path {} has no root.", discovery.display()))?;
-    vulcan_host_tools::process_creation::new_console_std_command(&executable)
-        .arg("--service-root")
-        .arg(service_root)
-        .spawn()
-        .map(drop)
-        .map_err(|error| error.to_string())
+    Ok(executable)
 }
+
+#[cfg(unix)]
+mod terminal_launch;
 
 /// Reads the browser-facing base URL after matching the published record to live Core identity.
 /// 将已发布记录与实时 Core 身份核对后读取浏览器侧基础地址。

@@ -1,5 +1,5 @@
-//! The Windows installer window drives the same operations as the terminal frontend.
-//! Windows 安装器窗口驱动与终端界面相同的操作。
+//! The installer window drives the same operations as the terminal frontend.
+//! 安装器窗口驱动与终端界面相同的操作。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use vulcan_install_core::fetch::Route;
 use vulcan_install_core::names::{Channel, Platform};
 
 use crate::args::{Command, InstallOptions, UninstallOptions};
-use crate::report::{Decision, Outcome, Privileged, Reporter, Review, Stage};
+use crate::report::{Change, Decision, Outcome, Privileged, Reporter, Review, Stage};
 use crate::screen::{filled, text as label};
 use crate::{install, selfupdate, uninstall};
 
@@ -32,8 +32,8 @@ impl std::fmt::Display for RouteChoice {
     }
 }
 
-/// Choices editable from the Windows setup window.
-/// Windows 安装窗口中可编辑的选择。
+/// Choices editable from the setup window.
+/// 安装窗口中可编辑的选择。
 #[derive(Clone, Copy, Debug)]
 enum OptionField {
     /// Install the desktop application.
@@ -90,6 +90,9 @@ enum Message {
     /// Returns from the removal options to the maintenance page.
     /// 从卸载选项返回维护页面。
     LeaveRemoval,
+    /// Toggles editing the selected installation's existing options.
+    /// 切换编辑所选安装的现有选项。
+    EditInstallation,
     /// Edits the service port range before installing.
     /// 安装前编辑服务端口范围。
     PortRange(String),
@@ -99,6 +102,9 @@ enum Message {
     /// Answers the active review.
     /// 回答当前审阅。
     Answer(bool),
+    /// Confirms terminating the processes shown on the current page.
+    /// 确认强制结束当前页面列出的进程。
+    ForceClose,
     /// Polls background work.
     /// 轮询后台工作。
     Poll,
@@ -152,6 +158,12 @@ enum Event {
     /// Removal confirmation and its answer channel.
     /// 卸载确认及答复通道。
     Remove(bool, Sender<bool>),
+    /// Process list, whether force is offered, and the decision channel.
+    /// 进程列表、是否提供强制关闭，以及答复通道。
+    WaitForExit(Vec<String>, bool, Sender<ExitDecision>),
+    /// Cleanup warnings returned by the shared uninstall engine.
+    /// 共用卸载引擎返回的清理警告。
+    Warnings(Vec<String>),
     /// The completed operation and result or child exit code.
     /// 已完成操作及结果或子进程退出码。
     Finished(Result<Option<Box<Outcome>>, String>, Option<i32>),
@@ -161,7 +173,45 @@ enum Event {
 /// 将共享安装器的进度报告传递给窗口。
 struct GuiReporter(Sender<Event>);
 
+/// The decision to recheck, force close the listed processes, or cancel.
+/// 重新检查、强制关闭已列出的进程或取消操作的决定。
+enum ExitDecision {
+    /// Scan again after the user closed the programs normally.
+    /// 用户正常退出程序后重新扫描。
+    Retry,
+    /// Terminate the processes specifically shown for approval.
+    /// 强制关闭已明确列出并获准的进程。
+    Force,
+    /// Cancel before changing the installation.
+    /// 在变更安装之前取消。
+    Cancel,
+}
+
 impl Reporter for GuiReporter {
+    /// Waits for verified exit, requesting separate consent before any force stop.
+    /// 等待并验证进程退出，任何强制停止都须单独确认。
+    fn before_change(&self, root: &std::path::Path, _change: Change) -> Result<(), String> {
+        let mut present = crate::processes::scan(root)?;
+        let mut offer_force = false;
+        while !present.is_empty() {
+            let names = present
+                .iter()
+                .map(|process| format!("{} · PID {}", process.program.display(), process.pid))
+                .collect();
+            let (send, receive) = mpsc::channel();
+            self.0
+                .send(Event::WaitForExit(names, offer_force, send))
+                .map_err(|error| error.to_string())?;
+            present = match receive.recv().map_err(|error| error.to_string())? {
+                ExitDecision::Retry => crate::processes::scan(root)?,
+                ExitDecision::Force => crate::processes::force(root, &present)?,
+                ExitDecision::Cancel => return Err(String::from(crate::CANCELLED)),
+            };
+            offer_force = true;
+        }
+        Ok(())
+    }
+
     /// Publishes a new stage to the window.
     /// 向窗口发布新阶段。
     fn stage(&self, stage: Stage) {
@@ -190,11 +240,48 @@ impl Reporter for GuiReporter {
         receive.recv().map_err(|error| error.to_string())
     }
 
-    /// Rejects privileged Unix commands on the Windows-only frontend.
-    /// Windows 专用界面拒绝 Unix 提权命令。
-    fn privileged(&self, _request: &Privileged) -> bool {
-        false
+    /// Uses the Linux desktop authentication agent for the engine's AppArmor requests.
+    /// 通过 Linux 桌面鉴权代理处理安装引擎的 AppArmor 请求。
+    fn privileged(&self, request: &Privileged) -> bool {
+        #[cfg(target_os = "linux")]
+        return graphical_privilege(request);
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = request;
+            false
+        }
     }
+}
+
+/// Runs the supported AppArmor operations with desktop authentication and no terminal agent.
+/// 通过桌面鉴权执行受支持的 AppArmor 操作，关闭终端代理。
+#[cfg(target_os = "linux")]
+fn graphical_privilege(request: &Privileged) -> bool {
+    request.commands.iter().all(|command| {
+        // Pin system executable paths before asking for elevation.
+        // 请求提权前固定系统可执行文件的路径。
+        let Some((program, args)) = command.split_first() else {
+            return false;
+        };
+        let executable = match program.as_str() {
+            "install" => "/usr/bin/install",
+            "apparmor_parser" => "/sbin/apparmor_parser",
+            "rm" => "/usr/bin/rm",
+            _ => return false,
+        };
+        let mut process = if crate::integrate::running_as_root() {
+            std::process::Command::new(executable)
+        } else {
+            let mut process = std::process::Command::new("/usr/bin/pkexec");
+            process.args(["--disable-internal-agent", executable]);
+            process
+        };
+        process
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
 }
 
 /// A pending confirmation with the typed reply its worker expects.
@@ -206,6 +293,9 @@ enum Confirmation {
     /// Removal consent, including separate consent for purging user data.
     /// 卸载同意，包括单独确认清除用户数据。
     Remove(bool, Sender<bool>),
+    /// The process list and an outstanding request to retry or force close.
+    /// 进程列表及待回答的重新检查或强制关闭请求。
+    WaitForExit(Vec<String>, bool, Sender<ExitDecision>),
 }
 
 /// The window state and its one running operation.
@@ -214,9 +304,18 @@ struct Setup {
     /// Localized setup text.
     /// 本地化安装器文案。
     language: Translator,
+    /// The current platform used by the installation engine.
+    /// 安装引擎使用的当前系统平台。
+    platform: Platform,
+    /// The original Unix console executable in the portable installer.
+    /// 便携安装器内嵌的原始 Unix 终端可执行文件。
+    console_image: Option<&'static [u8]>,
     /// The command's prefilled installation options.
     /// 来自命令的预填安装选项。
     options: InstallOptions,
+    /// The original options saved while editing an installed copy.
+    /// 编辑现有安装期间保留的原始选项。
+    before_edit: Option<InstallOptions>,
     /// Editable installation directory.
     /// 可编辑的安装目录。
     directory: String,
@@ -274,6 +373,9 @@ struct Setup {
     /// The last operation's completion text or error.
     /// 最近操作的结果或错误。
     result: Option<Result<Option<Box<Outcome>>, String>>,
+    /// Diagnostics that accompany a successful operation or a folder picker error.
+    /// 随成功操作显示的诊断信息，或目录选择错误。
+    warnings: Vec<String>,
     /// Exit code copied back to the desktop or terminal caller.
     /// 返回给桌面或终端调用方的退出码。
     code: Arc<std::sync::atomic::AtomicI32>,
@@ -317,7 +419,11 @@ fn window_bounds(
 
 /// Opens the Iced window with the parsed command, returning the operation's exit code.
 /// 按已解析命令打开 Iced 窗口，并返回操作退出码。
-pub fn run(command: Command) -> i32 {
+pub fn run(command: Command, console_image: Option<&'static [u8]>) -> i32 {
+    let Some(platform) = Platform::current() else {
+        startup_error("this platform is not supported");
+        return 1;
+    };
     // Preserve the same exit status as the unattended and terminal interfaces.
     // 保留与无人值守及终端界面一致的退出码。
     let code = Arc::new(std::sync::atomic::AtomicI32::new(
@@ -329,7 +435,11 @@ pub fn run(command: Command) -> i32 {
     let pixels = view::brand_pixels();
     // Size and center the window in usable desktop coordinates.
     // 按可用桌面坐标计算窗口尺寸和居中位置。
-    let (size, minimum, position) = window_bounds(crate::windows::setup_work_area());
+    #[cfg(windows)]
+    let work_area = crate::windows::setup_work_area();
+    #[cfg(unix)]
+    let work_area = None;
+    let (size, minimum, position) = window_bounds(work_area);
     // Explorer and the native window show the same application mark.
     // 资源管理器和原生窗口显示同一应用标志。
     let settings = window::Settings {
@@ -351,21 +461,45 @@ pub fn run(command: Command) -> i32 {
         iced::widget::image::Handle::from_rgba(image.width(), image.height(), image.into_raw())
     });
     let result = iced::application(
-        move || Setup::new(command.clone(), Arc::clone(&state_code), brand.clone()),
+        move || {
+            Setup::new(
+                command.clone(),
+                Arc::clone(&state_code),
+                brand.clone(),
+                platform,
+                console_image,
+            )
+        },
         Setup::update,
         Setup::view,
     )
     .title(|setup: &Setup| String::from(setup.text("setup.title")))
     .theme(|_: &Setup| view::theme())
-    .default_font(iced::Font::with_name("Segoe UI"))
+    .default_font(view::BODY_FONT)
     .window(settings)
     .subscription(Setup::subscription)
     .run();
     if let Err(error) = result {
-        crate::windows::setup_error(&error.to_string());
+        startup_error(&error.to_string());
         return 1;
     }
     code.load(Ordering::Relaxed)
+}
+
+/// Reports an error when the graphical window cannot be created.
+/// 无法创建图形窗口时报告错误。
+fn startup_error(error: &str) {
+    #[cfg(windows)]
+    crate::windows::setup_error(error);
+    #[cfg(unix)]
+    {
+        eprintln!("{error}");
+        let _ = rfd::MessageDialog::new()
+            .set_title(label(&Translator::new(&[&SETUP]), "setup.title"))
+            .set_level(rfd::MessageLevel::Error)
+            .set_description(error)
+            .show();
+    }
 }
 
 impl Setup {
@@ -375,6 +509,8 @@ impl Setup {
         command: Command,
         code: Arc<std::sync::atomic::AtomicI32>,
         brand: Option<iced::widget::image::Handle>,
+        platform: Platform,
+        console_image: Option<&'static [u8]>,
     ) -> Self {
         let mut language = Translator::new(&[&SETUP]);
         language.set_locale(vulcan_i18n::system_locale());
@@ -398,7 +534,7 @@ impl Setup {
             ),
             _ => (InstallOptions::default(), None, false),
         };
-        let root = install::resolve_root(options.common.prefix.as_deref(), Platform::WindowsX64);
+        let root = install::resolve_root(options.common.prefix.as_deref(), platform);
         let (directory, result) = match root {
             Ok(path) => (path.display().to_string(), None),
             Err(error) => (String::new(), Some(Err(error))),
@@ -408,7 +544,10 @@ impl Setup {
         let advanced = options.port_range.is_some();
         let mut setup = Self {
             language,
+            platform,
+            console_image,
             options,
+            before_edit: None,
             directory,
             purge,
             initial,
@@ -428,6 +567,7 @@ impl Setup {
             cancel: None,
             confirmation: None,
             result,
+            warnings: Vec::new(),
             code,
         };
         setup.inspect();
@@ -450,8 +590,9 @@ impl Setup {
         }
         let root = PathBuf::from(directory);
         let ownership = crate::root::ownership(&root);
-        self.installed = matches!(ownership, Ok(Ownership::Owned(_) | Ownership::Inno(_)));
-        self.legacy = matches!(ownership, Ok(Ownership::Inno(_)));
+        self.legacy = self.platform.is_windows() && matches!(ownership, Ok(Ownership::Inno(_)));
+        self.installed =
+            self.legacy || matches!(ownership, Ok(Ownership::Owned(_) | Ownership::Legacy));
         self.installed_version = if self.installed {
             match crate::root::current(&vulcan_install_core::install_root::InstallRoot::new(&root))
             {
@@ -499,6 +640,18 @@ impl Setup {
                 // The native dialog is modal to the same HWND as the installer.
                 // 系统对话框对安装器自身的 HWND 保持模态。
                 let directory = PathBuf::from(self.directory.trim());
+                #[cfg(unix)]
+                return Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_directory(directory)
+                            .pick_folder()
+                            .await
+                            .map(|folder| folder.path().to_path_buf())
+                    },
+                    |directory| Message::Browsed(Ok(directory)),
+                );
+                #[cfg(windows)]
                 return window::latest()
                     .and_then(move |id| {
                         // The task can be evaluated more than once, while the dialog owns one path.
@@ -525,7 +678,7 @@ impl Setup {
                 self.directory = directory.display().to_string();
                 self.inspect();
             }
-            Message::Browsed(Err(error)) => crate::windows::setup_error(&error),
+            Message::Browsed(Err(error)) => self.warnings.push(error),
             Message::Browsed(Ok(None)) => {}
             Message::Route(value) => {
                 self.route = value.0;
@@ -545,6 +698,7 @@ impl Setup {
                 self.initial = None;
                 self.purge = false;
             }
+            Message::EditInstallation => self.edit_installation(),
             Message::Answer(yes) => match self.confirmation.take() {
                 Some(Confirmation::Install(_, send)) => {
                     self.returning_to_options = !yes;
@@ -563,8 +717,25 @@ impl Setup {
                     }
                     let _ = send.send(yes);
                 }
+                Some(Confirmation::WaitForExit(_, _, send)) => {
+                    self.returning_to_options = !yes;
+                    let _ = send.send(if yes {
+                        ExitDecision::Retry
+                    } else {
+                        ExitDecision::Cancel
+                    });
+                }
                 None => (),
             },
+            Message::ForceClose => {
+                if matches!(
+                    self.confirmation,
+                    Some(Confirmation::WaitForExit(_, true, _))
+                ) && let Some(Confirmation::WaitForExit(_, _, send)) = self.confirmation.take()
+                {
+                    let _ = send.send(ExitDecision::Force);
+                }
+            }
             Message::Poll => {
                 while let Some(worker) = &self.worker {
                     match worker.try_recv() {
@@ -586,6 +757,9 @@ impl Setup {
             Message::DragWindow => {
                 // Start the native move on the window thread before the pointer is released.
                 // 在指针松开前，由窗口线程启动系统拖动。
+                #[cfg(unix)]
+                return window::latest().and_then(window::drag);
+                #[cfg(windows)]
                 return window::latest().and_then(|id| {
                     window::run(id, |owner| {
                         use window::raw_window_handle::RawWindowHandle;
@@ -616,14 +790,15 @@ impl Setup {
             }
             Message::Home => {
                 self.result = None;
+                self.warnings.clear();
                 self.inspect();
             }
             Message::Launch => {
                 if let Some(Ok(Some(outcome))) = &self.result
                     && outcome.desktop.is_some()
                 {
-                    if let Err(error) = crate::inno::relaunch(&outcome.directory) {
-                        crate::windows::setup_error(&error);
+                    if let Err(error) = crate::launcher::launch_desktop(&outcome.directory) {
+                        self.warnings.push(error);
                     } else {
                         return window::latest().and_then(window::close);
                     }
@@ -641,7 +816,12 @@ impl Setup {
             OptionField::Menu => self.options.menu = Some(value),
             OptionField::Shortcut => self.options.desktop_shortcut = Some(value),
             OptionField::Path => self.options.path = Some(value),
-            OptionField::Service => self.options.service = Some(value),
+            OptionField::Service => {
+                self.options.service = Some(value);
+                if !value {
+                    self.options.linger = Some(false);
+                }
+            }
             OptionField::Purge => self.purge = value,
             OptionField::Preview => {
                 self.options.channel = Some(if value {
@@ -663,6 +843,37 @@ impl Setup {
         }
     }
 
+    /// Loads the actual recorded choices into the editor, or restores the management view.
+    /// 把实际记录的选项载入编辑器，或恢复管理界面。
+    fn edit_installation(&mut self) {
+        if let Some(original) = self.before_edit.take() {
+            self.options = original;
+            self.advanced = false;
+            self.inspect();
+            return;
+        }
+        let root = PathBuf::from(self.directory.trim());
+        let choices = crate::root::installable(&root)
+            .and_then(|owner| install::recorded_choices(&root, &owner))
+            .and_then(|state| {
+                install::Choices::resolve(&self.options, state.as_ref(), self.platform, true)
+            });
+        match choices {
+            Ok(choices) => {
+                self.before_edit = Some(self.options.clone());
+                self.options.gui = Some(choices.gui);
+                self.options.menu = Some(choices.menu);
+                self.options.desktop_shortcut = Some(choices.desktop_shortcut);
+                self.options.path = Some(choices.path);
+                self.options.service = Some(choices.service);
+                self.options.linger = Some(choices.linger);
+                self.options.channel = Some(choices.channel);
+                self.options.with = choices.with;
+            }
+            Err(error) => self.warnings.push(error),
+        }
+    }
+
     /// Starts the shared operation on a worker so rendering and confirmations stay responsive.
     /// 在后台线程启动共享操作，使渲染与确认保持响应。
     fn start(&mut self, operation: Operation) {
@@ -675,49 +886,34 @@ impl Setup {
         // 校验端口范围前，采用与终端向导一致的空白字符处理方式。
         options.port_range = options.port_range.map(|value| value.trim().to_owned());
         let purge = self.purge;
+        let console_image = self.console_image;
         let (sender, receiver) = mpsc::channel();
         self.worker = Some(receiver);
         self.stage = None;
         self.progress = None;
         self.cancel = None;
         self.result = None;
+        self.warnings.clear();
         self.operation = Some(operation);
         self.returning_to_options = false;
         self.approved = false;
         self.kept_data = true;
-        std::thread::spawn(move || {
-            let reporter = GuiReporter(sender.clone());
-            let result = if operation == Operation::Uninstall {
-                let options = UninstallOptions {
-                    common: options.common,
-                    purge,
-                };
-                uninstall::remove(&options, |approval| {
-                    let (answer, receive) = mpsc::channel();
-                    sender
-                        .send(Event::Remove(
-                            approval == uninstall::Confirmation::Purge,
-                            answer,
-                        ))
-                        .map_err(|error| error.to_string())?;
-                    receive.recv().map_err(|error| error.to_string())
-                })
-                .map(|()| None)
-            } else {
-                match prepare_gui(&mut options, operation) {
-                    Ok(selfupdate::Outcome::Continue) => {
-                        install::graphical_run(&options, operation == Operation::Update, &reporter)
-                            .map(|outcome| Some(Box::new(outcome)))
-                    }
-                    Ok(selfupdate::Outcome::Finished(code)) => {
-                        let _ = sender.send(Event::Finished(Ok(None), Some(code)));
-                        return;
-                    }
-                    Err(error) => Err(error),
-                }
-            };
-            let _ = sender.send(Event::Finished(result, None));
-        });
+        // Keep the sender alive until the operation has returned or unwound.
+        // 在操作正常返回或异常展开之前保留发送端。
+        let worker = std::thread::Builder::new()
+            .name(String::from("vulcan-setup"))
+            .spawn(move || {
+                let completion = worker_completion(operation, || {
+                    run_worker(operation, options, purge, console_image, &sender)
+                });
+                let _ = sender.send(completion);
+            });
+        if let Err(error) = worker {
+            self.receive(Event::Finished(
+                Err(format!("cannot start the installation worker: {error}")),
+                None,
+            ));
+        }
     }
 
     /// Updates window fields from a report and returns whether a restarted child finished.
@@ -733,8 +929,14 @@ impl Setup {
             Event::Remove(purge, send) => {
                 self.confirmation = Some(Confirmation::Remove(purge, send))
             }
+            Event::WaitForExit(names, offer_force, send) => {
+                self.confirmation = Some(Confirmation::WaitForExit(names, offer_force, send))
+            }
+            Event::Warnings(warnings) => self.warnings.extend(warnings),
             Event::Finished(result, code) => {
                 self.worker = None;
+                self.confirmation = None;
+                self.cancel = None;
                 self.code.store(
                     code.unwrap_or_else(|| match &result {
                         Ok(_) => 0,
@@ -779,8 +981,87 @@ impl Setup {
     }
 }
 
+/// Returns the completion of `work` or an error with the operation and panic message.
+/// 返回 `work` 的完成事件，或包含操作类型和异常消息的错误。
+fn worker_completion(operation: Operation, work: impl FnOnce() -> Event) -> Event {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        Ok(event) => event,
+        Err(panic) => {
+            // String and str are the standard message types produced by Rust's panic macros.
+            // String 和 str 是 Rust 异常宏产生的标准消息类型。
+            let message = match panic.downcast::<String>() {
+                Ok(message) => *message,
+                Err(panic) => match panic.downcast::<&'static str>() {
+                    Ok(message) => String::from(*message),
+                    Err(_) => String::from("no panic message available"),
+                },
+            };
+            Event::Finished(
+                Err(format!("the {operation:?} worker panicked: {message}")),
+                None,
+            )
+        }
+    }
+}
+
+/// Runs `operation` with `options` and the optional bundled `console_image`.
+/// 使用 `options` 和可选的内嵌终端镜像 `console_image` 执行 `operation`。
+/// Relays prompts via `sender`, applies `purge` during removal, and returns the completion event.
+/// 通过 `sender` 转发交互请求，卸载时应用 `purge`，并返回完成事件。
+fn run_worker(
+    operation: Operation,
+    #[cfg_attr(unix, allow(unused_mut))] mut options: InstallOptions,
+    purge: bool,
+    console_image: Option<&'static [u8]>,
+    sender: &Sender<Event>,
+) -> Event {
+    let reporter = GuiReporter(sender.clone());
+    let result = if operation == Operation::Uninstall {
+        let options = UninstallOptions {
+            common: options.common,
+            purge,
+        };
+        uninstall::remove(&options, &reporter, |approval| {
+            let (answer, receive) = mpsc::channel();
+            sender
+                .send(Event::Remove(
+                    approval == uninstall::Confirmation::Purge,
+                    answer,
+                ))
+                .map_err(|error| error.to_string())?;
+            receive.recv().map_err(|error| error.to_string())
+        })
+        .map(|warnings| {
+            let _ = sender.send(Event::Warnings(warnings));
+            None
+        })
+    } else {
+        // The Unix portable launcher is updated by replacing its platform package.
+        // Unix 便携启动器通过替换对应平台包进行更新。
+        #[cfg(unix)]
+        let preparation: Result<selfupdate::Outcome, String> = Ok(selfupdate::Outcome::Continue);
+        #[cfg(windows)]
+        let preparation = prepare_gui(&mut options, operation);
+        match preparation {
+            Ok(selfupdate::Outcome::Continue) => install::graphical_run(
+                &options,
+                operation == Operation::Update,
+                &reporter,
+                console_image,
+            )
+            .map(|outcome| Some(Box::new(outcome))),
+            Ok(selfupdate::Outcome::Finished(code)) => {
+                return Event::Finished(Ok(None), Some(code));
+            }
+            Err(error) => Err(error),
+        }
+    };
+    Event::Finished(result, None)
+}
+
 /// Uses the shared self-update path and ensures a replacement process reopens the GUI.
 /// 使用共享自更新流程，并确保替换进程重新打开 GUI。
+#[cfg(windows)]
 fn prepare_gui(
     options: &mut InstallOptions,
     operation: Operation,
@@ -830,6 +1111,7 @@ fn prepare_gui(
         route,
         options.common.self_update,
         &arguments,
+        selfupdate::Surface::Graphical,
     )
 }
 
@@ -837,6 +1119,132 @@ fn prepare_gui(
 mod window_tests {
     use super::window_bounds;
     use iced::{Point, Size, window::Position};
+
+    /// Verifies a worker panic reaches the window through an error event with its cause.
+    /// 验证线程异常通过带有具体原因的错误事件到达窗口。
+    #[test]
+    fn worker_panic_produces_an_error_event() {
+        use super::{Event, Operation, worker_completion};
+
+        let event = worker_completion(Operation::Install, || panic!("test worker failure"));
+        assert!(matches!(event, Event::Finished(Err(error), None)
+            if error.contains("test worker failure")));
+    }
+
+    /// Runs the reported preview and China combination to the signed review.
+    /// 用报告中的预览通道和中国大陆节点组合运行至签名审阅。
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires the live China release feed"]
+    fn china_preview_reaches_review() {
+        use super::{Command, Event, Operation, Setup};
+        use std::sync::{Arc, atomic::AtomicI32};
+        use std::time::Duration;
+        use vulcan_install_core::names::Platform;
+
+        let fixture = tempfile::tempdir().expect("isolated reinstall directory");
+        let prefix = format!("--prefix={}", fixture.path().join("reinstall").display());
+        let arguments = [
+            "install",
+            "--ui=gui",
+            "--channel=preview",
+            "--route=china",
+            "--with=browser",
+            "--gui",
+            "--menu",
+            "--desktop-shortcut",
+            "--path",
+            "--no-service",
+            &prefix,
+        ]
+        .map(String::from);
+        let command = crate::args::parse(&arguments).expect("reported options");
+        assert!(matches!(command, Command::Install(_)));
+        let mut setup = Setup::new(
+            command,
+            Arc::new(AtomicI32::new(0)),
+            None,
+            Platform::WindowsX64,
+            None,
+        );
+        setup.start(Operation::Install);
+        let worker = setup.worker.expect("started installer");
+        loop {
+            match worker
+                .recv_timeout(Duration::from_secs(30))
+                .expect("installer event")
+            {
+                Event::Review(review, reply) => {
+                    eprintln!("Signed review for {} via the China route", review.version);
+                    reply
+                        .send(super::Decision::Cancel)
+                        .expect("decline the reviewed install");
+                    break;
+                }
+                Event::Finished(Err(error), _) => panic!("installer failed before review: {error}"),
+                _ => (),
+            }
+        }
+        assert!(matches!(
+            worker.recv_timeout(Duration::from_secs(5)).expect("cancelled worker"),
+            Event::Finished(Err(error), _) if error == crate::CANCELLED
+        ));
+    }
+
+    /// Drives the production close confirmation with an actively running, disposable old install.
+    /// 使用实际运行且可丢弃的旧版安装验证生产关闭确认流程。
+    #[test]
+    #[ignore = "requires a running legacy process in an isolated VULCAN_SETUP_RUNNING_TEST_ROOT"]
+    fn running_release_requires_a_second_confirmation() {
+        use super::{Change, Event, ExitDecision, GuiReporter, Reporter, mpsc};
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let root = PathBuf::from(
+            std::env::var_os("VULCAN_SETUP_RUNNING_TEST_ROOT").expect("isolated installation root"),
+        );
+        assert!(
+            !crate::processes::scan(&root)
+                .expect("scan fixture")
+                .is_empty()
+        );
+        let (publish, events) = mpsc::channel();
+        let running_root = root.clone();
+        let worker = std::thread::spawn(move || {
+            GuiReporter(publish).before_change(&running_root, Change::Apply)
+        });
+        let Event::WaitForExit(first, false, answer) = events
+            .recv_timeout(Duration::from_secs(15))
+            .expect("manual close prompt")
+        else {
+            panic!("the first prompt should request normal exit");
+        };
+        answer.send(ExitDecision::Retry).expect("request a recheck");
+        let Event::WaitForExit(again, true, answer) = events
+            .recv_timeout(Duration::from_secs(15))
+            .expect("separate force prompt")
+        else {
+            panic!("running programs should require force approval");
+        };
+        assert_eq!(first, again);
+        assert!(
+            !crate::processes::scan(&root)
+                .expect("scan before approval")
+                .is_empty()
+        );
+        answer
+            .send(ExitDecision::Force)
+            .expect("approve force only for the test");
+        worker
+            .join()
+            .expect("worker exits")
+            .expect("verified closure");
+        assert!(
+            crate::processes::scan(&root)
+                .expect("scan after approval")
+                .is_empty()
+        );
+    }
 
     /// Checks the compact defaults and reduced work areas for scaled 1366×768 displays.
     /// 验证紧凑默认尺寸以及 1366×768 屏幕缩放后的较小工作区。

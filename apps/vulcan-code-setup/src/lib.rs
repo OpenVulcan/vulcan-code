@@ -9,7 +9,7 @@ pub mod args;
 mod desktop_package;
 #[cfg(all(windows, feature = "desktop-package"))]
 pub use desktop_package::run as desktop_package;
-#[cfg(windows)]
+#[cfg(any(windows, all(unix, feature = "desktop-package")))]
 mod gui;
 #[cfg(windows)]
 mod inno;
@@ -106,11 +106,11 @@ pub(crate) fn run_engine(arguments: &[String]) -> i32 {
             || (arguments.is_empty() && windows::standalone_console())
         {
             windows::release_standalone_console();
-            return gui::run(command);
+            return gui::run(command, None);
         }
         #[cfg(not(windows))]
         if common.ui == Some(args::Ui::Gui) {
-            eprintln!("vulcan-code-setup: the graphical installer is available on Windows");
+            eprintln!("vulcan-code-setup: open the graphical setup package to use --ui=gui");
             return 2;
         }
     }
@@ -156,6 +156,30 @@ pub(crate) fn run_engine(arguments: &[String]) -> i32 {
     }
 }
 
+/// Opens the Unix graphical package with its bundled console installer and returns its status.
+/// 使用随包命令行安装器打开 Unix 图形安装包并返回退出状态。
+#[cfg(all(unix, feature = "desktop-package"))]
+pub fn unix_desktop_package(image: &'static [u8]) -> i32 {
+    // The executable accepts installation options and explicit update and uninstall commands.
+    // 此可执行文件接受安装选项以及显式的更新和卸载命令。
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    // Keep informational commands available without opening the window.
+    // 信息命令无需打开窗口。
+    let command = match args::parse(&arguments) {
+        Ok(command @ (Command::Install(_) | Command::Update(_) | Command::Uninstall(_))) => command,
+        Ok(_) => return run(&arguments),
+        Err(error) => {
+            eprintln!("vulcan-code-setup: {error}");
+            return 2;
+        }
+    };
+    if image.is_empty() {
+        eprintln!("vulcan-code-setup: the console installer was not embedded");
+        return 1;
+    }
+    gui::run(command, Some(image))
+}
+
 /// Selects a route for `common` before HTTPS, then checks for a newer installer on `channel`.
 /// 在 HTTPS 请求前为 `common` 选定线路，再按 `channel` 检查新版安装器。
 fn prepare(
@@ -186,6 +210,7 @@ fn prepare(
         route,
         common.self_update,
         &next_arguments,
+        selfupdate::Surface::Terminal,
     )
 }
 

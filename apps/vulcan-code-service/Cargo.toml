@@ -35,7 +35,7 @@ vulcan-service-runtime.workspace = true
 
 [features]
 default = ["desktop-tray"]
-desktop-tray = ["dep:tao", "dep:tray-icon", "dep:png", "dep:vulcan-i18n", "dep:winresource", "dep:notify-rust", "dep:windows"]
+desktop-tray = ["dep:tao", "dep:tray-icon", "dep:png", "dep:vulcan-i18n", "dep:winresource", "dep:notify-rust", "dep:windows", "dep:tempfile"]
 test-support = ["vulcan-runtime-assets/test-support", "vulcan-service-kernel/test-support"]
 
 [target.'cfg(windows)'.dependencies]
@@ -43,6 +43,9 @@ windows = { workspace = true, optional = true, features = ["Win32_Foundation", "
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
