@@ -162,6 +162,12 @@ impl Redactor {
         &self.rules_version
     }
 
+    /// Checks whether the supplied contact text includes a registered secret.
+    /// 检查用户填写的联系方式是否包含已登记的秘密。
+    pub(crate) fn contains_secret(&self, text: &str) -> bool {
+        self.secrets.iter().any(|(value, _)| text.contains(value))
+    }
+
     /// Filters one text and adds what it replaced to `hits`.
     /// 过滤一段文本，并把替换内容计入 `hits`。
     ///

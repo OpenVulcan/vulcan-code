@@ -550,6 +550,17 @@ fn compose_rows(rows: &mut Vec<Row>, app: &App) {
         form.allow_contact,
         field_edit(FeedbackField::AllowContact),
     ));
+    if form.allow_contact {
+        rows.push(
+            text(
+                tr!("feedback.contactDetails"),
+                form.contact_details.clone(),
+                field_edit(FeedbackField::ContactDetails),
+            )
+            .detail(tr!("feedback.contactPlaceholder")),
+        );
+    }
+    rows.push(note(tr!("feedback.ticketReplies"), Tone::Muted));
     let sending = state.sending.is_some();
     rows.push(
         item("feedback-compose", tr!("feedback.menu"), "").actions(vec![

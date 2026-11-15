@@ -41,6 +41,9 @@ export interface FeedbackDraft {
   title: string;
   body: string;
   allowContact: boolean;
+  /** Off-platform contact supplied for this ticket. */
+  /** 为本工单填写的站外联系方式。 */
+  contactDetails?: string;
   includeClientInfo: boolean;
   includeLog: boolean;
   error?: FeedbackErrorFacts | null;

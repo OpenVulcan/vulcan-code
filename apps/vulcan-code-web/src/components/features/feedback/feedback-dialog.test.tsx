@@ -105,6 +105,33 @@ it("previews before sending and sends the previewed digest", async () => {
   expect(center.runtime.current?.refresh).toHaveBeenCalled();
 });
 
+// An opt-in requires typed contact and includes it in the request for preview.
+// 勾选后需要手动填写联系方式，并将其写入预览请求。
+it("requires contact details only after the user opts in", async () => {
+  await render({ source: "manual", title: "Title", body: "Body" });
+  expect(document.getElementById("feedback-contact-details")).toBeNull();
+  expect(button("feedback.preview").disabled).toBe(false);
+
+  // toggle is the external-contact checkbox inside its labeled control.
+  // toggle 是带标签控件内的站外联系复选框。
+  const toggle = Array.from(document.querySelectorAll<HTMLLabelElement>("label"))
+    .find((label) => label.textContent?.includes("feedback.allowContact"))
+    ?.querySelector<HTMLButtonElement>("[role=checkbox]");
+  expect(toggle).toBeDefined();
+  await act(async () => toggle?.click());
+  expect(button("feedback.preview").disabled).toBe(true);
+
+  // contact is the address field shown after the author opts in.
+  // contact 是提交者勾选后显示的联系方式字段。
+  const contact = document.querySelector<HTMLInputElement>("#feedback-contact-details");
+  expect(contact).not.toBeNull();
+  await type(contact!, "  help@example.com  ");
+  await act(async () => button("feedback.preview").click());
+  expect(prepareFeedback).toHaveBeenLastCalledWith(expect.objectContaining({
+    allowContact: true, contactDetails: "help@example.com",
+  }));
+});
+
 // Going back to edit discards the preview; the next preview reuses the draft id as the idempotency key.
 // 返回编辑会丢弃预览；下一次预览复用草稿编号作为幂等键。
 it("discards the preview on edit and reuses the draft id", async () => {

@@ -25,13 +25,14 @@ const DEMO_NOW: &str = "2026-11-07T00:00:00Z";
 
 /// Fields a `FeedbackDraft` may carry; the service rejects any other.
 /// `FeedbackDraft` 可携带的字段；服务拒绝其他字段。
-const DRAFT_FIELDS: [&str; 9] = [
+const DRAFT_FIELDS: [&str; 10] = [
     "draftId",
     "kind",
     "source",
     "title",
     "body",
     "allowContact",
+    "contactDetails",
     "includeClientInfo",
     "includeLog",
     "error",
@@ -242,7 +243,7 @@ impl FakeService {
         } else {
             Vec::new()
         };
-        let request = json!({
+        let mut request = json!({
             "kind": kind,
             "source": source,
             "title": filter(&title),
@@ -251,6 +252,9 @@ impl FakeService {
             "client": include_client_info.then(|| json!({ "version": "demo", "os": "demo-os" })),
             "log": include_log.then(|| json!(log)),
         });
+        if allow_contact && let Some(contact) = draft["contactDetails"].as_str() {
+            request["contact_details"] = json!(contact);
+        }
         let payload = serde_json::to_string_pretty(&request).map_err(|error| error.to_string())?;
         let digest = digest(&payload);
         self.inbox["drafts"][&draft_id] = json!({ "digest": digest, "request": request });

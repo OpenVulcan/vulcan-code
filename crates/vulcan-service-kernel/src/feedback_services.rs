@@ -85,6 +85,10 @@ pub(crate) struct FeedbackDraftInput {
     title: String,
     body: String,
     allow_contact: bool,
+    /// External contact the author explicitly shared for this ticket.
+    /// 提交者为此工单明确共享的站外联系方式。
+    #[serde(default)]
+    contact_details: Option<String>,
     include_client_info: bool,
     include_log: bool,
     #[serde(default)]
@@ -387,6 +391,7 @@ pub(crate) async fn service_prepare_feedback(
         title: draft.title,
         body: draft.body,
         allow_contact: draft.allow_contact,
+        contact_details: draft.contact_details,
         client,
         error,
         log_lines: None,

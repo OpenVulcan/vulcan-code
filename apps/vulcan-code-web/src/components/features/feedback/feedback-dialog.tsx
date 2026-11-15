@@ -27,6 +27,9 @@ interface FeedbackForm {
   includeClientInfo: boolean;
   includeLog: boolean;
   allowContact: boolean;
+  // contactDetails holds only what the author typed for this ticket.
+  // contactDetails 仅保存提交者为此工单手动填写的内容。
+  contactDetails: string;
   // Whether the error card's facts stay attached; only offered when the window was opened from one.
   // 错误卡事实是否保持附带；仅在从错误卡打开时提供。
   includeError: boolean;
@@ -61,6 +64,7 @@ function initialForm(seed: FeedbackSeed, errorTitle: string): FeedbackForm {
     includeClientInfo: true,
     includeLog: true,
     allowContact: false,
+    contactDetails: "",
     includeError: Boolean(seed.systemError),
   };
 }
@@ -75,6 +79,7 @@ export function draftOf(seed: FeedbackSeed, form: FeedbackForm, draftId: string 
     title: form.title,
     body: form.body,
     allowContact: form.allowContact,
+    ...(form.allowContact && { contactDetails: form.contactDetails.trim() }),
     includeClientInfo: form.includeClientInfo,
     includeLog: form.includeLog,
     error: form.includeError && seed.systemError ? feedbackFactsOf(seed.systemError) : null,
@@ -101,7 +106,8 @@ export default function FeedbackDialog() {
   const [selfFix, setSelfFix] = React.useState(false);
   if (!center || !seed) return null;
   const signedIn = Boolean(account && signedInAccount(account));
-  const ready = form.title.trim().length > 0 && form.body.trim().length > 0;
+  const ready = form.title.trim().length > 0 && form.body.trim().length > 0 &&
+    (!form.allowContact || form.contactDetails.trim().length > 0);
 
   const edit = (patch: Partial<FeedbackForm>) => setForm((current) => ({ ...current, ...patch }));
   const close = () => { if (!busy) center.closeFeedback(); };
@@ -207,6 +213,14 @@ export default function FeedbackDialog() {
                 <Checkbox checked={form.allowContact} disabled={busy} onCheckedChange={(checked) => edit({ allowContact: checked === true })} />
                 <span>{t("feedback.allowContact")}</span>
               </label>
+              {form.allowContact && (
+                <Field>
+                  <FieldLabel htmlFor="feedback-contact-details">{t("feedback.contactDetails")}</FieldLabel>
+                  <Input id="feedback-contact-details" value={form.contactDetails} disabled={busy}
+                    placeholder={t("feedback.contactPlaceholder")} onChange={(event) => edit({ contactDetails: event.target.value })} />
+                </Field>
+              )}
+              <p className="vk-feedback-privacy">{t("feedback.ticketReplies")}</p>
               <p className="vk-feedback-privacy"><ShieldCheck aria-hidden="true" />{t("feedback.privacy")}</p>
             </>
           )}

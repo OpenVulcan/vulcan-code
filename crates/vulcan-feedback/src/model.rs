@@ -152,9 +152,13 @@ pub struct FeedbackCreateRequest {
     /// Filtered description.
     /// 过滤后的描述。
     pub body: String,
-    /// Whether maintainers may reply through account messages.
-    /// 是否允许维护者通过账号消息回复。
+    /// Whether the author permits off-platform contact for this ticket.
+    /// 提交者是否允许为本工单进行站外联系。
     pub allow_contact: bool,
+    /// Address or handle explicitly supplied and reviewed by the author.
+    /// 提交者明确填写并预览的地址或账号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_details: Option<String>,
     /// Client environment; absent when the user unticks it.
     /// 客户端环境；用户取消勾选时缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]

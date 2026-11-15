@@ -137,10 +137,16 @@ fn send_uses_the_previewed_digest_and_edits_drop_the_preview() {
 
     // The next preview reuses the issued draft id and carries the edited content.
     // 下一次预览复用已签发的草稿编号，并携带编辑后的内容。
+    edit(
+        &mut app,
+        FeedbackField::ContactDetails,
+        SettingValue::Text("QQ 12345".into()),
+    );
     perform(&mut app, UiAction::Feedback(FeedbackAction::Preview));
     let second = sent(&commands).expect("a second prepare call");
     assert_eq!(second.param("/draft/draftId"), "draft-1");
     assert_eq!(second.param("/draft/allowContact"), true);
+    assert_eq!(second.param("/draft/contactDetails"), "QQ 12345");
     answer_preview(&mut app, second, "unused", "digest-2");
     perform(&mut app, UiAction::Feedback(FeedbackAction::Send));
     assert_eq!(

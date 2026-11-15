@@ -2,9 +2,10 @@
 //! 把用户草稿转换为其预览并在之后发送的精确请求字节。
 
 use crate::limits::{
-    BODY_MAX_CHARS, ERROR_MESSAGE_MAX_CHARS, ERROR_REQUEST_ID_MAX_CHARS, LOG_EXCERPT_MAX_BYTES,
-    LOG_EXCERPT_MAX_LINES, REDACTION_HIT_MAX_COUNT, REDACTION_HITS_MAX_CATEGORIES,
-    REDACTION_RULES_VERSION_MAX_CHARS, REQUEST_MAX_BYTES, SHORT_TEXT_MAX_CHARS, TITLE_MAX_CHARS,
+    BODY_MAX_CHARS, CONTACT_MAX_CHARS, ERROR_MESSAGE_MAX_CHARS, ERROR_REQUEST_ID_MAX_CHARS,
+    LOG_EXCERPT_MAX_BYTES, LOG_EXCERPT_MAX_LINES, REDACTION_HIT_MAX_COUNT,
+    REDACTION_HITS_MAX_CATEGORIES, REDACTION_RULES_VERSION_MAX_CHARS, REQUEST_MAX_BYTES,
+    SHORT_TEXT_MAX_CHARS, TITLE_MAX_CHARS,
 };
 use crate::model::{
     FeedbackAttachments, FeedbackClientInfo, FeedbackCreateRequest, FeedbackErrorAttachment,
@@ -33,9 +34,12 @@ pub struct FeedbackDraft {
     /// Description as typed.
     /// 用户输入的描述。
     pub body: String,
-    /// Whether maintainers may reply.
-    /// 是否允许维护者回复。
+    /// Whether maintainers can use the contact supplied for this ticket.
+    /// 维护者能否使用本工单提供的站外联系方式。
     pub allow_contact: bool,
+    /// Contact entered and reviewed by the author.
+    /// 提交者填写并预览的联系方式。
+    pub contact_details: Option<String>,
     /// Environment, when ticked.
     /// 环境信息（勾选时）。
     pub client: Option<FeedbackClientInfo>,
@@ -121,6 +125,25 @@ pub fn prepare_feedback(
         }
     }
 
+    // The author intentionally shares this field, so retain the address or handle for the preview.
+    // 提交者明确选择分享此字段，因此在预览中保留地址或账号。
+    let contact_details =
+        if let (true, Some(contact)) = (draft.allow_contact, draft.contact_details) {
+            let contact = contact.trim();
+            if contact.is_empty()
+                || contact.chars().count() > CONTACT_MAX_CHARS
+                || contact.chars().any(char::is_control)
+                || redactor.contains_secret(contact)
+            {
+                return Err(FeedbackError::new(
+                    FeedbackErrorCode::InvalidField,
+                    "contact_details",
+                ));
+            }
+            Some(contact.to_owned())
+        } else {
+            None
+        };
     let mut hits = RedactionHits::new();
     let title = truncate_chars(&redactor.redact(title, &mut hits)?, TITLE_MAX_CHARS);
     let body = truncate_chars(&redactor.redact(body, &mut hits)?, BODY_MAX_CHARS);
@@ -139,6 +162,7 @@ pub fn prepare_feedback(
         title,
         body,
         allow_contact: draft.allow_contact,
+        contact_details,
         client: draft.client,
         attachments: FeedbackAttachments {
             source: draft.source,
@@ -318,6 +342,7 @@ mod tests {
             title: String::from("  Retry loop  "),
             body: String::from("key s3cr3t-value leaked"),
             allow_contact: true,
+            contact_details: None,
             client: None,
             error: Some(FeedbackErrorAttachment {
                 category: String::from("rate_limited"),
@@ -329,6 +354,45 @@ mod tests {
                 "{\"level\":\"ERROR\",\"k\":\"s3cr3t-value\"}",
             )]),
         }
+    }
+
+    /// Ensures voluntary contact appears in the reviewed payload and registered secrets are rejected.
+    /// 验证自愿填写的联系方式进入预览请求，已登记的密钥被拒绝。
+    #[test]
+    fn preparation_requires_consent_to_share_contact() {
+        // contact_draft carries a voluntarily supplied test address.
+        // contact_draft 携带提交者自愿填写的测试邮箱。
+        let mut contact_draft = draft();
+        contact_draft.contact_details = Some("  help@example.com  ".to_owned());
+        // shared is the exact payload the author can review and submit.
+        // shared 是提交者可以预览并发送的精确请求。
+        let shared = prepare_feedback(contact_draft.clone(), &redactor()).unwrap();
+        assert_eq!(
+            shared.request.contact_details.as_deref(),
+            Some("help@example.com")
+        );
+        assert!(
+            String::from_utf8(shared.encoded)
+                .unwrap()
+                .contains("help@example.com")
+        );
+        contact_draft.allow_contact = false;
+        // withheld is the same draft with the external contact option turned off.
+        // withheld 是关闭站外联系选项后的同一草稿。
+        let withheld = prepare_feedback(contact_draft.clone(), &redactor()).unwrap();
+        assert!(withheld.request.contact_details.is_none());
+        assert!(
+            !String::from_utf8(withheld.encoded)
+                .unwrap()
+                .contains("contact_details")
+        );
+
+        contact_draft.allow_contact = true;
+        contact_draft.contact_details = Some("s3cr3t-value".to_owned());
+        // failure keeps the secret out of the preview.
+        // failure 阻止密钥进入预览。
+        let failure = prepare_feedback(contact_draft, &redactor()).unwrap_err();
+        assert_eq!(failure.code(), FeedbackErrorCode::InvalidField);
     }
 
     #[test]

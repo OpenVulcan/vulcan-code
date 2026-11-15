@@ -11,6 +11,10 @@
 /// 去除首尾空白后标题的最大字符数。
 pub const TITLE_MAX_CHARS: usize = 120;
 
+/// Maximum length of an external contact in Unicode code points.
+/// 站外联系方式的最大 Unicode 码点数。
+pub const CONTACT_MAX_CHARS: usize = 256;
+
 /// Maximum characters of the description.
 /// 描述的最大字符数。
 pub const BODY_MAX_CHARS: usize = 8_000;

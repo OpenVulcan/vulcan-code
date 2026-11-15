@@ -31,6 +31,9 @@ pub enum FeedbackField {
     IncludeLog,
     IncludeClientInfo,
     AllowContact,
+    /// Address or handle the author wants to share.
+    /// 提交者要共享的地址或账号。
+    ContactDetails,
 }
 
 /// Feedback page actions that need the compose state or the open report.
@@ -72,6 +75,9 @@ pub struct FeedbackForm {
     pub include_log: bool,
     pub include_client_info: bool,
     pub allow_contact: bool,
+    /// External contact entered for this ticket.
+    /// 为本工单填写的站外联系方式。
+    pub contact_details: String,
 }
 
 impl Default for FeedbackForm {
@@ -83,15 +89,18 @@ impl Default for FeedbackForm {
             include_log: true,
             include_client_info: true,
             allow_contact: false,
+            contact_details: String::new(),
         }
     }
 }
 
 impl FeedbackForm {
-    /// Whether the draft can be previewed: a title and a body are both required.
-    /// 草稿是否可预览：标题与正文均为必填。
+    /// Whether the draft can be previewed with a title, a body and contact details if the author opts in.
+    /// 草稿是否可预览：须填写标题和正文，勾选站外联系后还须填写联系方式。
     pub fn ready(&self) -> bool {
-        !self.title.trim().is_empty() && !self.body.trim().is_empty()
+        !self.title.trim().is_empty()
+            && !self.body.trim().is_empty()
+            && (!self.allow_contact || !self.contact_details.trim().is_empty())
     }
 }
 
@@ -126,6 +135,7 @@ pub fn draft(state: &FeedbackState) -> Value {
         "title": form.title,
         "body": form.body,
         "allowContact": form.allow_contact,
+        "contactDetails": form.allow_contact.then(|| form.contact_details.trim()),
         "includeClientInfo": form.include_client_info,
         "includeLog": form.include_log,
         "error": null,
@@ -169,6 +179,7 @@ pub fn edit(app: &mut App, field: FeedbackField, value: &SettingValue) {
         FeedbackField::IncludeLog => form.include_log = value.as_bool(),
         FeedbackField::IncludeClientInfo => form.include_client_info = value.as_bool(),
         FeedbackField::AllowContact => form.allow_contact = value.as_bool(),
+        FeedbackField::ContactDetails => form.contact_details = value.as_str().to_string(),
     }
     for slot in [Slot::FeedbackPreview, Slot::FeedbackReceipt] {
         app.slots.clear(slot);
