@@ -6822,6 +6822,8 @@
   "conversation.contextInjection.category.answer": "답변 모드",
   "conversation.contextInjection.category.guidance": "호스트 지침",
   "conversation.contextInjection.category.base": "기본 지시",
+  "conversation.contextInjection.category.projectDirectory": "작업 디렉터리",
+  "conversation.contextInjection.projectDirectoryPaths": "이전 디렉터리: {previousDirectory}\n새 디렉터리: {workingDirectory}",
   "conversation.contextInjection.category.injection": "추가 컨텍스트",
   "conversation.contextInjection.category.memoryExpiration": "기억 만료 알림",
   "conversation.contextInjection.category.other": "기타",

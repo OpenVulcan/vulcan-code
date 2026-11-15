@@ -6822,6 +6822,8 @@
   "conversation.contextInjection.category.answer": "answer mode",
   "conversation.contextInjection.category.guidance": "host guidance",
   "conversation.contextInjection.category.base": "base instructions",
+  "conversation.contextInjection.category.projectDirectory": "working directory",
+  "conversation.contextInjection.projectDirectoryPaths": "Previous directory: {previousDirectory}\nNew directory: {workingDirectory}",
   "conversation.contextInjection.category.injection": "added context",
   "conversation.contextInjection.category.memoryExpiration": "Memory expiration notice",
   "conversation.contextInjection.category.other": "other",

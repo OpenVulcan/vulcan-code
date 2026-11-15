@@ -6822,6 +6822,8 @@
   "conversation.contextInjection.category.answer": "режим ответа",
   "conversation.contextInjection.category.guidance": "указания хоста",
   "conversation.contextInjection.category.base": "базовые инструкции",
+  "conversation.contextInjection.category.projectDirectory": "рабочий каталог",
+  "conversation.contextInjection.projectDirectoryPaths": "Прежний каталог: {previousDirectory}\nНовый каталог: {workingDirectory}",
   "conversation.contextInjection.category.injection": "добавленный контекст",
   "conversation.contextInjection.category.memoryExpiration": "Уведомление об истечении срока памяти",
   "conversation.contextInjection.category.other": "другое",

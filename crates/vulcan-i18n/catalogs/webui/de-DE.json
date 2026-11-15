@@ -6822,6 +6822,8 @@
   "conversation.contextInjection.category.answer": "Antwortmodus",
   "conversation.contextInjection.category.guidance": "Host-Leitfaden",
   "conversation.contextInjection.category.base": "Basisanweisungen",
+  "conversation.contextInjection.category.projectDirectory": "Arbeitsverzeichnis",
+  "conversation.contextInjection.projectDirectoryPaths": "Vorheriges Verzeichnis: {previousDirectory}\nNeues Verzeichnis: {workingDirectory}",
   "conversation.contextInjection.category.injection": "zusätzlicher Kontext",
   "conversation.contextInjection.category.memoryExpiration": "Hinweis zum Ablauf des Speicherkontexts",
   "conversation.contextInjection.category.other": "Sonstiges",

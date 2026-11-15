@@ -6822,6 +6822,8 @@
   "conversation.contextInjection.category.answer": "回答モード",
   "conversation.contextInjection.category.guidance": "ホストガイダンス",
   "conversation.contextInjection.category.base": "基本指示",
+  "conversation.contextInjection.category.projectDirectory": "作業ディレクトリ",
+  "conversation.contextInjection.projectDirectoryPaths": "変更前のディレクトリ: {previousDirectory}\n新しいディレクトリ: {workingDirectory}",
   "conversation.contextInjection.category.injection": "追加コンテキスト",
   "conversation.contextInjection.category.memoryExpiration": "記憶の失効通知",
   "conversation.contextInjection.category.other": "その他",

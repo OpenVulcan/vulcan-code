@@ -6822,6 +6822,8 @@
   "conversation.contextInjection.category.answer": "回答模式",
   "conversation.contextInjection.category.guidance": "宿主指引",
   "conversation.contextInjection.category.base": "基础指令",
+  "conversation.contextInjection.category.projectDirectory": "工作目录",
+  "conversation.contextInjection.projectDirectoryPaths": "旧目录：{previousDirectory}\n新目录：{workingDirectory}",
   "conversation.contextInjection.category.injection": "附加上下文",
   "conversation.contextInjection.category.memoryExpiration": "记忆失效提示",
   "conversation.contextInjection.category.other": "其他",

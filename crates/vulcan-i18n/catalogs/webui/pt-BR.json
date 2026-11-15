@@ -6822,6 +6822,8 @@
   "conversation.contextInjection.category.answer": "modo de resposta",
   "conversation.contextInjection.category.guidance": "orientação do host",
   "conversation.contextInjection.category.base": "instruções base",
+  "conversation.contextInjection.category.projectDirectory": "diretório de trabalho",
+  "conversation.contextInjection.projectDirectoryPaths": "Diretório anterior: {previousDirectory}\nNovo diretório: {workingDirectory}",
   "conversation.contextInjection.category.injection": "contexto adicional",
   "conversation.contextInjection.category.memoryExpiration": "Aviso de expiração da memória",
   "conversation.contextInjection.category.other": "outros",
