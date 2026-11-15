@@ -44,7 +44,9 @@ jobs:
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -eu
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' apps/vulcan-code-setup/Cargo.toml)
+          # Read the package version without matching version fields in dependency tables.
+          # 只读取安装器包版本，排除依赖表中的版本字段。
+          version=$(python3 -c 'import sys, tomllib; print(tomllib.loads(open(sys.argv[1], encoding="utf-8").read())["package"]["version"])' apps/vulcan-code-setup/Cargo.toml)
           [ -n "$version" ] || { echo 'apps/vulcan-code-setup/Cargo.toml has no version of its own' >&2; exit 1; }
           [ "$version" = "$REQUESTED_VERSION" ] || {
             echo "apps/vulcan-code-setup/Cargo.toml is at $version, not $REQUESTED_VERSION" >&2
