@@ -5,3 +5,6 @@ root_skills:
   - skill_id: "vulcan-curl"
     source: "vulcan-curl"
     source_type: "official_hub"
+  - skill_id: "vulcan-work"
+    source: "vulcan-work"
+    source_type: "official_hub"

@@ -201,6 +201,9 @@ LuaSkills 技能列表仅对声明了配置的技能显示配置入口，并显�
   `{skill, topic}` 返回单个主题，`{name}` 返回入口的主题；隐式入口另附隐藏宿主管理字段后的参数 Schema。
 - 技能包作者编写的 `main` 与主题必须与调用方式无关：使用 canonical 入口名，不写宿主工具名、调度器
   或注册方式，这些由宿主调用说明负责。
+- 随包引导配置 `config/luaskills_root_skills.yaml` 通过生效的 LuaSkills Hub 安装 `vulcan-work` 到 ROOT 层。
+  `PersistedLuaSkillsConfiguration::tool_registration_state` 按包标识为 `vulcan-work` 提供隐式注册默认值。
+  工具目录、直接注册和隐式调度共用该状态。缺省在内存中解析，已保存的显式注册或停用选择优先。
 
 ## 7. 配置缺失处理
 
