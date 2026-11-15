@@ -51,6 +51,7 @@ async fn published_child_terminal_retires_after_parent_turn_ends() {
             .value;
         let mut bridge =
             crate::tests::test_support::test_service_state_with_parent_session(parent_id);
+        storage.bind_workspace_project(&mut bridge, storage.data_root(), vec![parent_id]);
         bridge.controller_runtime = Some(controller.clone());
         bridge
             .session_runtime_registry
@@ -167,7 +168,10 @@ async fn published_child_terminal_retires_after_parent_turn_ends() {
             )
             .await
             .unwrap_err();
-            assert!(error.contains("initial_business.prior_execution"));
+            assert!(
+                error.contains("initial_business.prior_execution"),
+                "{error}"
+            );
             assert!(
                 state
                     .lock()

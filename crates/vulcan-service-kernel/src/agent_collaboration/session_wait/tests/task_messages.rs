@@ -396,7 +396,7 @@ async fn agent_task_wakeup_failure_scenario(
 ) {
     // This test runtime has no configured provider and cannot issue a real model request.
     // 此测试运行时没有配置供应商，不能发出真实模型请求。
-    let (_root, invocation, target, _context) = message_fixture(false).await;
+    let (root, invocation, target, _context) = message_fixture(false).await;
     // Hydration uses the production project index, beyond the minimal session-only fixture.
     // 水合使用生产项目索引，超出最小纯会话夹具的范围。
     if with_project_schema {
@@ -405,17 +405,14 @@ async fn agent_task_wakeup_failure_scenario(
         )
         .await
         .unwrap();
-        let project_path = _root.data_root().join("agent-task-project");
+        let project_path = root.data_root().join("agent-task-project");
         std::fs::create_dir_all(&project_path).unwrap();
-        let project = vulcan_workbench_model::TaskProjectSummary::new(
-            invocation.source_locator.project_id(),
-            "Agent task project",
-            project_path.display().to_string(),
-            false,
-            0,
-            None,
-            None,
-            Vec::new(),
+        // Seed the workspace projection as well as the durable project index required by cold hydration.
+        // 同时准备工作区投影与冷水合所需的可靠项目索引。
+        let project = root.bind_workspace_project(
+            &mut invocation.state.lock().unwrap(),
+            &project_path,
+            vec![invocation.source_session_id, target.session_id()],
         );
         vulcan_workspace_store::workspace_store::persist_new_project(
             invocation.controller_runtime.clone(),
@@ -505,8 +502,7 @@ async fn agent_task_wakeup_failure_scenario(
                 target.session_id(),
                 authority.execution_id.as_str(),
                 None,
-                _root
-                    .data_root()
+                root.data_root()
                     .join("agent-task-project")
                     .display()
                     .to_string(),

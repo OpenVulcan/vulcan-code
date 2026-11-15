@@ -431,6 +431,37 @@ pub(crate) struct TestHostRuntimeRoot {
 }
 
 impl TestHostRuntimeRoot {
+    /// Projects an existing test directory under the same project ID as this fixture's durable session.
+    /// 用夹具可靠会话对应的项目 ID，将已存在的测试目录加入工作区投影。
+    /// Updates the listed session owners and returns the project for fixtures that also persist it.
+    /// 更新所列会话的所属项目，并返回项目以供同时需要持久化的夹具使用。
+    pub(crate) fn bind_workspace_project(
+        &self,
+        service: &mut ServiceBridgeState,
+        directory: &std::path::Path,
+        sessions: Vec<SessionId>,
+    ) -> vulcan_workbench_model::TaskProjectSummary {
+        assert!(directory.is_dir(), "Test project directory must exist");
+        let project = vulcan_workbench_model::TaskProjectSummary::new(
+            self.v1_storage_locator.project_id(),
+            "Test project",
+            directory.display().to_string(),
+            false,
+            0,
+            None,
+            None,
+            sessions,
+        );
+        let workspace = service.workspace_snapshot.as_mut().unwrap();
+        for session in &mut workspace.sessions {
+            if project.session_ids.contains(&session.id) {
+                session.project_id = Some(project.id.clone());
+            }
+        }
+        workspace.task_projects.push(project.clone());
+        project
+    }
+
     /// Creates an isolated segmented session directory and its offline host-storage source.
     /// 创建隔离的分段会话目录及其离线宿主存储来源。
     ///

@@ -143,11 +143,14 @@ async fn main_business_queued_dispatch_rejects_auxiliary_acknowledgement() {
 async fn scheduled_recovery_rpc_waits_and_observes_one_business_start() {
     // The source is the retained conversation and the fixture provides its registered durable owner.
     // 来源会话是保留会话，夹具提供其已登记的可靠所有者。
-    let (_root, invocation, _) = fixture(false).await;
+    let (root, invocation, _) = fixture(false).await;
     let handle = &invocation.source_handle;
     let session_id = handle.session_id();
-    invocation.state.lock().unwrap().agent_runtime =
-        Some(crate::tests::test_support::test_agent_runtime_bridge());
+    {
+        let mut state = invocation.state.lock().unwrap();
+        root.bind_workspace_project(&mut state, root.data_root(), vec![session_id]);
+        state.agent_runtime = Some(crate::tests::test_support::test_agent_runtime_bridge());
+    }
     handle
         .mutate_durable(
             SessionMutationAdmission::MetadataOnly,
@@ -270,28 +273,10 @@ async fn scheduled_recovery_rpc_starts_preparation_after_admission_release() {
     let (root, invocation, _) = fixture(false).await;
     let handle = &invocation.source_handle;
     let session_id = handle.session_id();
-    let project_id = invocation.source_locator.project_id();
-    let project = vulcan_workbench_model::TaskProjectSummary::new(
-        project_id,
-        "Queued recovery project",
-        root.data_root().display().to_string(),
-        false,
-        0,
-        None,
-        None,
-        vec![session_id],
-    );
     {
         let mut state = invocation.state.lock().unwrap();
+        root.bind_workspace_project(&mut state, root.data_root(), vec![session_id]);
         state.agent_runtime = Some(crate::tests::test_support::test_agent_runtime_bridge());
-        let workspace = state.workspace_snapshot.as_mut().unwrap();
-        workspace
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-            .unwrap()
-            .project_id = Some(project_id.to_owned());
-        workspace.task_projects.push(project);
     }
     handle
         .mutate_durable(
