@@ -57,6 +57,7 @@ use luaskills_dispatch::luaskills_entry_to_call_view;
 use luaskills_dispatch::{
     build_luaskills_dispatch_candidate, build_luaskills_help_candidate,
     inject_host_managed_luaskill_sid_if_needed, inject_host_managed_pwd_if_needed,
+    luaskills_invocation_failure,
 };
 
 #[cfg(test)]
@@ -566,16 +567,17 @@ pub fn build_vulcan_tools_manager(
                         &canonical_name,
                     );
                     let call_handle = handle.clone();
-                    let result = call_luaskills_tool_entry(
+                    let result = match call_luaskills_tool_entry(
                         call_handle,
                         canonical_name.clone(),
                         args,
                         Some(invocation_context),
                     )
                     .await
-                    .map_err(|error| {
-                        format!("LuaSkills tool `{}` failed: {}.", canonical_name, error)
-                    })?;
+                    {
+                        Ok(result) => result,
+                        Err(error) => return Ok(luaskills_invocation_failure(&canonical_name, error)),
+                    };
                     let model_output = Value::String(render_luaskills_invocation_result_text(
                         &handle,
                         &canonical_name,

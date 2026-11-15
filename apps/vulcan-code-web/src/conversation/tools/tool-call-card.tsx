@@ -14,6 +14,8 @@ import { LUA_TOOLS, LuaCard } from "./cards/lua-card";
 import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
 import { ProviderCard, providerToolSpec } from "./cards/provider-card";
 import { ToolChainCard } from "./cards/tool-chain-card";
+import { VulcanWorkCard } from "./cards/vulcan-work-card";
+import { vulcanWorkOperation } from "./cards/vulcan-work-model";
 import { WebExtractCard, WebSearchCard, webToolKind } from "./cards/web-cards";
 import type { ToolCardProps, ToolFamily } from "./tool-card";
 import { readToolCall, textOf, type ToolCall, type ToolCardState } from "./tool-call";
@@ -86,6 +88,10 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (call.name === "ask") return { Card: AskCard, family: "agent" };
   if (agentToolSpec(call)) return { Card: AgentCard, family: "agent" };
   if (call.name === "knowledge_write") return { Card: KnowledgeWriteCard, family: "edit" };
+  // Resolve the office entry before the shared LuaSkills dispatcher receives the document card.
+  // 在通用 LuaSkills 调度器进入文档卡之前，先识别办公技能入口。
+  const office = vulcanWorkOperation(call);
+  if (office) return { Card: VulcanWorkCard, family: office.family };
   if (call.name === "vmm_memory_search") return { Card: MemorySearchCard, family: "search" };
   if (browserToolAction(call.name)) return { Card: BrowserCard, family: "web" };
   const web = webToolKind(call);

@@ -9,6 +9,17 @@ export function ErrorNote(props: { text: string | null }) {
   return <pre className="vk-tool-error">{props.text}</pre>;
 }
 
+/** Renders host diagnostic text in a collapsed disclosure within the tool card.
+ * 在工具卡内以默认折叠的详情展示宿主诊断文本。 */
+export function ToolDiagnostic(props: { label: string; text: string }) {
+  return (
+    <details className="vk-model-more">
+      <summary>{props.label}</summary>
+      <pre className="vk-json">{props.text}</pre>
+    </details>
+  );
+}
+
 /** Renders one Markdown result through the shared conversation Markdown pipeline.
  * 通过共享会话 Markdown 管线渲染一条 Markdown 结果。 */
 export function MarkdownResult(props: { text: string; error?: boolean }) {

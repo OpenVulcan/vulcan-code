@@ -37,6 +37,11 @@
 | 用户提问 Ask | `agent_runtime/question_runtime.rs` | 原有回答 Markdown，一份正文 | `ask.payload.format = markdown`；题目来自原调用，待回答状态仍由 QuestionRuntime 管理 |
 | 公共错误、后置失败 | `tool_runtime_bridge/result_markdown.rs`、`vulcan_plugin_hooks.rs` | 错误和部分副作用；后置失败追加明确禁止自动重做的警告 | 权威错误类型和业务恢复字段；移除原始参数副本 |
 
+- LuaSkills 显式和隐式调用的运行时失败复用规范 `tool_error`。具体失败原因写入 `payload.error` 和正文。
+  原始堆栈写入宿主专用的 `payload.diagnostic`，随宿主结果脱敏后持久化，在工具卡中折叠展示。
+- Vulcan Work 卡片按清单入口的精确名称识别显式调用与 `call_luaskill` 调度。卡片从调用参数读取文件和表格范围，
+  从成功结果读取办公计数和实际输出路径；拟写入路径在收到成功结果前不作为可打开文件。错误与诊断复用共享工具结果。
+
 ### 不得误删的语义
 
 - 未开始、接纳、投递、任务完成是不同状态。无运行所有者、人工停止、未知、检查失败不能变成成功。

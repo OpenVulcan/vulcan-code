@@ -169,19 +169,17 @@ async fn execute_luaskills_dispatch_tool(
         "call-luaskill",
         &entry.canonical_name,
     );
-    let result = call_luaskills_tool_entry(
+    let result = match call_luaskills_tool_entry(
         handle.clone(),
         entry.canonical_name.clone(),
         call_args,
         Some(invocation_context),
     )
     .await
-    .map_err(|error| {
-        format!(
-            "LuaSkills entry `{}` in skill `{}` failed: {}.",
-            entry.local_name, entry.skill_id, error
-        )
-    })?;
+    {
+        Ok(result) => result,
+        Err(error) => return Ok(luaskills_invocation_failure(&entry.canonical_name, error)),
+    };
     let model_output = Value::String(render_luaskills_invocation_result_text(
         &handle,
         &entry.canonical_name,
@@ -211,6 +209,69 @@ pub(super) fn luaskills_entry_to_call_view(
         canonical_name: &entry.canonical_name,
         input_schema: &entry.input_schema,
     }
+}
+
+/// Converts a LuaSkills runtime diagnostic for `canonical_name` into a failed tool result.
+/// 把 `canonical_name` 对应的 LuaSkills 运行时诊断转换成失败的工具结果。
+///
+/// The returned model and card error contains the cause. The original diagnostic is available
+/// to the host when the runtime added a wrapper or traceback.
+/// 返回给模型和错误卡的是具体原因。运行时添加的包装或堆栈会留给宿主诊断。
+pub(super) fn luaskills_invocation_failure(
+    canonical_name: &str,
+    diagnostic: String,
+) -> VulcanToolInvocationResult {
+    // LuaSkills 0.9 returns handler failures as formatted strings with this exact entry prefix.
+    // LuaSkills 0.9 以带有此精确入口前缀的格式化字符串返回 handler 错误。
+    let prefix = format!("Lua skill '{canonical_name}' error: ");
+    // Only strip Lua's formatting from handler failures created for this exact invocation.
+    // 仅移除当前这次调用的 handler 错误自带的 Lua 格式。
+    let reason = diagnostic
+        .strip_prefix(&prefix)
+        .map(luaskills_handler_error_reason)
+        .unwrap_or(&diagnostic)
+        .trim();
+    // A malformed or empty cause still needs a non-empty failure message.
+    // 原因缺失或为空时，仍要返回非空的失败消息。
+    let message = if reason.is_empty() {
+        "LuaSkills execution failed."
+    } else {
+        reason
+    };
+    // Diagnostic data belongs to the host envelope so it will pass through credential redaction.
+    // 诊断放在宿主信封内，以继续经过已有的凭据脱敏。
+    let mut result = VulcanToolInvocationResult::from_tool_error_details(message, Value::Null);
+    if diagnostic != message {
+        result
+            .host_result
+            .as_mut()
+            .expect("structured tool error has a host result")
+            .payload["diagnostic"] = Value::String(diagnostic);
+    }
+    result
+}
+
+/// Extracts the cause from `message`, the Lua error body supplied by the current runtime.
+/// 从当前运行时提供的 Lua 错误正文 `message` 提取具体原因。
+fn luaskills_handler_error_reason(message: &str) -> &str {
+    // mlua separates the cause from the traceback with its own line boundary.
+    // mlua 用固定的换行边界隔开失败原因与执行堆栈。
+    let cause = message
+        .split_once("\nstack traceback:\n")
+        .map_or(message, |(cause, _)| cause);
+    // Lua's string source location has a bracketed chunk name and numeric line number.
+    // Lua 的字符串来源位置由带括号的代码块名及数字行号组成。
+    let cause = cause.strip_prefix("runtime error: ").unwrap_or(cause);
+    if let Some((line, reason)) = cause
+        .strip_prefix("[string \"")
+        .and_then(|location| location.split_once("\"]:"))
+        .and_then(|(_, rest)| rest.split_once(": "))
+        && !line.is_empty()
+        && line.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return reason;
+    }
+    cause
 }
 
 /// Inject one host-managed LuaSkills SID when the entry declares it and the caller did not provide it.

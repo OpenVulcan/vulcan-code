@@ -116,6 +116,14 @@ export function textOf(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** Reads diagnostic text from the failed call's canonical host result.
+ * 从失败调用的规范宿主结果中读取诊断文本。 */
+export function toolDiagnosticText(call: ToolCall): string | null {
+  return call.isError && call.host?.kind === "tool_error"
+    ? textOf(call.host.payload.diagnostic)
+    : null;
+}
+
 // numberOf returns a finite number, or null.
 // numberOf 返回有限数字；否则返回 null。
 export function numberOf(value: unknown): number | null {

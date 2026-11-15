@@ -3,7 +3,7 @@
 
 use super::{
     build_luaskills_dispatch_candidate, build_luaskills_help_candidate, build_vulcan_tools_manager,
-    inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view,
+    inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view, luaskills_invocation_failure,
 };
 use crate::agent_runtime::task_runtime::collaboration_lifecycle::{
     ChildTaskActivationRequest, ChildTaskLifecycleReceipt, ChildTaskReservationRequest,
@@ -163,6 +163,60 @@ fn host_managed_pwd_injection_preserves_explicit_value() {
     .expect("pwd injection should preserve explicit value");
 
     assert_eq!(injected[PWD_PARAMETER_NAME], "/caller/path");
+}
+
+/// Verifies a LuaSkills handler failure keeps the concrete cause visible and the stack host-only.
+/// 验证 LuaSkills handler 失败时具体原因可见，执行堆栈仅保存在宿主侧。
+#[test]
+fn luaskills_handler_failure_keeps_trace_in_diagnostics() {
+    use crate::agent_runtime::tool_runtime_bridge::{
+        canonicalize_tool_invocation_result, persistent_tool_output_from_result,
+    };
+    use vulcan_core::types::ToolInvocationRequest;
+
+    // The same handler can be reached directly or via the implicit dispatcher.
+    // 同一个 handler 可以由显式调用或隐式调度触达。
+    let canonical_name = "example-remove-slides";
+    // The cause includes multiple lines and punctuation supplied by the skill.
+    // 具体原因包含技能提供的多行内容和标点。
+    let cause = "Leave at least one slide.\nRequested: all slides.";
+    // The diagnostic uses LuaSkills 0.9 and mlua's runtime error format.
+    // 诊断采用 LuaSkills 0.9 和 mlua 的运行时错误格式。
+    let diagnostic = format!(
+        "Lua skill '{canonical_name}' error: runtime error: [string \"remove_slides\"]:17: {cause}\nstack traceback:\n\t[C]: in function 'error'"
+    );
+    for tool_name in ["example_remove_slides", "call_luaskill"] {
+        // The public request name differs between explicit and implicit routes.
+        // 显式与隐式路径的公开请求名称不同。
+        let request = ToolInvocationRequest {
+            request_stream_id: String::from("stream"),
+            tool_call_id: String::from("call"),
+            tool_name: tool_name.to_owned(),
+            arguments: json!({}),
+            argument_parse_error: None,
+            raw_arguments: Default::default(),
+            user_request: Default::default(),
+        };
+        // Canonicalization routes the diagnostic through the ordinary tool-error payload.
+        // 规范化将诊断放入普通工具错误载荷。
+        let canonical = canonicalize_tool_invocation_result(
+            &request,
+            luaskills_invocation_failure(canonical_name, diagnostic.clone()),
+        );
+        assert!(canonical.is_error);
+        assert!(canonical.model_output.contains(cause));
+        assert!(!canonical.model_output.contains("stack traceback:"));
+        assert!(!canonical.model_output.contains("[string"));
+
+        // Durable output is the source of the WebUI result and diagnostics.
+        // 持久化输出是 WebUI 结果和诊断的权威来源。
+        let output = serde_json::to_value(
+            persistent_tool_output_from_result(&canonical).expect("tool result is durable"),
+        )
+        .expect("tool result serializes");
+        assert_eq!(output["host_result"]["payload"]["error"], cause);
+        assert_eq!(output["host_result"]["payload"]["diagnostic"], diagnostic);
+    }
 }
 
 /// Verifies implicit LuaSkills expose help and call tools as one paired tool group.

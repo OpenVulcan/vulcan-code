@@ -5,9 +5,9 @@
 import { Wrench } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { ToolFrame, type ToolCardProps } from "../tool-card";
-import type { ToolCall } from "../tool-call";
+import { toolDiagnosticText, type ToolCall } from "../tool-call";
 import { JsonView } from "../views/json-view";
-import { MarkdownResult } from "../views/result-views";
+import { MarkdownResult, ToolDiagnostic } from "../views/result-views";
 
 // TARGET_KEYS are argument names that usually say what a call is about, in preference order.
 // TARGET_KEYS 是通常能说明调用对象的参数名，按优先顺序排列。
@@ -21,6 +21,9 @@ export function GenericToolCard(props: ToolCardProps) {
   const { server, tool } = toolNameParts(call.event.tool_name);
   const target = primaryArgument(call);
   const hasInput = Object.keys(call.input).length > 0;
+  // Only a failed tool's canonical host payload supplies expandable diagnostic text.
+  // 仅从失败工具的规范宿主载荷读取可展开的诊断文本。
+  const diagnostic = toolDiagnosticText(call);
   return (
     <ToolFrame
       {...props}
@@ -35,10 +38,11 @@ export function GenericToolCard(props: ToolCardProps) {
       targetTitle={target}
       verb={tool}
     >
-      {hasInput || call.modelOutput ? (
+      {hasInput || call.modelOutput || diagnostic ? (
         <>
           {hasInput ? <JsonView label={t("toolCard.generic.input")} value={call.input} /> : null}
           {call.modelOutput ? <MarkdownResult error={call.isError} text={call.modelOutput} /> : null}
+          {diagnostic ? <ToolDiagnostic label={t("toolCard.generic.diagnostic")} text={diagnostic} /> : null}
         </>
       ) : null}
     </ToolFrame>

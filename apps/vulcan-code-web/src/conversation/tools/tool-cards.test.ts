@@ -12,6 +12,8 @@ import { knowledgeEdits } from "./cards/knowledge-write-card";
 import { codeLines, luaSessionBody } from "./cards/lua-card";
 import { goalReport, todoItems } from "./cards/plan-cards";
 import { stripReportHeading } from "./cards/provider-card";
+import { VulcanWorkCard } from "./cards/vulcan-work-card";
+import { vulcanWorkOperation, vulcanWorkPresentation } from "./cards/vulcan-work-model";
 import { extractReport, searchReport, sourceParts } from "./cards/web-cards";
 import { formatToolDuration, readToolCall, toolCardState } from "./tool-call";
 import { resolveToolCard, toolCallFamily } from "./tool-call-card";
@@ -41,6 +43,61 @@ function toolEvent(toolName: string, input: Record<string, unknown>, host: { kin
     tool_name: toolName,
   } as unknown as ToolCallEvent;
 }
+
+describe("Vulcan Work tool cards", () => {
+  it("routes explicit and implicit office calls to the matching family", () => {
+    // The cases pair an exact manifest entry with the family used by the conversation strip.
+    // 用例将清单中的精确入口与会话序列所用分类配对。
+    const operations = [
+      ["pdf-inspect", "read"], ["xlsx-read-range", "read"],
+      ["docx-list-comments", "read"], ["pptx-export-preview", "edit"],
+    ] as const;
+    for (const [operation, family] of operations) {
+      // The provider and the dispatcher expose different names for the same operation.
+      // 供应商和调度器使用不同名称暴露同一个操作。
+      const canonical = `vulcan-work-${operation}`;
+      const direct = toolEvent(canonical.replaceAll("-", "_"), {});
+      const implicit = toolEvent("call_luaskill", { name: canonical, args: [] });
+      for (const event of [direct, implicit]) {
+        expect(resolveToolCard(readToolCall(event))).toEqual({ Card: VulcanWorkCard, family });
+      }
+    }
+    expect(toolCallFamily(toolEvent("call_luaskill", { name: "vulcan-work-unknown" }))).toBe("run");
+    expect(toolCallFamily(toolEvent("mcp_vulcan_work_pdf_inspect", {}))).toBe("other");
+  });
+
+  it("uses the result receipt as the opening target and keeps the planned path on a failure", () => {
+    // One implicit request copies a slide deck to a caller-chosen output.
+    // 一次隐式请求将演示文稿复制到调用方指定的输出。
+    const event = toolEvent("call_luaskill", {
+      name: "vulcan-work-pptx-remove-slides",
+      args: [
+        { name: "path", value: "D:/work/input.pptx" },
+        { name: "output_path", value: "D:/work/planned.pptx" },
+      ],
+    });
+    const request = readToolCall(event);
+    const operation = vulcanWorkOperation(request)!;
+    // The persisted receipt supplies the actual output path and counts.
+    // 持久化回执提供实际输出路径与计数。
+    const receipt = { output_path: "D:/work/confirmed.pptx", slides_removed: 1, slide_count: 2 };
+    const success = readToolCall({ ...event, output: { ...event.output, model_output: JSON.stringify(receipt) } });
+    expect(vulcanWorkPresentation(success, operation)).toMatchObject({
+      sourcePath: "D:/work/input.pptx",
+      targetPath: "D:/work/confirmed.pptx",
+      filePath: "D:/work/confirmed.pptx",
+      counts: [{ key: "slides_removed", count: 1 }, { key: "slide_count", count: 2 }],
+    });
+    // Error and approval states cannot authorize opening a planned or stale output path.
+    // 失败和审批状态不能让计划路径或残留输出路径变成可打开目标。
+    for (const status of ["failed", "waiting_user"] as const) {
+      const pending = readToolCall({ ...success.event, status });
+      expect(vulcanWorkPresentation(pending, operation)).toMatchObject({
+        targetPath: "D:/work/planned.pptx", filePath: null, outputPath: null, counts: [],
+      });
+    }
+  });
+});
 
 describe("tool call reading", () => {
   it("writes durations at the precision a reader needs", () => {

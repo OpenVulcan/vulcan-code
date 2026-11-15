@@ -1045,11 +1045,15 @@ fn canonicalize_tool_error_details(
             request.tool_name
         )
     })?;
-    Ok(build_canonical_tool_error_host_result(
-        request,
-        error,
-        Some(domain_details),
-    ))
+    // The optional diagnostic is kept only in the host payload. Model Markdown uses the
+    // concise error and domain details from the tool-owned envelope.
+    // 可选诊断只进入宿主载荷。模型 Markdown 继续使用工具信封中的具体错误和领域详情。
+    let mut canonical =
+        build_canonical_tool_error_host_result(request, error, Some(domain_details));
+    if let Some(diagnostic) = details.get("diagnostic").and_then(Value::as_str) {
+        canonical["payload"]["diagnostic"] = json!(diagnostic);
+    }
+    Ok(canonical)
 }
 
 /// Builds one controller-visible error result so host-managed tool failures can be returned to the model instead of aborting the whole turn.
