@@ -56,8 +56,8 @@ DESKTOP
         contents="$app/Contents"
         executable="$contents/MacOS/vulcan-code-setup-gui"
         mkdir -p "$contents/MacOS" "$contents/Resources"
-        lipo -verify_arch arm64 "$1"
-        lipo -verify_arch x86_64 "$2"
+        lipo "$1" -verify_arch arm64
+        lipo "$2" -verify_arch x86_64
         lipo -create "$1" "$2" -output "$executable"
         chmod 755 "$executable"
         # Finder and the Dock use the same existing artwork as the Iced window.

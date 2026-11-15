@@ -147,7 +147,7 @@ jobs:
           trap 'hdiutil detach "$mount"' EXIT
           app="$mount/Vulcan Code Setup.app"
           executable="$app/Contents/MacOS/vulcan-code-setup-gui"
-          lipo -verify_arch arm64 x86_64 "$executable"
+          lipo "$executable" -verify_arch arm64 x86_64
           codesign --verify --strict "$app"
           test "$("$executable" --version)" = "vulcan-code-setup $VERSION"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
