@@ -214,6 +214,12 @@ export function ProjectFolderPickerDialog({
   // editingPath swaps the breadcrumb for the path field.
   // editingPath 将面包屑切换为路径输入框。
   const [editingPath, setEditingPath] = React.useState(false);
+  // pathNeedsAttention highlights the opener when the draft is left unapplied.
+  // pathNeedsAttention 在离开尚未应用的路径草稿时突出打开按钮。
+  const [pathNeedsAttention, setPathNeedsAttention] = React.useState(false);
+  // pathHintId lets the input announce the existing path-opening hint.
+  // pathHintId 让输入框关联现有的路径打开提示。
+  const pathHintId = React.useId();
   // editingPathRef lets the dialog's Escape handler leave editing instead of closing.
   // editingPathRef 让对话框的 Escape 处理先退出编辑而不是关闭弹窗。
   const editingPathRef = React.useRef(false);
@@ -251,6 +257,9 @@ export function ProjectFolderPickerDialog({
   // listRef locates the highlighted row so keyboard moves keep it in view.
   // listRef 用于定位高亮行，使键盘移动时保持可见。
   const listRef = React.useRef<HTMLDivElement | null>(null);
+  // The editable draft stays distinct from the last service-backed listing.
+  // 可编辑草稿与服务最后一次返回的目录列表保持独立。
+  const pathEdited = editingPath && pathInput !== (listing?.path ?? "");
   const directoryRoots = React.useMemo(() => listing?.roots ?? [], [listing?.roots]);
   const places = React.useMemo(() => projectFolderPickerPlaces(projectPaths ?? []), [projectPaths]);
   const projectKeys = React.useMemo(() => new Set((projectPaths ?? []).map(projectPathKey)), [projectPaths]);
@@ -300,6 +309,7 @@ export function ProjectFolderPickerDialog({
       setListing(nextListing);
       setPathInput(nextListing.path);
       setEditingPath(false);
+      setPathNeedsAttention(false);
       setSelectedChild(null);
       setFilter("");
     } catch (nextError) {
@@ -317,7 +327,7 @@ export function ProjectFolderPickerDialog({
     if (!open) {
       browseSequenceRef.current += 1;
       setListing(null); setPathInput(""); setLoading(false); setError(null);
-      setHistory([]); setEditingPath(false); setSelectedChild(null); setFilter(""); setShowHidden(false);
+      setHistory([]); setEditingPath(false); setPathNeedsAttention(false); setSelectedChild(null); setFilter(""); setShowHidden(false);
       return;
     }
     setListing(null);
@@ -338,12 +348,21 @@ export function ProjectFolderPickerDialog({
 
   // navigate opens one directory and records the current one for the back button.
   // navigate 打开一个目录，并记录当前目录供后退使用。
-  const navigate = (path: string) => void loadDirectory(path, listing?.path ?? null);
+  const navigate = (path: string) => {
+    if (!pauseForPathDraft()) void loadDirectory(path, listing?.path ?? null);
+  };
+  // Leave the draft in place when the user interacts with the old listing.
+  // 用户操作旧目录列表时保留路径草稿。
+  const pauseForPathDraft = () => {
+    if (!pathEdited) return false;
+    setPathNeedsAttention(true);
+    return true;
+  };
   // goBack reopens the directory left most recently without recording a new step.
   // goBack 重新打开最近离开的目录，不记录新的步骤。
   const goBack = () => {
     const previous = history[history.length - 1];
-    if (previous === undefined) return;
+    if (previous === undefined || pauseForPathDraft()) return;
     setHistory(history.slice(0, -1));
     void loadDirectory(previous);
   };
@@ -354,7 +373,6 @@ export function ProjectFolderPickerDialog({
   // selectedPath is authorized only by the listing that owns it: a highlighted child of the browsed
   // directory, or the directory itself while the path field is unchanged.
   // selectedPath 仅由拥有它的目录列表授权：当前目录中高亮的子目录，或路径输入未改写时的当前目录本身。
-  const pathEdited = listing !== null && pathInput !== listing.path;
   const selectedPath = !listing?.canSelect || pathEdited
     ? null
     : (selectedChild !== null && visibleEntries.some((entry) => entry.path === selectedChild) ? selectedChild : listing.path);
@@ -384,7 +402,7 @@ export function ProjectFolderPickerDialog({
   // openTypedPath 在输入非空时加载手动输入的路径。
   const openTypedPath = () => {
     const typed = pathInput.trim();
-    if (typed !== "") navigate(typed);
+    if (typed !== "" && !busy) void loadDirectory(typed, listing?.path ?? null);
   };
 
   // handlePathSubmit loads the manually entered path.
@@ -398,13 +416,14 @@ export function ProjectFolderPickerDialog({
   // cancelPathEdit 恢复当前浏览路径与面包屑。
   const cancelPathEdit = () => {
     setEditingPath(false);
-    if (listing) setPathInput(listing.path);
+    setPathNeedsAttention(false);
+    setPathInput(listing?.path ?? "");
   };
 
   // moveSelection steps the highlight through the visible rows, starting at either end.
   // moveSelection 在可见行间移动高亮，未选中时从两端开始。
   const moveSelection = (step: 1 | -1) => {
-    if (visibleEntries.length === 0) return;
+    if (visibleEntries.length === 0 || pauseForPathDraft()) return;
     const index = visibleEntries.findIndex((entry) => entry.path === selectedChild);
     const next = index < 0
       ? (step === 1 ? 0 : visibleEntries.length - 1)
@@ -475,10 +494,14 @@ export function ProjectFolderPickerDialog({
             <form className="project-folder-picker-path-form" onSubmit={handlePathSubmit}>
               <Input
                 aria-label={t("projectFolderPicker.pathAria")}
+                aria-describedby={pathEdited ? pathHintId : undefined}
                 autoFocus
                 className="project-folder-picker-path-input"
                 disabled={submitting}
                 onChange={(event) => setPathInput(event.target.value)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.form?.contains(event.relatedTarget)) pauseForPathDraft();
+                }}
                 onFocus={(event) => event.currentTarget.select()}
                 onKeyDown={(event) => {
                   if (event.key === "Escape") {
@@ -490,7 +513,8 @@ export function ProjectFolderPickerDialog({
                 value={pathInput}
               />
               <Button aria-label={t("projectFolderPicker.openPath")} title={t("projectFolderPicker.openPath")} disabled={busy}
-                size="icon-sm" type="submit" variant="ghost">
+                data-folder-picker-open-path="" data-attention={pathEdited && pathNeedsAttention ? "" : undefined}
+                size="icon-sm" type="submit" variant={pathEdited && pathNeedsAttention ? "default" : "ghost"}>
                 {loading ? <Spinner /> : <ArrowRight size={15} />}
               </Button>
             </form>
@@ -517,19 +541,20 @@ export function ProjectFolderPickerDialog({
                 })}
                 {listing ? null : <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}
               </nav>
-              <button aria-hidden="true" className="project-folder-picker-crumb-fill" disabled={!listing || submitting}
+              <button aria-hidden="true" className="project-folder-picker-crumb-fill" disabled={loading || submitting}
                 onClick={() => setEditingPath(true)} tabIndex={-1} type="button" />
-              <Button aria-label={t("projectFolderPicker.editPath")} title={t("projectFolderPicker.editPath")} disabled={!listing || submitting}
+              <Button aria-label={t("projectFolderPicker.editPath")} title={t("projectFolderPicker.editPath")} disabled={loading || submitting}
                 onClick={() => setEditingPath(true)} size="icon-sm" type="button" variant="ghost" data-folder-picker-edit="">
                 <PencilLine size={14} />
               </Button>
             </div>
           )}
           <Button aria-label={t("skills.action.refresh")} title={t("skills.action.refresh")} disabled={!listing || busy}
-            onClick={() => void loadDirectory(listing?.path ?? null)} size="icon-sm" type="button" variant="ghost">
+            onClick={() => { if (!pauseForPathDraft()) void loadDirectory(listing?.path ?? null); }} size="icon-sm" type="button" variant="ghost">
             {loading ? <Spinner /> : <RefreshCw size={14} />}
           </Button>
         </div>
+        {pathEdited ? <p id={pathHintId} role="status" className="vk-form-text" data-folder-picker-unbrowsed="" data-attention={pathNeedsAttention ? "" : undefined}>{t("project.folderPicker.openTheEnteredPath")}</p> : null}
         <div className="project-folder-picker-browser">
           <FolderPickerSidebar
             activeRootPath={activeRootPath}
@@ -586,7 +611,7 @@ export function ProjectFolderPickerDialog({
                     data-folder-picker-entry={entry.path}
                     id={`folder-row-${index}`}
                     key={entry.path}
-                    onClick={() => !busy && setSelectedChild(selected ? null : entry.path)}
+                    onClick={() => { if (!busy && !pauseForPathDraft()) setSelectedChild(selected ? null : entry.path); }}
                     onDoubleClick={() => !busy && navigate(entry.path)}
                     role="option"
                   >
@@ -617,7 +642,6 @@ export function ProjectFolderPickerDialog({
             </div>
           </section>
         </div>
-        {pathEdited ? <p role="status" className="vk-form-text" data-folder-picker-unbrowsed="">{t("project.folderPicker.openTheEnteredPath")}</p> : null}
         {error ? <div role="alert" className="project-folder-picker-error">{error}</div> : null}
         {listing?.notice ? <div className="project-folder-picker-notice">{listing.notice}</div> : null}
         <DialogFooter className="project-folder-picker-footer">

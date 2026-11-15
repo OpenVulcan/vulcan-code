@@ -62,8 +62,19 @@ async function openPicker(projectPaths: string[] = []) {
   const key = async (target: HTMLElement, value: string) => act(async () => {
     target.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true }))
   })
+  // enterPath emulates a user input with the browser's value setter.
+  // enterPath 使用浏览器原生值设置器模拟用户输入路径。
+  const enterPath = async (value: string) => {
+    await act(async () => query<HTMLButtonElement>("[data-folder-picker-edit]")!.click())
+    const input = query<HTMLInputElement>(".project-folder-picker-path-input")!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value)
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }))
+    })
+    return input
+  }
   const cleanup = async () => { await act(async () => root.unmount()); container.remove() }
-  return { browse, confirm, query, entry, entries, crumbPaths, selection, key, cleanup }
+  return { browse, confirm, query, entry, entries, crumbPaths, selection, key, enterPath, cleanup }
 }
 
 describe("folder picker paths", () => {
@@ -176,12 +187,7 @@ describe("folder picker browsing", () => {
   it("opens the typed path from the footer button before confirming", async () => {
     const picker = await openPicker()
     try {
-      await act(async () => picker.query<HTMLButtonElement>("[data-folder-picker-edit]")!.click())
-      const input = picker.query<HTMLInputElement>(".project-folder-picker-path-input")!
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "C:\\Users")
-        input.dispatchEvent(new Event("input", { bubbles: true }))
-      })
+      await picker.enterPath("C:\\Users")
       const confirmButton = picker.query<HTMLButtonElement>("[data-folder-picker-confirm]")!
       expect(confirmButton.disabled).toBe(false)
       expect(picker.query("[data-folder-picker-unbrowsed]")).not.toBeNull()
@@ -189,6 +195,54 @@ describe("folder picker browsing", () => {
       expect(picker.browse).toHaveBeenLastCalledWith("C:\\Users")
       expect(picker.selection()).toBe("C:\\Users")
       expect(picker.confirm).not.toHaveBeenCalled()
+      await act(async () => confirmButton.click())
+      expect(picker.confirm).toHaveBeenCalledExactlyOnceWith("C:\\Users")
+    } finally { await picker.cleanup() }
+  })
+
+  // Clicking a row without a focus change must still prompt the user to open the draft.
+  // 即使点击目录行没有触发焦点变化，也应提示用户先打开草稿路径。
+  it("keeps a pasted path and the old listing when clicking or entering a directory row", async () => {
+    const picker = await openPicker()
+    try {
+      const input = await picker.enterPath("C:\\Users")
+      const arrow = picker.query<HTMLButtonElement>("[data-folder-picker-open-path]")!
+      expect(arrow.hasAttribute("data-attention")).toBe(false)
+      await act(async () => picker.entry("alpha")!.click())
+      await act(async () => picker.entry("alpha")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })))
+      expect(arrow.hasAttribute("data-attention")).toBe(true)
+      expect(input.value).toBe("C:\\Users")
+      expect(picker.entry("alpha")?.getAttribute("aria-selected")).toBe("false")
+      expect(picker.selection()).toBe("")
+      expect(picker.browse).toHaveBeenCalledTimes(1)
+      await act(async () => input.form!.requestSubmit(arrow))
+      expect(picker.selection()).toBe("C:\\Users")
+      expect(picker.confirm).not.toHaveBeenCalled()
+    } finally { await picker.cleanup() }
+  })
+
+  // Changing focus and failing to open a path both leave the text available for correction.
+  // 切换焦点或路径打开失败后，保留输入供用户更正。
+  it("highlights the opener on focus change and preserves an unavailable path", async () => {
+    const picker = await openPicker()
+    try {
+      const invalidPath = "C:\\Unavailable"
+      const input = await picker.enterPath(invalidPath)
+      const filter = picker.query<HTMLInputElement>("[data-folder-picker-filter]")!
+      const arrow = picker.query<HTMLButtonElement>("[data-folder-picker-open-path]")!
+      await act(async () => { input.focus(); filter.focus() })
+      expect(document.activeElement).toBe(filter)
+      expect(arrow.hasAttribute("data-attention")).toBe(true)
+      expect(input.getAttribute("aria-describedby")).toBe(picker.query("[data-folder-picker-unbrowsed]")?.id)
+      await act(async () => arrow.click())
+      expect(picker.browse).toHaveBeenLastCalledWith(invalidPath)
+      expect(picker.query('[role="alert"]')).not.toBeNull()
+      expect(input.value).toBe(invalidPath)
+      expect(picker.entry("alpha")).not.toBeNull()
+      expect(picker.confirm).not.toHaveBeenCalled()
+      await picker.key(input, "Escape")
+      await act(async () => picker.entry("alpha")!.click())
+      expect(picker.selection()).toBe("C:\\Users\\dev\\projects\\alpha")
     } finally { await picker.cleanup() }
   })
 
