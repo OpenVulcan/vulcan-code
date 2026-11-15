@@ -1,4 +1,5 @@
 use super::*;
+use crate::tooling::native::shell_command::{require_shell_cwd, require_shell_project};
 
 pub(crate) async fn execute_terminal_session_list_action(
     request: NativeToolExecutionRequest,
@@ -120,24 +121,12 @@ pub(crate) async fn execute_terminal_session_start_action(
         })?;
     // A terminal launch must honor the bound project even when cwd points elsewhere.
     // 即使 cwd 指向其他目录，终端启动也必须遵守绑定项目目录。
-    if let Some(root) = request.workspace_root.as_deref() {
-        vulcan_host_tools::project_directory::require_project_directory(root).map_err(|error| {
-            NativeToolError::new(
-                crate::tooling::native::shell_command::shell_directory_error(error),
-            )
-        })?;
-    }
+    require_shell_project(&request)?;
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
         parsed_args.cwd.as_deref(),
     )?;
-    vulcan_host_tools::project_directory::require_project_directory(&effective_cwd).map_err(
-        |error| {
-            NativeToolError::new(
-                crate::tooling::native::shell_command::shell_directory_error(error),
-            )
-        },
-    )?;
+    require_shell_cwd(&effective_cwd)?;
     let spill_root = resolve_shell_command_spill_root(
         request.spill_root.as_deref(),
         request.workspace_root.as_deref(),
@@ -163,29 +152,43 @@ pub(crate) async fn execute_terminal_session_start_action(
     // 宿主 RTK 变量排在最前，使同名会话变量优先。
     let mut environment = rtk_host_environment.to_vec();
     environment.extend(session_environment);
+    // The environment load may have outlived the original project or its mounted volume.
+    // 环境加载期间原项目或挂载卷可能已经失效。
+    require_shell_project(&request)?;
+    require_shell_cwd(&effective_cwd)?;
+    // Freeze the directory used by the PTY's final start-frame check.
+    // 冻结 PTY 最终启动帧检查所用的目录。
+    let launch_cwd = effective_cwd.clone();
     let snapshot = command_session_runtime
-        .start_session(CommandSessionStartRequest {
-            owner_session_id,
-            display_name: Some(session_name.clone()),
-            command: command_text.to_string(),
-            shell_label: shell_behavior.interactive_shell_label.clone(),
-            launcher_shell_label: shell_behavior.launcher_shell_label.clone(),
-            interactive_newline: terminal_session_pty_newline(
-                shell_behavior.interactive_shell_label.as_str(),
-            )
-            .to_string(),
-            cwd: effective_cwd,
-            launcher_program,
-            launcher_args,
-            path_prefixes: vulcan_runtime_assets::resolve_bundled_tool_bin_directory()
-                .into_iter()
-                .collect(),
-            initial_stdin: None,
-            initial_stdin_append_newline: false,
-            backend: default_terminal_session_backend(),
-            environment,
-            environment_fingerprint,
-        })
+        .start_session_checked(
+            CommandSessionStartRequest {
+                owner_session_id,
+                display_name: Some(session_name.clone()),
+                command: command_text.to_string(),
+                shell_label: shell_behavior.interactive_shell_label.clone(),
+                launcher_shell_label: shell_behavior.launcher_shell_label.clone(),
+                interactive_newline: terminal_session_pty_newline(
+                    shell_behavior.interactive_shell_label.as_str(),
+                )
+                .to_string(),
+                cwd: effective_cwd,
+                launcher_program,
+                launcher_args,
+                path_prefixes: vulcan_runtime_assets::resolve_bundled_tool_bin_directory()
+                    .into_iter()
+                    .collect(),
+                initial_stdin: None,
+                initial_stdin_append_newline: false,
+                backend: default_terminal_session_backend(),
+                environment,
+                environment_fingerprint,
+            },
+            || {
+                require_shell_project(&request)
+                    .and_then(|()| require_shell_cwd(&launch_cwd))
+                    .map_err(|error| error.to_string())
+            },
+        )
         .await
         .map_err(NativeToolError::new)?;
     let returned_chunks = Vec::new();

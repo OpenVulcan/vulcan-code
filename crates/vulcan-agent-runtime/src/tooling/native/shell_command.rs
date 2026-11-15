@@ -1160,6 +1160,28 @@ pub(crate) fn shell_directory_error(error: String) -> String {
     )
 }
 
+/// Validates the same frozen project root at admission and just before launching a command.
+/// 在准入及命令即将启动时校验同一冻结项目根目录。
+pub(crate) fn require_shell_project(
+    request: &NativeToolExecutionRequest,
+) -> Result<(), NativeToolError> {
+    if let Some(guard) = &request.project_shell_guard {
+        return (guard.0)().map_err(NativeToolError::new);
+    }
+    if let Some(root) = request.workspace_root.as_deref() {
+        vulcan_host_tools::project_directory::require_project_directory(root)
+            .map_err(|error| NativeToolError::new(shell_directory_error(error)))?;
+    }
+    Ok(())
+}
+
+/// Checks the actual process directory resolved from the original arguments.
+/// 检查按原始参数解析出的实际进程目录。
+pub(crate) fn require_shell_cwd(cwd: &Path) -> Result<(), NativeToolError> {
+    vulcan_host_tools::project_directory::require_project_directory(cwd)
+        .map_err(|error| NativeToolError::new(shell_directory_error(error)))
+}
+
 /// Executes one `shell_command` invocation after applying the generic plugin transform chain.
 /// 在应用通用插件转换链后执行一次 `shell_command` 调用。
 pub(crate) async fn execute_shell_command_tool(
@@ -1170,10 +1192,7 @@ pub(crate) async fn execute_shell_command_tool(
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     // Validate the bound project before resolving an optional command-specific cwd.
     // 在解析命令可选 cwd 前先校验绑定项目。
-    if let Some(root) = request.workspace_root.as_deref() {
-        vulcan_host_tools::project_directory::require_project_directory(root)
-            .map_err(|error| NativeToolError::new(shell_directory_error(error)))?;
-    }
+    require_shell_project(&request)?;
     let job_context = ShellCommandJobContext::of_request(&request);
     let parsed_args = parse_shell_command_tool_arguments(std::mem::take(&mut request.arguments))?;
     let effective_cwd = resolve_shell_command_working_directory(
@@ -1182,8 +1201,7 @@ pub(crate) async fn execute_shell_command_tool(
     )?;
     // Validate the resolved cwd before any shell hook, child environment lookup, or process launch.
     // 在 Shell Hook、子进程环境查询或进程启动前校验解析后的 cwd。
-    vulcan_host_tools::project_directory::require_project_directory(&effective_cwd)
-        .map_err(|error| NativeToolError::new(shell_directory_error(error)))?;
+    require_shell_cwd(&effective_cwd)?;
     let vulcan_environment = child_process_environment(&request).await?;
     let spill_root = resolve_shell_command_spill_root(
         request.spill_root.as_deref(),
@@ -1204,6 +1222,10 @@ pub(crate) async fn execute_shell_command_tool(
     process_options.host_environment = rtk_host_environment(rtk.telemetry_disabled);
     process_options.vulcan_environment = vulcan_environment;
 
+    // Hooks and environment resolution can suspend the invocation after its initial check.
+    // Hook 和环境解析可能在首次检查后挂起调用。
+    require_shell_project(&request)?;
+    require_shell_cwd(&effective_cwd)?;
     let execution_report = execute_shell_command_process(
         &effective_args,
         &effective_cwd,
@@ -1330,6 +1352,125 @@ mod process_option_tests {
     }
 
     use super::*;
+
+    /// Removes the workspace during production environment loading, after initial directory admission.
+    /// 在生产环境变量加载中移除工作区，此时首次目录准入已经完成。
+    #[derive(Debug)]
+    struct RemoveProjectWhileLoadingEnvironment(PathBuf);
+
+    #[async_trait::async_trait]
+    impl crate::tooling::native::NativeEnvironmentHost for RemoveProjectWhileLoadingEnvironment {
+        /// Removes the empty fixture and returns no child variables.
+        /// 移除空目录夹具并返回空的子进程变量。
+        async fn effective_environment(
+            &self,
+            _: uuid::Uuid,
+        ) -> Result<Vec<crate::tooling::native::EffectiveEnvironmentVariable>, String> {
+            std::fs::remove_dir(&self.0).map_err(|error| error.to_string())?;
+            Ok(Vec::new())
+        }
+
+        /// This fixture has no saved secrets.
+        /// 此夹具没有保存的密钥。
+        async fn historical_job_secrets(
+            &self,
+            _: uuid::Uuid,
+        ) -> Result<Vec<(String, String)>, String> {
+            Ok(Vec::new())
+        }
+
+        /// Other environment operations are outside this fixture's launch path.
+        /// 其他环境操作不在此夹具启动路径内。
+        async fn set_session_variable(
+            &self,
+            _: uuid::Uuid,
+            _: String,
+            _: Option<String>,
+            _: String,
+        ) -> Result<(), String> {
+            unreachable!("unexpected environment write")
+        }
+
+        /// This fixture never asks for environment values.
+        /// 此夹具不请求环境变量值。
+        async fn request_values(
+            &self,
+            _: uuid::Uuid,
+            _: vulcan_tools_manager::VulcanToolInvocationContext,
+            _: String,
+            _: serde_json::Value,
+            _: crate::tooling::native::EnvironmentValuesPrompt,
+        ) -> Result<crate::tooling::native::EnvironmentValuesAnswer, String> {
+            unreachable!("unexpected environment question")
+        }
+    }
+
+    /// Neither Shell entry may start in an available absolute cwd if the project disappears during environment loading.
+    /// 环境变量加载期间如果项目消失，两个 Shell 入口都不能在仍可用的绝对 cwd 启动。
+    #[tokio::test]
+    async fn project_shell_and_terminal_recheck_after_environment_load() {
+        use crate::tooling::native::tests::test_native_request;
+        use crate::tooling::native::{
+            NativeEnvironmentAccess, terminal::build_terminal_session_tool,
+        };
+
+        for terminal in [false, true] {
+            // Leave the explicitly requested cwd available throughout the call.
+            // 调用期间始终保持显式指定的 cwd 可用。
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("project");
+            std::fs::create_dir(&root).unwrap();
+            let runtime = Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new());
+            let args = if terminal {
+                json!({"action": "start", "name": "fixture", "command": if cfg!(windows) {"cmd /D /Q"} else {"sh"}, "cwd": temp.path()})
+            } else {
+                json!({"command": "echo unexpected > launch-marker", "title": "Launch marker", "cwd": temp.path()})
+            };
+            let mut request = test_native_request(args);
+            request.session_id = Some(uuid::Uuid::new_v4());
+            request.workspace_root = Some(root.clone());
+            request.environment = Some(NativeEnvironmentAccess::new(
+                Arc::new(RemoveProjectWhileLoadingEnvironment(root.clone())),
+                Arc::downgrade(&runtime),
+            ));
+            let shell_support = HostCommandShellSupport::from_configured_default_id(None);
+            let error = if terminal {
+                build_terminal_session_tool(
+                    Arc::new(crate::tooling::CommandSessionRuntime::new()),
+                    shell_support,
+                    Vec::new(),
+                )
+                .invoke(request)
+                .await
+                .err()
+                .unwrap()
+            } else {
+                execute_shell_command_tool(
+                    request,
+                    &shell_support,
+                    None,
+                    &PersistedRtkConfiguration {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .err()
+                .unwrap()
+            };
+            assert!(
+                !root.exists(),
+                "the initial check must let the environment load run"
+            );
+            assert!(
+                error.message.contains(&root.display().to_string()),
+                "{}",
+                error.message
+            );
+            assert!(error.message.contains("Ask the user"));
+            assert!(!temp.path().join("launch-marker").exists());
+        }
+    }
 
     /// Arguments of one test command.
     /// 一条测试命令的参数。

@@ -21,6 +21,7 @@ impl NativeGoalRuntimeFixture {
         arguments: serde_json::Value,
     ) -> NativeToolExecutionRequest {
         NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(session_id),
             goal_runtime: Some(self.clone()),
@@ -543,6 +544,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
     let tool = build_agent_list_tool(snapshot, &config);
     let payload = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: serde_json::Value::Object(Default::default()),
             session_id: None,
@@ -653,6 +655,7 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
     let tool = build_skill_list_tool(snapshot, &config);
     let payload = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: serde_json::Value::Object(Default::default()),
             session_id: None,

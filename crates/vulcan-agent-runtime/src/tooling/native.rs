@@ -418,6 +418,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional workspace root resolved for the current execution turn.
     /// 为当前执行回合解析得到的可选工作区根目录。
     pub workspace_root: Option<PathBuf>,
+    /// Frozen project check reused at both command admission and process launch.
+    /// 两次命令检查使用同一冻结项目守卫，分别在准入和进程启动时执行。
+    pub project_shell_guard: Option<crate::tooling::bridge::ProjectShellGuard>,
     /// Optional controller runtime used by native tools that persist workspace state.
     /// 持久化工作区状态的原生工具使用的可选控制器运行时。
     pub controller_runtime: Option<HostRuntimeHandle>,

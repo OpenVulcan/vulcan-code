@@ -1039,6 +1039,165 @@ fn frozen_bridge_context() -> VulcanToolInvocationContext {
     }
 }
 
+/// Connects the production tool permission pipeline to its normal question runtime.
+/// 将生产工具权限管线连接到常规提问运行时。
+struct DirectoryApprovalHost(Arc<crate::agent_runtime::question_runtime::QuestionRuntime>);
+
+#[async_trait::async_trait]
+impl crate::agent_runtime::tool_permission::ToolPermissionHost for DirectoryApprovalHost {
+    /// Selects workspace-write mode so an opaque shell call needs user approval.
+    /// 选择工作区写入模式，让不透明 Shell 调用需要用户批准。
+    fn access(
+        &self,
+        _: uuid::Uuid,
+    ) -> Result<vulcan_session_core::v1::config::AccessConfig, String> {
+        Ok(vulcan_session_core::v1::config::AccessConfig {
+            permission: vulcan_session_core::v1::config::PermissionMode::WorkspaceWrite,
+            unattended: None,
+        })
+    }
+
+    /// Waits on the same approval request resolved by the user's Allow once reply.
+    /// 等待由用户「仅允许一次」回复解决的同一审批请求。
+    async fn request_approval(
+        &self,
+        session_id: uuid::Uuid,
+        context: VulcanToolInvocationContext,
+        tool_name: String,
+        arguments: Value,
+        prompt: crate::agent_runtime::question_runtime::ToolApprovalPrompt,
+    ) -> Result<crate::agent_runtime::question_runtime::ApprovalAnswer, String> {
+        self.0
+            .request_approval(session_id, context, tool_name, arguments, prompt, None)
+            .await
+    }
+}
+
+/// Proves an approved old Shell request cannot spawn after the binding changes during the actual approval wait.
+/// 验证通过真实等待审批流程的旧 Shell 调用在目录更换后不会启动。
+#[tokio::test]
+async fn project_shell_command_rechecks_the_binding_after_allow_once() {
+    use crate::agent_runtime::question_runtime::{APPROVAL_ALLOW_LABEL, QuestionRuntime};
+    use crate::agent_runtime::tool_permission::PermissionTexts;
+    use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
+
+    // Keep both directories available so a mistaken launch would leave a marker.
+    // 保持两个目录均可访问，误启动会留下标记。
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old");
+    let new = temp.path().join("new");
+    fs::create_dir(&old).unwrap();
+    fs::create_dir(&new).unwrap();
+    // The test service can change its current binding while the production approval is open.
+    // 生产审批打开期间，测试服务可以更改当前绑定。
+    let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let changed_for_guard = changed.clone();
+    let guard = super::ProjectShellGuard(Arc::new(move || {
+        if changed_for_guard.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(String::from("stale directory after approval"))
+        } else {
+            Ok(())
+        }
+    }));
+    let questions = Arc::new(QuestionRuntime::new());
+    questions
+        .set_durability_callback(Some(Arc::new(|_| Ok(()))))
+        .unwrap();
+    let config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("agent-a"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    let catalog = build_native_tool_catalog(
+        &config,
+        None,
+        &Default::default(),
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+    let manager = Arc::new(build_vulcan_tools_manager(
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        true,
+        questions.clone(),
+        catalog,
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        Some(old.clone()),
+        Some("project".into()),
+        None,
+        None,
+        None,
+        vec!["shell_command".into()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        VmmConfigLayer::default(),
+        VmmConfigLayer::default(),
+        false,
+        None,
+        None,
+        Some(guard),
+    ));
+    let resolved = manager.resolve_for_execution_mode("Build");
+    let bridge = VulcanManagedToolRuntimeBridge::new(
+        manager,
+        &resolved.definitions,
+        uuid::Uuid::nil(),
+        "Build",
+    )
+    .with_tool_permission_host(Some(Arc::new(DirectoryApprovalHost(questions.clone()))));
+    let mut context = frozen_bridge_context();
+    context.session_id = uuid::Uuid::nil().to_string();
+    let call = tokio::spawn(async move {
+        // Opaque command syntax keeps the permission pipeline on the explicit approval path.
+        // 不透明命令语法使权限管线进入显式审批。
+        let args = json!({"command": "echo approved > approval-marker; echo done", "cwd": new, "title": "Write one marker"});
+        let shell = resolved
+            .definitions
+            .iter()
+            .find(|entry| entry.descriptor.id == "shell_command")
+            .unwrap();
+        bridge
+            .invoke_definition(shell, args, PermissionTexts::default(), context)
+            .await
+    });
+    let pending = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Some(approval) = questions.list_pending().unwrap().into_iter().next() {
+                break approval;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shell must reach production approval");
+    assert_eq!(pending.tool_name, "shell_command");
+    changed.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        questions
+            .reply(&pending.id, vec![vec![APPROVAL_ALLOW_LABEL.into()]])
+            .unwrap()
+    );
+    assert_eq!(
+        call.await.unwrap().unwrap_err(),
+        "stale directory after approval"
+    );
+    assert!(!old.join("approval-marker").exists());
+    assert!(!temp.path().join("new/approval-marker").exists());
+}
+
 /// Rejects the old frozen closure after a real refresh while preserving fresh and ordinary calls.
 /// 真实刷新后拒绝旧冻结闭包，并保留新冻结及普通调用。
 /// No parameters; the real parent closes before the critical stale-call assertion.

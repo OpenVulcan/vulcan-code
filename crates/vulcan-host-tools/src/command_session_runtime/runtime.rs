@@ -48,7 +48,17 @@ impl CommandSessionRuntime {
     /// 启动一条宿主管理命令会话并返回其初始快照。
     pub async fn start_session(
         self: &Arc<Self>,
+        request: CommandSessionStartRequest,
+    ) -> Result<CommandSessionSnapshot, String> {
+        self.start_session_checked(request, || Ok(())).await
+    }
+
+    /// Runs the caller's directory check before submitting the start frame to the terminal host.
+    /// 向终端宿主提交启动帧前运行调用方的目录检查。
+    pub async fn start_session_checked(
+        self: &Arc<Self>,
         mut request: CommandSessionStartRequest,
+        check: impl FnOnce() -> Result<(), String>,
     ) -> Result<CommandSessionSnapshot, String> {
         // cwd crosses both the child-process and snapshot boundaries, so it must use one standard native spelling.
         // cwd 同时跨越子进程与快照边界，因此必须统一使用标准原生写法。
@@ -58,7 +68,7 @@ impl CommandSessionRuntime {
         request.launcher_program =
             vulcan_runtime_assets::native_host_path_text(&request.launcher_program);
         match request.backend {
-            CommandSessionBackend::Pty => self.start_pty_session(request).await,
+            CommandSessionBackend::Pty => self.start_pty_session(request, check).await,
         }
     }
 
@@ -67,8 +77,9 @@ impl CommandSessionRuntime {
     async fn start_pty_session(
         self: &Arc<Self>,
         request: CommandSessionStartRequest,
+        check: impl FnOnce() -> Result<(), String>,
     ) -> Result<CommandSessionSnapshot, String> {
-        let connection = crate::terminal_host_client::spawn_terminal_host(
+        let connection = crate::terminal_host_client::spawn_terminal_host_checked(
             crate::terminal_host_protocol::TerminalHostStartRequest {
                 program: request.launcher_program.clone(),
                 args: request.launcher_args.clone(),
@@ -78,6 +89,7 @@ impl CommandSessionRuntime {
             },
             &request.path_prefixes,
             &request.environment,
+            check,
         )
         .await?;
 

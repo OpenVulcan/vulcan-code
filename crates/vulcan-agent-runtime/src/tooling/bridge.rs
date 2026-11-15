@@ -115,11 +115,25 @@ pub fn build_vulcan_tools_manager(
     // Physical native commands retain the filesystem backing their execution workspace before tools
     // are exposed. Do not allow a subsequent cwd override to escape a detached volume.
     // 在暴露工具前固定其执行工作区对应的文件系统，避免随后以 cwd 覆盖绕过被卸载的卷。
-    let shell_workspace_volume = workspace_root
-        .as_deref()
-        .filter(|_| project_shell_guard.is_none())
-        .filter(|_| host_project_id.is_some())
-        .map(vulcan_host_tools::project_directory::project_volume_identity);
+    let project_shell_guard = project_shell_guard.or_else(|| {
+        // Direct host paths still retain the volume observed when the tool manager was built.
+        // 直接宿主路径仍保留创建工具管理器时观测到的卷标识。
+        let root = workspace_root
+            .clone()
+            .filter(|_| host_project_id.is_some())?;
+        let volume = vulcan_host_tools::project_directory::project_volume_identity(&root);
+        Some(ProjectShellGuard(Arc::new(move || {
+            use crate::tooling::native::shell_command::shell_directory_error;
+            let expected_volume = volume
+                .as_ref()
+                .map_err(|error| shell_directory_error(error.clone()))?;
+            vulcan_host_tools::project_directory::require_bound_project_directory(
+                &root,
+                expected_volume.as_deref(),
+            )
+            .map_err(shell_directory_error)
+        })))
+    });
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
     let vmm_effective = vulcan_vmm::VmmEffectiveConfig::resolve(
@@ -195,9 +209,6 @@ pub fn build_vulcan_tools_manager(
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
-        // Shell commands and terminal starts can set their own cwd; retain the workspace volume.
-        // Shell 命令和终端启动可设置各自 cwd，因此需保留工作区卷。
-        let shell_volume_for_context = shell_workspace_volume.clone();
         // Retain the exact stream's live guard until the invocation runs after permission handling.
         // 将精确流的实时守卫留到权限处理后的实际调用。
         let project_shell_guard_for_context = project_shell_guard.clone();
@@ -226,7 +237,6 @@ pub fn build_vulcan_tools_manager(
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
-                let shell_volume = shell_volume_for_context.clone();
                 // This guard owns the binding captured by the manager that produced the invocation.
                 // 此守卫持有产生该调用的工具管理器所捕获的绑定。
                 let project_shell_guard = project_shell_guard_for_context.clone();
@@ -246,23 +256,6 @@ pub fn build_vulcan_tools_manager(
                 let session_vmm = session_vmm_for_context.clone();
                 let native_browser_runtime = native_browser_runtime_for_context.clone();
                 Box::pin(async move {
-                    if tool_id == "shell_command"
-                        || (tool_id == "terminal_session"
-                            && args.get("action").and_then(serde_json::Value::as_str)
-                                == Some("start"))
-                    {
-                        if let Some(guard) = project_shell_guard {
-                            (guard.0)()?;
-                        } else if let (Some(root), Some(volume)) =
-                            (workspace_root.as_deref(), shell_volume)
-                        {
-                            vulcan_host_tools::project_directory::require_bound_project_directory(
-                                root,
-                                volume.map_err(crate::tooling::native::shell_command::shell_directory_error)?.as_deref(),
-                            )
-                            .map_err(crate::tooling::native::shell_command::shell_directory_error)?;
-                        }
-                    }
                     catalog
                         .invoke(
                             &tool_id,
@@ -273,6 +266,7 @@ pub fn build_vulcan_tools_manager(
                                 host_project_id,
                                 spill_root: None,
                                 workspace_root,
+                                project_shell_guard,
                                 controller_runtime,
                                 goal_runtime,
                                 environment,

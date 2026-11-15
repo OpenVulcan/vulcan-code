@@ -386,6 +386,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     let owner_session_id = Uuid::from_u128(0x7001);
     let start_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "start",
@@ -425,6 +426,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     // immediateSend 验证普通 LF 文本提交会作为调用方编写的输入被接受。
     let immediate_send = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "send",
@@ -467,6 +469,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     // immediateRead 验证相同逻辑换行已提交命令，而不是进入续行模式。
     let immediate_read = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "read",
@@ -511,6 +514,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     // literalResult 等待真实输出，且不要求宿主生成或隐藏 shell 语法。
     let literal_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "send",
@@ -578,6 +582,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
 
     let followup_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "send",
@@ -629,6 +634,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
 
     let _ = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "stop",
@@ -669,6 +675,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
     let foreign_session_id = Uuid::from_u128(0x7102);
     let start_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(owner_session_id),
             ..test_native_request(json!({
@@ -688,6 +695,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
 
     for action in ["read", "snapshot", "stop"] {
         tool.invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(foreign_session_id),
             ..test_native_request(json!({
@@ -703,6 +711,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
     // ownerSnapshot 证明被拒绝的外部停止没有影响拥有者会话的运行状态。
     let owner_snapshot = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(owner_session_id),
             ..test_native_request(json!({
@@ -722,6 +731,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
 
     let stop_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(owner_session_id),
             ..test_native_request(json!({

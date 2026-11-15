@@ -79,6 +79,7 @@ fn test_rtk_disabled() -> crate::provider_config::PersistedRtkConfiguration {
 /// 构建一条仅变更参数的原生工具执行请求。
 pub(crate) fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
     NativeToolExecutionRequest {
+        project_shell_guard: None,
         invocation_context: None,
         arguments,
         session_id: None,

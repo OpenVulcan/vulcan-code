@@ -248,6 +248,17 @@ pub async fn spawn_terminal_host(
     path_prefixes: &[PathBuf],
     environment: &[(String, String)],
 ) -> Result<TerminalHostConnection, String> {
+    spawn_terminal_host_checked(request, path_prefixes, environment, || Ok(())).await
+}
+
+/// Starts the PTY only after `check` approves the start frame; an error drops the waiting helper.
+/// 仅当 `check` 放行启动帧时启动 PTY；出错时释放正在等待命令的辅助进程。
+pub(crate) async fn spawn_terminal_host_checked(
+    request: TerminalHostStartRequest,
+    path_prefixes: &[PathBuf],
+    environment: &[(String, String)],
+    check: impl FnOnce() -> Result<(), String>,
+) -> Result<TerminalHostConnection, String> {
     let host_path = resolve_terminal_host_path()?;
     let mut command =
         new_background_tokio_command(crate::runtime_assets::native_host_path(&host_path));
@@ -289,6 +300,7 @@ pub async fn spawn_terminal_host(
     })?;
     let start_payload = encode_terminal_host_json(&request)
         .map_err(|error| format!("Failed to encode terminal-host start request: {error}"))?;
+    check()?;
     timeout(
         TERMINAL_HOST_CONTROL_WRITE_TIMEOUT,
         write_terminal_host_frame_async(
