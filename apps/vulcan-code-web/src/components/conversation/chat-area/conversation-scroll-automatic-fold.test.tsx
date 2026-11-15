@@ -2,13 +2,12 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { ConversationScrollSnapshot } from "../chat-area-scroll";
 import { dispatchConversationAutomaticFold } from "../conversation-layout-events";
-import { useConversationScrollController } from "./conversation-scroll-controller";
+import { CONVERSATION_TAIL_RESERVE_MAX_SHARE, useConversationScrollController } from "./conversation-scroll-controller";
 
 // A followed tail must keep its page height when a folded tool batch is replaced by a shorter one:
-// the automatic fold fills the shrinkage with the tail reserve and the next batch consumes it.
-// 锁底尾部在折叠的工具批次被更短批次替换时必须保持页面高度：自动折叠用尾部预留填补收缩，下一批次消耗预留。
+// the bounded tail reserve absorbs shrinkage and the next batch consumes it.
+// 锁底尾部在折叠的工具批次被更短批次替换时必须保持页面高度：尾部预留在上限内吸收收缩，下一批次消耗预留。
 it.each([
   "announced fold",
   "unannounced running tool replacement",
@@ -35,7 +34,9 @@ it.each([
   // contentHeight is the synthetic timeline height; the viewport is 500px tall and starts at the bottom.
   // contentHeight 是合成时间线高度；视口高 500px 且从底部开始。
   let contentHeight = 2000;
-  const saved = new Map<string, ConversationScrollSnapshot>();
+  // Observe ownership directly during growth and manual scrolling.
+  // 直接观察增长和手动滚动时的尾部跟随状态。
+  const onFollowTailChange = vi.fn();
   // Harness mounts the real controller over a transcript with a timeline and a tail reserve.
   // Harness 在带有时间线与尾部预留的转录上挂载真实控制器。
   function Harness() {
@@ -43,9 +44,7 @@ it.each([
     const controller = useConversationScrollController({
       active: true, surfaceId: "auto-fold", scrollRef,
       holdRunningTailHeight: change === "unannounced running tool replacement",
-      readSnapshot: (id) => saved.get(id) ?? null,
-      writeSnapshot: (id, snapshot) => { saved.set(id, snapshot); },
-      onFollowTailChange: () => {},
+      onFollowTailChange,
     });
     return <div data-conversation-surface-id="auto-fold" onScroll={controller.handleScroll} ref={scrollRef}>
       <div className="vk-transcript-inner"><div className="vk-timeline"><section data-tool-run="" /></div><div className="vk-transcript-tail" /></div>
@@ -74,13 +73,17 @@ it.each([
 
     // A tall running replacement can exceed the manual fold budget without sending a fold event.
     // 活动工具替换的收缩量可超过手动折叠预算，且无需发出折叠事件。
-    const shrink = change === "announced fold" ? 160 : 350;
+    const shrink = change === "announced fold" ? 160 : 1_100;
+    // Retain only up to the viewport budget, even when the tool was taller than the viewport.
+    // 即使工具卡高于视口，尾部预留也仅使用视口预算。
+    const retained = Math.min(shrink, element.clientHeight * CONVERSATION_TAIL_RESERVE_MAX_SHARE);
+    const retainedPageHeight = before - shrink + retained;
     if (change === "announced fold") dispatchConversationAutomaticFold(timeline.querySelector("[data-tool-run]")!);
     contentHeight -= shrink;
     element.scrollTop = element.scrollHeight - element.clientHeight;
     notify();
-    expect(pageHeight()).toBe(before);
-    expect(element.scrollTop).toBe(before - element.clientHeight);
+    expect(pageHeight()).toBe(retainedPageHeight);
+    expect(element.scrollTop).toBe(retainedPageHeight - element.clientHeight);
     // The fold window closes before the next batch arrives, so the batch is measured as ordinary followed growth.
     // 折叠窗口在下一批次到达前关闭，使该批次按普通锁底增长计量。
     await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
@@ -89,14 +92,14 @@ it.each([
     // 下一批两个工具出现，增长少于折叠收缩的量：页面仍保持高度。
     contentHeight += 90;
     notify();
-    expect(pageHeight()).toBe(before);
+    expect(pageHeight()).toBe(retainedPageHeight);
 
     // Content beyond the earlier height consumes the rest of the reserve, so the page grows only by the excess.
     // 超出原高度的内容消耗剩余预留，使页面只按超出部分增长。
-    contentHeight += shrink - 90 + 30;
+    contentHeight += retained - 90 + 30;
     notify();
     expect(reserveHeight()).toBe(0);
-    expect(pageHeight()).toBe(before + 30);
+    expect(pageHeight()).toBe(retainedPageHeight + 30);
 
     // A leaf assistant text update has no ChatArea commit. Resize delivery alone must follow it before paint.
     // 助手正文的叶子更新不提交 ChatArea。仅派发尺寸变化也必须在绘制前跟随。
@@ -112,7 +115,7 @@ it.each([
     contentHeight += 60;
     notify();
     expect(element.scrollTop).toBe(readingTop);
-    expect(saved.get("auto-fold")?.followTail).toBe(false);
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
   } finally {
     await React.act(async () => root.unmount());
     host.remove();

@@ -2,7 +2,6 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { ConversationScrollSnapshot } from "../chat-area-scroll";
 import { useConversationScrollController, type ConversationScrollController } from "./conversation-scroll-controller";
 
 // Exercise submission and leaf tool replacement before the browser delivers its queued scroll event.
@@ -25,9 +24,6 @@ it.each([
     return frameId;
   });
   vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
-  // Keep the saved surface and controller observable through their production interfaces.
-  // 通过生产接口观察已保存界面和控制器。
-  const saved = new Map<string, ConversationScrollSnapshot>();
   // Capture the mounted controller without adding a second scroll owner.
   // 捕获已挂载控制器，不增加第二个滚动所有者。
   const control: { current: ConversationScrollController | null } = { current: null };
@@ -40,12 +36,10 @@ it.each([
     // Share the exact mounted surface with the controller.
     // 与控制器共享精确挂载的界面。
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
-    // Delegate scroll ownership and persistence to the production hook.
-    // 将滚动所有权和持久化委派给生产钩子。
+    // Delegate scroll ownership to the production hook.
+    // 将滚动所有权委派给生产钩子。
     const controller = useConversationScrollController({
       active: true, surfaceId: "conversation", scrollRef,
-      readSnapshot: (id) => saved.get(id) ?? null,
-      writeSnapshot: (id, snapshot) => { saved.set(id, snapshot); },
       onFollowTailChange,
     });
     React.useLayoutEffect(() => { control.current = controller; }, [controller]);
@@ -79,11 +73,10 @@ it.each([
       controller.captureAndScheduleLayoutRestore();
       Object.defineProperty(element, "scrollHeight", { configurable: true, value: bottom + 500 });
       element.scrollTop = Math.min(element.scrollTop, bottom);
-      controller.scheduleStoredRestore();
+      controller.syncTail();
       element.dispatchEvent(new Event("scroll"));
       for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
       expect(element.scrollTop).toBe(bottom);
-      expect(saved.get("conversation")?.followTail).toBe(true);
     }
     controller.captureAndScheduleLayoutRestore();
     // Model the browser clamp caused by clearing a multiline composer, before its scroll event is delivered.
@@ -94,7 +87,7 @@ it.each([
     // 在原生事件之前插入已发送提示词，使旧截断位置不再等于当前最大位置。
     Object.defineProperty(element, "scrollHeight", { configurable: true, value: nextBottom + 500 });
     if (source === "composer") {
-      controller.scheduleStoredRestore();
+      controller.syncTail();
     } else {
       // Leaf tool subscriptions can replace DOM without committing ChatArea or changing final content height.
       // 叶子工具订阅可以替换 DOM，而不提交 ChatArea，也不改变最终内容高度。
@@ -104,30 +97,29 @@ it.each([
       await Promise.resolve();
     }
     element.dispatchEvent(new Event("scroll"));
-    expect(saved.get("conversation")?.followTail).toBe(true);
     expect(onFollowTailChange).not.toHaveBeenCalledWith(false);
     for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
     expect(element.scrollTop).toBe(nextBottom);
 
     // Reader movement must still cancel a scheduled correction instead of being pulled back to the bottom.
     // 阅读者移动仍必须取消待执行校正，不能被拉回底部。
-    controller.scheduleStoredRestore();
+    controller.syncTail();
     element.scrollTop = nextBottom - 200;
     element.dispatchEvent(new Event("scroll"));
-    expect(saved.get("conversation")?.followTail).toBe(false);
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
     expect(frames.size).toBe(0);
     // Typing and submitting while reading history must preserve that explicit reader ownership.
     // 阅读历史时输入及发送必须保留明确的阅读位置所有权。
     controller.captureAndScheduleLayoutRestore();
     Object.defineProperty(element, "scrollHeight", { configurable: true, value: nextBottom + 800 });
-    controller.scheduleStoredRestore();
+    controller.syncTail();
     // Tool replacement while reading history must not let the mutation observer reacquire the viewport.
     // 阅读历史时替换工具，不得让修改观察器重新取得视口所有权。
     element.querySelector(".vk-transcript-inner")!.replaceChildren(document.createElement("div"));
     await Promise.resolve();
     for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
     expect(element.scrollTop).toBe(nextBottom - 200);
-    expect(saved.get("conversation")?.followTail).toBe(false);
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
   } finally {
     await React.act(async () => root.unmount());
     host.remove();

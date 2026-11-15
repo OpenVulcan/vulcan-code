@@ -63,9 +63,9 @@ export function useConversationTurnWindow(
   // Observer support is also checked in the geometry-free rendering environment used by existing tests.
   // 既有测试使用无几何布局的渲染环境，也通过浏览器能力检查处理。
   const enabled = Boolean(scrollRef && typeof IntersectionObserver !== "undefined");
-  // A mounted set keeps only in-range bodies and any body owning focus or selection.
-  // 挂载集合只保留缓冲区内正文及拥有焦点或选区的正文。
-  const [mounted, setMounted] = React.useState<ReadonlySet<string> | null>(() => enabled ? new Set() : null);
+  // Mount the latest turn before the first observer delivery so entering a session has visible content.
+  // 在观察器首次派发前挂载最新回合，使进入会话时已有可见内容。
+  const [mounted, setMounted] = React.useState<ReadonlySet<string> | null>(() => enabled ? new Set(rowKeys.slice(-1)) : null);
   // Keep observer state outside React so reading geometry does not schedule a render.
   // 将观察器状态置于 React 外，避免读取几何时触发渲染。
   const mountedRef = React.useRef(mounted);

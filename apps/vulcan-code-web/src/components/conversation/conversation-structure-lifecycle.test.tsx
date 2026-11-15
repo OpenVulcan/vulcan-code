@@ -91,7 +91,7 @@ it("evicts offscreen bodies, retains measured shells, and remounts the current p
   const newShell = host.querySelector<HTMLElement>('[data-conversation-turn-shell="live"]')!;
   vi.spyOn(oldShell, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 200, 731));
   expect(oldShell.style.height).toBe(`${ESTIMATED_TURN_HEIGHT_PX}px`);
-  expect(host.querySelectorAll("p")).toHaveLength(0);
+  expect(host.textContent).toBe("live:false");
   expect(observer.observe).toHaveBeenCalledWith(oldShell);
   // Each synthetic intersection is limited to the fields consumed by the observer.
   // 每个合成相交事件只提供观察器使用的字段。

@@ -2,7 +2,6 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { ConversationScrollSnapshot } from "../chat-area-scroll";
 import {
   CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX,
   useConversationScrollController,
@@ -13,11 +12,8 @@ import {
 // 通过生产控制器定位一个提示词锚点，并释放尾部跟随。
 it("moves a mounted anchor near the viewport top and hands ownership to the reader", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  // saved starts tail-owned so the reveal must publish an explicit ownership change.
-  // saved 以尾部跟随开始，因此定位必须发布显式所有权变化。
-  const saved = new Map<string, ConversationScrollSnapshot>([
-    ["surface", { anchorKey: null, anchorTop: 0, scrollTop: 0, followTail: true }],
-  ]);
+  // onFollowTailChange observes the transition from the initial tail to reader ownership.
+  // onFollowTailChange 观察从初始尾部跟随到阅读状态的切换。
   const onFollowTailChange = vi.fn();
   let controller: ConversationScrollController | null = null;
   // Harness mounts one scrollport with a prompt anchor whose geometry is supplied by the test.
@@ -28,8 +24,6 @@ it("moves a mounted anchor near the viewport top and hands ownership to the read
       active: true,
       surfaceId: "surface",
       scrollRef,
-      readSnapshot: (id) => saved.get(id) ?? null,
-      writeSnapshot: (id, snapshot) => { saved.set(id, snapshot); },
       onFollowTailChange,
     });
     return (
@@ -63,7 +57,6 @@ it("moves a mounted anchor near the viewport top and hands ownership to the read
     await React.act(async () => controller!.revealAnchor(anchor, "auto"));
     expect(scrollport.scrollTop).toBe(startTop + (-1400 - 100) - CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX);
     expect(onFollowTailChange).toHaveBeenCalledWith(false);
-    expect(saved.get("surface")).toMatchObject({ followTail: false, scrollTop: scrollport.scrollTop });
   } finally {
     await React.act(async () => root.unmount());
     host.remove();

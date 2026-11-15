@@ -306,12 +306,11 @@ export function ChatArea(props: ChatAreaProps) {
     // surfaceIds 以全部存活会话标识初始化。
     return new Set(props.workbench.conversations.map((conversation) => conversation.id));
   }, [props.workbench.conversations]);
-  // Surface layout memory owns scroll and expansion restore records.
-  // 界面布局记忆管理滚动与展开恢复记录。
+  // Surface layout memory retains transcript expansion choices.
+  // 界面布局记忆保留转录展开状态。
   const {
-    read: readConversationSurfaceLayoutState,
+    read: readSurfaceExpandedState,
     writeExpandedState: writeSurfaceExpandedState,
-    writeScroll: writeSurfaceScrollSnapshot,
   } = useConversationSurfaceLayoutMemory({ liveSurfaceIds: liveLayoutSurfaceIds });
   const surfaceConversation = selectedConversation;
   // eventWindowOwnerReady permits rendering only when the selected durable session owns the V1 snapshot.
@@ -437,55 +436,27 @@ export function ChatArea(props: ChatAreaProps) {
   // conversationStreamSignature tracks transcript structure without rescanning cumulative streamed bodies.
   // conversationStreamSignature 跟踪转录结构，且不重复扫描累计流式正文。
   const conversationStreamSignature = eventWindowFacts.streamSignature;
-  // readConversationScrollSnapshot returns the exact saved semantic viewport for one surface.
-  // readConversationScrollSnapshot 返回单个界面精确保存的语义视口。
-  const readConversationScrollSnapshot = React.useCallback((surfaceId: string) => (
-    readConversationSurfaceLayoutState(surfaceId)?.scroll ?? null
-  ), [readConversationSurfaceLayoutState]);
   // handleConversationFollowTailChange synchronizes the controller ownership state with the visible affordance.
   // handleConversationFollowTailChange 将控制器所有权状态与可见操作入口同步。
   const handleConversationFollowTailChange = React.useCallback((followTail: boolean) => {
     setIsAtConversationBottom(followTail);
   }, []);
-  // conversationScrollController is the sole owner of main-transcript scroll position and surface restoration.
-  // conversationScrollController 是主转录滚动位置与界面恢复的唯一所有者。
+  // conversationScrollController owns main-transcript scrolling and moves each incoming session to the tail.
+  // conversationScrollController 管理主转录滚动，并把每次切入的会话定位到尾部。
   const conversationScrollController = useConversationScrollController({
     active: Boolean(activeSurfaceConversationId && !isEmptyConversation && !showConversationLoadingOnly),
     holdRunningTailHeight: isConversationRunning,
     onFollowTailChange: handleConversationFollowTailChange,
-    readSnapshot: readConversationScrollSnapshot,
     scrollRef: workspaceRef,
     surfaceId: activeSurfaceConversationId ?? null,
-    writeSnapshot: writeSurfaceScrollSnapshot,
   });
 
-  // A structural stream change keeps explicit tail ownership or restores the reader's semantic anchor.
-  // 结构性流变化会保持显式尾部所有权，或恢复阅读者的语义锚点。
+  // Stream and layout changes align the viewport only while it follows the latest content.
+  // 流式内容和布局变化只在视口跟随最新内容时对齐底部。
   React.useLayoutEffect(() => {
-    conversationScrollController.scheduleStoredRestore();
-  }, [conversationScrollController, conversationStreamSignature]);
-
-  // Adding or removing the timeline-tail status follows the current semantic scroll ownership.
-  // 在时间线尾部增删状态行时遵循当前语义滚动所有权。
-  React.useLayoutEffect(() => {
-    conversationScrollController.scheduleStoredRestore();
-  }, [conversationScrollController, tailStatusVisible]);
-
-  // A thinking-filter or external layout key change is restored from the latest pre-change semantic snapshot.
-  // 思考过滤或外部布局键变化会从最近一次变化前语义快照恢复。
-  React.useLayoutEffect(() => {
-    conversationScrollController.scheduleStoredRestore();
-  }, [conversationScrollController, props.layoutStabilityKey, reasoningDisplaySignature]);
-
-  // handleOpenSubagentPanelFromTimeline preserves the current scroll before opening a child transcript.
-  // handleOpenSubagentPanelFromTimeline 在打开子代理转录前保留当前滚动位置。
-  const handleOpenSubagentPanelFromTimeline = React.useCallback((
-    parentConversationId: string,
-    taskId: string,
-  ) => {
-    conversationScrollController.remember();
-    return props.onOpenSubagentPanel(parentConversationId, taskId);
-  }, [conversationScrollController, props.onOpenSubagentPanel]);
+    conversationScrollController.syncTail();
+  }, [composerDockHeight, conversationScrollController, conversationStreamSignature,
+    props.layoutStabilityKey, reasoningDisplaySignature, tailStatusVisible]);
   // revealFindMatch brings a find match into view without smooth scrolling, so stepping through matches keeps up.
   // revealFindMatch 不经平滑滚动地显示查找匹配，使逐个浏览匹配时跟得上。
   const revealFindMatch = React.useCallback((range: Range) => {
@@ -508,12 +479,6 @@ export function ChatArea(props: ChatAreaProps) {
     conversationScrollController.captureAndScheduleLayoutRestore();
     setComposerDockHeight((current) => current === height ? current : height);
   }, [conversationScrollController]);
-
-  // Composer geometry uses the same single-frame semantic restoration path as transcript reflow.
-  // 输入区几何与转录重排使用相同的单帧语义恢复路径。
-  React.useLayoutEffect(() => {
-    conversationScrollController.scheduleStoredRestore();
-  }, [composerDockHeight, conversationScrollController]);
 
   const {
     handlePlanArtifactCancel,
@@ -559,11 +524,6 @@ export function ChatArea(props: ChatAreaProps) {
       onSubmitPrompt={handleComposerSubmit}
     />
   );
-  // activeSurfaceLayoutState reuses one surface-scoped layout snapshot for this render.
-  // activeSurfaceLayoutState 在本次渲染中复用一个界面级布局快照。
-  const activeSurfaceLayoutState = activeSurfaceConversationId
-    ? readConversationSurfaceLayoutState(activeSurfaceConversationId)
-    : null;
   // handleExpandedStateChange stores branch process, prompt, and tool-card expansion state per session.
   // handleExpandedStateChange 按会话保存分支处理过程、提示词与工具卡展开状态。
   const handleExpandedStateChange = React.useCallback((
@@ -579,8 +539,8 @@ export function ChatArea(props: ChatAreaProps) {
     conversations: props.workbench.conversations,
     navigation: subagentNavigation,
     onSelectConversation: props.onSelectConversation,
-    onOpenSubagentPanel: handleOpenSubagentPanelFromTimeline,
-  }), [handleOpenSubagentPanelFromTimeline, props.onSelectConversation, props.workbench.conversations, subagentNavigation]);
+    onOpenSubagentPanel: props.onOpenSubagentPanel,
+  }), [props.onOpenSubagentPanel, props.onSelectConversation, props.workbench.conversations, subagentNavigation]);
   const continuationFooterVisible = Boolean(selectedConversation
     && continuationCandidate?.session_id === selectedConversation.id
     && !conversationIsRunning(selectedConversation)
@@ -617,7 +577,7 @@ export function ChatArea(props: ChatAreaProps) {
           footer={continuationFooter}
           onCopyText={props.onCopyText}
           onExpandedStateChange={handleExpandedStateChange}
-          onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
+          onOpenSubagentPanel={props.onOpenSubagentPanel}
           onRootInputGenerationAction={handleRootInputGenerationAction}
           optimisticUserInput={optimisticUserInput}
           onPlanArtifactCancel={handlePlanArtifactCancel}
@@ -627,7 +587,7 @@ export function ChatArea(props: ChatAreaProps) {
           onRevealPromptAnchor={conversationScrollController.revealAnchor}
           onScrollStateChange={conversationScrollController.handleScroll}
           pendingPlanArtifact={pendingPlanArtifact}
-          initialExpandedState={activeSurfaceLayoutState?.expandedState ?? null}
+          initialExpandedState={readSurfaceExpandedState(activeSurfaceConversationId ?? null)}
           reasoningDisplayMode={thinkingDisplayMode}
           scrollRef={workspaceRef}
           sessionId={selectedConversation.id}

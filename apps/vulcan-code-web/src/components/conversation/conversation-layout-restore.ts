@@ -1,5 +1,3 @@
-import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
-
 // ConversationSurfaceExpandedState stores UI expansion choices for one transcript surface.
 // ConversationSurfaceExpandedState 保存单个转录界面的 UI 展开选择。
 export interface ConversationSurfaceExpandedState {
@@ -25,17 +23,6 @@ export interface ConversationMeasuredCollapseMemory {
   expanded: boolean;
 }
 
-// ConversationSurfaceLayoutRestoreState stores all runtime layout restore data for one surface.
-// ConversationSurfaceLayoutRestoreState 保存单个界面的全部运行期布局恢复数据。
-export interface ConversationSurfaceLayoutRestoreState {
-  // Latest scroll restoration point for this surface.
-  // 当前界面的最近滚动恢复点。
-  scroll: ConversationScrollSnapshot;
-  // Runtime-only expansion choices restored before stable Turn rendering.
-  // 稳定 Turn 渲染前恢复的运行期展开选择。
-  expandedState: ConversationSurfaceExpandedState;
-}
-
 // createEmptyConversationSurfaceExpandedState returns a neutral expansion state.
 // createEmptyConversationSurfaceExpandedState 返回一个空的展开状态。
 export function createEmptyConversationSurfaceExpandedState(): ConversationSurfaceExpandedState {
@@ -44,19 +31,5 @@ export function createEmptyConversationSurfaceExpandedState(): ConversationSurfa
     expandedUserPromptIds: [],
     measuredCollapseById: {},
     processCollapsedByKey: {},
-  };
-}
-
-// createConversationSurfaceLayoutRestoreState returns a default per-surface restore record.
-// createConversationSurfaceLayoutRestoreState 返回默认的单界面恢复记录。
-export function createConversationSurfaceLayoutRestoreState(): ConversationSurfaceLayoutRestoreState {
-  return {
-    expandedState: createEmptyConversationSurfaceExpandedState(),
-    scroll: {
-      anchorKey: null,
-      anchorTop: 0,
-      followTail: true,
-      scrollTop: 0,
-    },
   };
 }

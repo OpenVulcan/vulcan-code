@@ -17,7 +17,6 @@ import {
   Square,
   X,
 } from "lucide-react";
-import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { PageNotice } from "@/components/page/page-feedback";
@@ -355,9 +354,6 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
   // tabRefs stores DOM nodes for quick scroll-to-tab navigation.
   // tabRefs 保存用于快速滚动定位页签的 DOM 节点。
   const tabRefs = React.useRef(new Map<string, HTMLDivElement>());
-  // subagentScrollSnapshots stores semantic viewport state for every opened child transcript.
-  // subagentScrollSnapshots 为每个已打开的子转录保存语义视口状态。
-  const subagentScrollSnapshots = React.useRef(new Map<string, ConversationScrollSnapshot>());
   // subagentExpandedStates stores complete expansion memory for every opened child transcript.
   // subagentExpandedStates 为每个已打开的子转录保存完整展开记忆。
   const subagentExpandedStates = React.useRef(new Map<string, ConversationSurfaceExpandedState>());
@@ -410,7 +406,6 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
                   .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
               }
               if (tab.kind === "subagent" && tab.subagentTaskId) {
-                subagentScrollSnapshots.current.delete(tab.subagentTaskId);
                 subagentExpandedStates.current.delete(tab.subagentTaskId);
               }
               props.onCloseContextTab(tab.id);
@@ -422,7 +417,6 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
               activeTab={activeTab}
               props={props}
               subagentExpandedStates={subagentExpandedStates}
-              subagentScrollSnapshots={subagentScrollSnapshots}
             />
           </WorkspaceContextTabBoundary>
         </>
@@ -811,9 +805,6 @@ function WorkspaceContextTabContent(args: {
   // Parent panel props forwarded to content hosts.
   // 转发给内容宿主的父面板属性。
   props: WorkspaceContextPanelProps;
-  // Semantic scroll memory shared by every child-transcript tab in this mounted panel.
-  // 当前已挂载面板内所有子转录页签共享的语义滚动记忆。
-  subagentScrollSnapshots: React.MutableRefObject<Map<string, ConversationScrollSnapshot>>;
   // Expansion memory shared by every child-transcript tab in this mounted panel.
   // 当前已挂载面板内所有子转录页签共享的展开记忆。
   subagentExpandedStates: React.MutableRefObject<Map<string, ConversationSurfaceExpandedState>>;
@@ -912,7 +903,6 @@ function WorkspaceContextTabContent(args: {
           tab={args.activeTab}
           props={args.props}
           expandedStates={args.subagentExpandedStates}
-          scrollSnapshots={args.subagentScrollSnapshots}
         />
       </div>
     );
@@ -948,9 +938,6 @@ function WorkspaceSubagentPanel(args: {
   // Parent context panel props.
   // 父级上下文面板属性。
   props: WorkspaceContextPanelProps;
-  // Semantic viewport state retained across active context-tab unmounts.
-  // 跨活动上下文页签卸载保留的语义视口状态。
-  scrollSnapshots: React.MutableRefObject<Map<string, ConversationScrollSnapshot>>;
   // Expansion state retained across active context-tab unmounts.
   // 跨活动上下文页签卸载保留的展开状态。
   expandedStates: React.MutableRefObject<Map<string, ConversationSurfaceExpandedState>>;
@@ -1092,21 +1079,6 @@ function WorkspaceSubagentPanel(args: {
   const updateTailLock = React.useCallback((locked: boolean) => {
     setTailLocked(locked);
   }, []);
-  // readSubagentScrollSnapshot returns this exact mounted child surface's semantic state.
-  // readSubagentScrollSnapshot 返回当前精确已挂载子界面的语义状态。
-  const readSubagentScrollSnapshot = React.useCallback((surfaceId: string) => (
-    surfaceId === taskId ? args.scrollSnapshots.current.get(surfaceId) ?? null : null
-  ), [args.scrollSnapshots, taskId]);
-  // writeSubagentScrollSnapshot stores semantic state only for the exact mounted child surface.
-  // writeSubagentScrollSnapshot 仅为当前精确已挂载子界面保存语义状态。
-  const writeSubagentScrollSnapshot = React.useCallback((
-    surfaceId: string,
-    snapshot: ConversationScrollSnapshot,
-  ) => {
-    if (surfaceId === taskId) {
-      args.scrollSnapshots.current.set(surfaceId, snapshot);
-    }
-  }, [args.scrollSnapshots, taskId]);
   // writeSubagentExpandedState retains branch process and card expansion choices for this child surface only.
   // writeSubagentExpandedState 仅为当前子界面保留分支处理过程与卡片展开选择。
   const writeSubagentExpandedState = React.useCallback((
@@ -1122,15 +1094,13 @@ function WorkspaceSubagentPanel(args: {
   const subagentScrollController = useConversationScrollController({
     active: Boolean(taskId),
     onFollowTailChange: updateTailLock,
-    readSnapshot: readSubagentScrollSnapshot,
     scrollRef,
     surfaceId: taskId,
-    writeSnapshot: writeSubagentScrollSnapshot,
   });
   // Adding or removing child transient reasoning follows the child transcript's semantic scroll ownership.
   // 增删子智能体临时思考状态时遵循子转录自身的语义滚动所有权。
   React.useLayoutEffect(() => {
-    subagentScrollController.scheduleStoredRestore();
+    subagentScrollController.syncTail();
   }, [subagentScrollController, transientReasoningStatusVisible]);
   // transcriptHasEvents distinguishes a full empty-state failure from a non-blocking refresh warning.
   // transcriptHasEvents 区分完整空状态失败与不阻塞内容的刷新警告。

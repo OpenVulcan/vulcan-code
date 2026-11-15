@@ -1,5 +1,5 @@
-// ConversationScrollSnapshot stores one semantic transcript viewport restoration point.
-// ConversationScrollSnapshot 保存单个转录界面的语义视口恢复点。
+// ConversationScrollSnapshot holds a temporary viewport anchor for a layout change in the active transcript.
+// ConversationScrollSnapshot 为活动转录内的一次布局变化保留临时视口锚点。
 export interface ConversationScrollSnapshot {
   // Stable business-row key visible at the top of the viewport, or null when none is available.
   // 视口顶部可见的稳定业务行键；不可用时为 null。

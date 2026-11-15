@@ -2,7 +2,6 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { ConversationScrollSnapshot } from "../chat-area-scroll";
 import { dispatchConversationLayoutSettled, dispatchConversationLayoutWillChange, dispatchConversationManualViewportInteraction } from "../conversation-layout-events";
 import { useConversationScrollController } from "./conversation-scroll-controller";
 
@@ -32,7 +31,6 @@ it.each(["manual", "automatic", "announced layout"])("preserves bottom ownership
   });
   // Persist the same snapshots that ChatArea consumes and record even transient ownership loss.
   // 持久化 ChatArea 消费的同一份快照，并记录短暂的所有权丢失。
-  const saved = new Map<string, ConversationScrollSnapshot>();
   const ownership = vi.fn();
   // Mount the actual hook around a focusable tool toggle; returns its owned scrollport.
   // 在可聚焦工具按钮外挂载真实钩子；返回其拥有的滚动视口。
@@ -40,8 +38,6 @@ it.each(["manual", "automatic", "announced layout"])("preserves bottom ownership
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
     const controller = useConversationScrollController({
       active: true, surfaceId: "fold-surface", scrollRef,
-      readSnapshot: (id) => saved.get(id) ?? null,
-      writeSnapshot: (id, snapshot) => { saved.set(id, snapshot); },
       onFollowTailChange: ownership,
     });
     return <div data-conversation-surface-id="fold-surface" onScroll={controller.handleScroll} ref={(element) => {
@@ -67,7 +63,7 @@ it.each(["manual", "automatic", "announced layout"])("preserves bottom ownership
     for (const bottoms of [[1100, 1350, 1600], [1400, 900, 600], [450, 1250]]) {
       if (mode === "manual") dispatchConversationManualViewportInteraction();
       else if (mode === "announced layout") dispatchConversationLayoutWillChange();
-      expect(saved.get("fold-surface")?.followTail).toBe(true);
+      expect(ownership).not.toHaveBeenCalledWith(false);
       for (const bottom of bottoms) {
         Object.defineProperty(element, "scrollHeight", { configurable: true, value: bottom + 500 });
         element.scrollTop = Math.min(element.scrollTop, bottom);
@@ -77,7 +73,7 @@ it.each(["manual", "automatic", "announced layout"])("preserves bottom ownership
         for (const notify of resizes) notify();
         for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
         expect(element.scrollTop).toBe(bottom);
-        expect(saved.get("fold-surface")?.followTail).toBe(true);
+        expect(ownership).not.toHaveBeenCalledWith(false);
       }
       dispatchConversationLayoutSettled("fold-surface");
       for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
@@ -88,7 +84,7 @@ it.each(["manual", "automatic", "announced layout"])("preserves bottom ownership
     dispatchConversationManualViewportInteraction();
     element.scrollTop -= 250;
     element.dispatchEvent(new Event("scroll"));
-    expect(saved.get("fold-surface")?.followTail).toBe(false);
+    expect(ownership).toHaveBeenLastCalledWith(false);
     expect(frames.size).toBe(0);
     // Subsequent expansion preserves the reader's position instead of forcing bottom ownership.
     // 后续展开保留阅读位置，而不是强制接管锁底。
@@ -99,7 +95,7 @@ it.each(["manual", "automatic", "announced layout"])("preserves bottom ownership
     dispatchConversationLayoutSettled("fold-surface");
     for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
     expect(element.scrollTop).toBe(readerTop);
-    expect(saved.get("fold-surface")?.followTail).toBe(false);
+    expect(ownership).toHaveBeenLastCalledWith(false);
   } finally {
     await React.act(async () => root.unmount());
     host.remove();

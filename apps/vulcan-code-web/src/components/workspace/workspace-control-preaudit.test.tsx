@@ -27,7 +27,7 @@ vi.mock("@/state/conversation-session-event-window-owner-v1", () => {
   const reader = { subscribe: () => () => undefined, getSnapshot: read, getServerSnapshot: read };
   return { useConversationSessionEventWindowOwnerV1: () => ({ reader, loading: false, error: null }) };
 });
-vi.mock("@/components/conversation/chat-area/conversation-scroll-controller", () => ({ useConversationScrollController: () => ({ scheduleStoredRestore: () => undefined }) }));
+vi.mock("@/components/conversation/chat-area/conversation-scroll-controller", () => ({ useConversationScrollController: () => ({ syncTail: () => undefined }) }));
 vi.mock("@/ui-kit/shell/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("@/components/plugins/dynamic-plugin-mount-panel", () => ({ DynamicPluginMountPanel: () => null }));
 vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));

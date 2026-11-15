@@ -31,18 +31,12 @@ export interface UseConversationScrollControllerOptions {
   // Reports tail ownership changes to the scroll-to-bottom affordance.
   // 向滚动到底部操作入口报告尾部所有权变化。
   onFollowTailChange: (followTail: boolean) => void;
-  // Reads one exact surface snapshot without creating fallback state.
-  // 读取一个精确界面快照且不创建兜底状态。
-  readSnapshot: (surfaceId: string) => ConversationScrollSnapshot | null;
   // Shared transcript scroll element.
   // 共享转录滚动元素。
   scrollRef: React.RefObject<HTMLElement | null>;
   // Stable active conversation or child-task surface identity.
   // 稳定的活动会话或子任务界面身份。
   surfaceId: string | null;
-  // Stores one exact surface snapshot in runtime memory.
-  // 在运行期记忆中保存一个精确界面快照。
-  writeSnapshot: (surfaceId: string, snapshot: ConversationScrollSnapshot) => void;
 }
 
 // ConversationScrollController exposes every authorized transcript scroll mutation.
@@ -57,12 +51,9 @@ export interface ConversationScrollController {
   // Preserves the current anchor across asynchronous history prepend unless the reader moves.
   // 在异步历史前置期间保留当前锚点，除非阅读者发生移动。
   preserveHistoryPrepend: (load: () => Promise<boolean>) => Promise<boolean>;
-  // Stores the current semantic viewport immediately.
-  // 立即保存当前语义视口。
-  remember: () => void;
-  // Restores the latest stored semantic viewport in one cancellable frame.
-  // 在一个可取消帧中恢复最新保存的语义视口。
-  scheduleStoredRestore: () => void;
+  // Keeps a followed viewport aligned with the current bottom after content changes.
+  // 内容变化后将跟随尾部的视口对齐到当前底部。
+  syncTail: () => void;
   // Transfers ownership to tail following and moves to the latest content.
   // 将所有权切换为尾部跟随并移动到最新内容。
   scrollToBottom: (behavior?: ScrollBehavior) => void;
@@ -233,8 +224,8 @@ export function classifyConversationObservedScrollMovement(
   };
 }
 
-// useConversationScrollController owns surface memory, layout anchoring, tail following, and every scrollTop write.
-// useConversationScrollController 统一拥有界面记忆、布局锚定、尾部跟随与全部 scrollTop 写入。
+// useConversationScrollController owns session entry, layout anchoring, tail following, and every scrollTop write.
+// useConversationScrollController 统一处理进入会话、布局锚定、尾部跟随与全部 scrollTop 写入。
 // Parameters: options declares the active surface, DOM owner, memory operations, and tail-state observer.
 // 参数：options 声明活动界面、DOM 所有者、记忆操作与尾部状态观察器。
 // Returns: stable handlers for scroll events, layout changes, history prepend, memory, and tail navigation.
@@ -263,13 +254,8 @@ export function useConversationScrollController(
   // layoutTransactionRef exists only while one manual fold animation owns viewport correction.
   // layoutTransactionRef 仅在单次手动折叠动画持有视口校正时存在。
   const layoutTransactionRef = React.useRef<ConversationLayoutTransaction | null>(null);
-  // surfaceRestoreRef holds a restored reading position until the reader acts, so content that finishes
-  // rendering after a surface switch is re-anchored instead of a temporary bottom clamp adopting the tail.
-  // surfaceRestoreRef 在阅读者操作前保持已恢复的阅读位置，使界面切换后才完成渲染的内容重新锚定，
-  // 而不是由暂时裁剪到的底部接管尾部跟随。
-  const surfaceRestoreRef = React.useRef<ConversationLayoutTransaction | null>(null);
-  // userRevisionRef invalidates asynchronous restores when observed reader movement occurs.
-  // userRevisionRef 在观察到阅读者移动时使异步恢复失效。
+  // userRevisionRef invalidates asynchronous corrections on navigation or reader input.
+  // userRevisionRef 在切换界面或阅读者操作时使异步校正失效。
   const userRevisionRef = React.useRef(0);
   // renderedSurfaceIdRef remembers which business surface currently owns the shared DOM node.
   // renderedSurfaceIdRef 记住当前由哪个业务界面拥有共享 DOM 节点。
@@ -288,9 +274,8 @@ export function useConversationScrollController(
 
   // reconcileTailReserve keeps a manual fold from pulling the content above down to the bottom.
   // reconcileTailReserve 防止手动折叠把上方内容一下子拉到底部。
-  // Automatic reflow can shrink a running transcript without announcing a fold. Preserve the full
-  // followed height so even a tall tool can be replaced without a backward jump.
-  // 会话运行时，自动重排也可能在没有折叠通知的情况下缩短转录。保留完整锁底高度，使高工具卡被替换时也不会回跳。
+  // Bound retained space so a shrinking virtual window cannot leave the followed viewport empty.
+  // 限制尾部预留，避免虚拟窗口收缩后锁底视口只显示空白。
   // Parameters: element is the scrollport of the active surface.
   // 参数：element 是活动界面的滚动视口。
   // Returns: nothing.
@@ -303,24 +288,25 @@ export function useConversationScrollController(
     }
     const current = reserve.offsetHeight;
     const contentHeight = timeline.offsetHeight;
+    // cap limits the reserve to a share of the viewport above the sticky footer.
+    // cap 将预留限制在粘性页脚上方可见视口的一部分。
+    const footer = element.querySelector<HTMLElement>("[data-conversation-scroll-footer]");
+    const visibleArea = Math.max(0, element.clientHeight - (footer?.offsetHeight ?? 0));
+    const cap = Math.floor(visibleArea * CONVERSATION_TAIL_RESERVE_MAX_SHARE);
     let next: number;
     if (followTailRef.current && latestOptionsRef.current.holdRunningTailHeight && !layoutTransactionRef.current) {
-      next = Math.max(0, tailTotalRef.current - contentHeight);
+      next = Math.min(cap, Math.max(0, tailTotalRef.current - contentHeight));
     } else if (foldLimitRef.current !== null) {
-      // visibleArea excludes the sticky footer that covers the bottom of the scrollport.
-      // visibleArea 不含覆盖滚动视口底部的粘性页脚。
-      const footer = element.querySelector<HTMLElement>("[data-conversation-scroll-footer]");
-      const visibleArea = Math.max(0, element.clientHeight - (footer?.offsetHeight ?? 0));
       next = conversationTailReserveHeight(
         foldLimitRef.current,
         contentHeight,
-        Math.floor(visibleArea * CONVERSATION_TAIL_RESERVE_MAX_SHARE),
+        cap,
       );
     } else if (followTailRef.current) {
       // New content consumes the reserve by exactly its own growth, so the followed page keeps its height
       // when a folded tool batch is replaced by a shorter one, and the content above never jumps.
       // 新内容按其自身增长量消耗预留，使折叠的工具批次被更短的批次替换时页面保持高度，上方内容不跳动。
-      next = Math.max(0, Math.min(current, tailTotalRef.current - contentHeight));
+      next = Math.max(0, Math.min(cap, current, tailTotalRef.current - contentHeight));
     } else {
       const onScreen = element.getBoundingClientRect().bottom - reserve.getBoundingClientRect().top;
       next = Math.max(0, Math.min(current, Math.ceil(onScreen)));
@@ -359,35 +345,6 @@ export function useConversationScrollController(
     }
     followTailRef.current = followTail;
     latestOptionsRef.current.onFollowTailChange(followTail);
-  }, []);
-
-  // writeCurrentSnapshot stores the ledger's current semantic position for the rendered surface.
-  // writeCurrentSnapshot 为当前已渲染界面保存账本中的语义位置。
-  // Parameters: element is the current scrollport and surfaceId is its exact business owner.
-  // 参数：element 是当前滚动视口；surfaceId 是其精确业务所有者。
-  // Returns: the immutable snapshot that was stored.
-  // 返回值：已保存的不可变快照。
-  const writeCurrentSnapshot = React.useCallback((
-    element: HTMLElement,
-    surfaceId: string,
-  ): ConversationScrollSnapshot => {
-    // An archived anchor can arrive after the retained event window. Keep its original offset until its body mounts.
-    // 历史锚点可能晚于保留的事件窗口到达。正文挂载前保留其原始偏移。
-    const restore = surfaceRestoreRef.current;
-    if (!followTailRef.current && restore?.surfaceId === surfaceId
-      && restore.userRevision === userRevisionRef.current && restore.snapshot.anchorKey) {
-      // A real body, rather than a provisional shell, can represent the saved offset.
-      // 只有真实正文能表示保存的偏移，占位外壳不能。
-      const mountedRows = element.querySelectorAll<HTMLElement>("[data-conversation-row-key]:not([data-conversation-turn-placeholder])");
-      if (!Array.from(mountedRows).some((row) => row.dataset.conversationRowKey === restore.snapshot.anchorKey)) {
-        return restore.snapshot;
-      }
-    }
-    // snapshot captures the exact DOM position under the current ownership ledger.
-    // snapshot 在当前所有权账本下捕获精确 DOM 位置。
-    const snapshot = captureConversationScrollSnapshot(element, followTailRef.current);
-    latestOptionsRef.current.writeSnapshot(surfaceId, snapshot);
-    return snapshot;
   }, []);
 
   // cancelPendingFrame releases the sole scheduled correction before replacement or unmount.
@@ -455,93 +412,58 @@ export function useConversationScrollController(
     writeScrollTop(element, conversationScrollTopForSnapshot(element, snapshot));
   }, [publishFollowTail, writeScrollTop]);
 
-  // scheduleSnapshotRestore aligns a followed tail before paint and defers reader restoration.
-  // scheduleSnapshotRestore 在绘制前对齐锁底位置，并延后恢复阅读位置。
-  // Parameters: surfaceId and snapshot bind the correction to one exact business surface; revision optionally guards reader movement.
-  // 参数：surfaceId 与 snapshot 将校正绑定到一个精确业务界面；revision 可选地防止覆盖阅读者移动。
-  // Returns: nothing.
-  // 返回值：无。
+  // syncTail aligns the active scrollport before paint after geometry changes.
+  // syncTail 在几何变化后、绘制前对齐活动滚动视口。
+  // Takes no parameters and writes only for a mounted, followed surface.
+  // 不接收参数，仅对已挂载且正在跟随尾部的界面写入位置。
+  const syncTail = React.useCallback((): void => {
+    // current and element bind the correction to the initialized surface.
+    // current 与 element 将校正绑定到已初始化的界面。
+    const current = latestOptionsRef.current;
+    const element = current.scrollRef.current;
+    if (!current.active || !current.surfaceId || current.surfaceId !== renderedSurfaceIdRef.current
+      || element?.dataset.conversationSurfaceId !== current.surfaceId
+      || !followTailRef.current || scrollbarProgressRef.current !== null) {
+      return;
+    }
+    reconcileTailReserve(element);
+    // bottom reflects current virtual row heights, including any measured replacements.
+    // bottom 反映当前虚拟行高度，包括已完成测量的替换项。
+    const bottom = Math.max(0, element.scrollHeight - element.clientHeight);
+    if (Math.abs(element.scrollTop - bottom) > 0.5 && programmaticTargetRef.current?.top !== bottom) {
+      writeScrollTop(element, bottom);
+    }
+  }, [reconcileTailReserve, writeScrollTop]);
+
+  // scheduleSnapshotRestore preserves one current-layout anchor across a known mutation.
+  // scheduleSnapshotRestore 在已知布局变化期间保留一次当前锚点。
+  // The transaction belongs to the current surface and is canceled by navigation or reader movement.
+  // 事务只属于当前界面，切换界面或阅读者滚动时取消。
   const scheduleSnapshotRestore = React.useCallback((
     surfaceId: string,
     snapshot: ConversationScrollSnapshot,
-    revision: number | null = null,
+    revision: number,
   ): void => {
-    if (revision !== null && userRevisionRef.current !== revision) {
+    if (userRevisionRef.current !== revision) return;
+    if (snapshot.followTail) {
+      syncTail();
       return;
     }
-    // currentOptions and element bind the synchronous geometry observation to the scheduled surface.
-    // currentOptions 与 element 将同步几何观察绑定到已调度界面。
-    const currentOptions = latestOptionsRef.current;
-    const element = currentOptions.scrollRef.current;
-    if (currentOptions.active && currentOptions.surfaceId === surfaceId
-      && element?.dataset.conversationSurfaceId === surfaceId) {
-      if (snapshot.followTail && followTailRef.current && programmaticTargetRef.current === null) {
-        // ResizeObserver runs after this frame's animation callbacks. Another frame would let new content
-        // paint under the composer even though the reader is still following the tail.
-        // ResizeObserver 在本帧动画回调之后执行。继续等一帧会让新内容在锁底时仍被输入框盖住。
-        cancelPendingFrame();
-        reconcileTailReserve(element);
-        if (element.scrollHeight - element.clientHeight - element.scrollTop > 0.5
-          || Math.abs(element.scrollTop - snapshot.scrollTop) > 0.5) {
-          restoreSnapshot(element, snapshot);
-          writeCurrentSnapshot(element, surfaceId);
-        }
-        return;
-      }
-      // Composer shrink can clip scrollTop before the prompt grows the range again, ahead of the native scroll event.
-      // 输入区收缩可能先截断 scrollTop，随后提示词再次增大范围，而原生滚动事件尚未到达。
-      // Record that exact clipping now so the delayed event cannot cancel tail ownership as a supposed reader move.
-      // 立即记录这次精确截断，防止延迟事件将其当成阅读者移动并取消尾部所有权。
-      observedScrollTopRef.current = reconcileConversationNativeScrollClamp(
-        observedScrollTopRef.current,
-        element.scrollTop,
-        Math.max(0, element.scrollHeight - element.clientHeight),
-      );
-    }
+
     cancelPendingFrame();
     pendingFrameRef.current = window.requestAnimationFrame(() => {
       pendingFrameRef.current = null;
-      if (revision !== null && userRevisionRef.current !== revision) {
-        return;
-      }
-      // currentOptions verifies the scheduled operation still belongs to the active surface.
-      // currentOptions 验证已调度操作仍属于活动界面。
-      const currentOptions = latestOptionsRef.current;
-      // element is accepted only when its rendered dataset still matches the scheduled business surface.
-      // element 仅在其已渲染数据集仍匹配已调度业务界面时被接受。
-      const element = currentOptions.scrollRef.current;
-      if (!currentOptions.active || currentOptions.surfaceId !== surfaceId || !element) {
-        return;
-      }
-      if (element.dataset.conversationSurfaceId !== surfaceId) {
+      // current and element must still own the original mutation.
+      // current 与 element 必须仍拥有原始布局变化。
+      const current = latestOptionsRef.current;
+      const element = current.scrollRef.current;
+      if (!current.active || userRevisionRef.current !== revision
+        || current.surfaceId !== surfaceId || element?.dataset.conversationSurfaceId !== surfaceId) {
         return;
       }
       restoreSnapshot(element, snapshot);
-      writeCurrentSnapshot(element, surfaceId);
     });
-  }, [cancelPendingFrame, reconcileTailReserve, restoreSnapshot, writeCurrentSnapshot]);
-
-  // remember captures the current mounted surface without changing ownership or position.
-  // remember 捕获当前已挂载界面，且不改变所有权或位置。
-  // Parameters: none.
-  // 参数：无。
-  // Returns: nothing.
-  // 返回值：无。
-  const remember = React.useCallback((): void => {
-    // currentOptions supplies the exact active surface and shared scroll owner.
-    // currentOptions 提供精确活动界面与共享滚动所有者。
-    const currentOptions = latestOptionsRef.current;
-    // element is ignored while empty/loading surfaces do not own a materialized transcript.
-    // element 在空白或加载界面不拥有实体化转录时被忽略。
-    const element = currentOptions.scrollRef.current;
-    if (!currentOptions.active || !currentOptions.surfaceId || !element) {
-      return;
-    }
-    if (element.dataset.conversationSurfaceId !== currentOptions.surfaceId) {
-      return;
-    }
-    writeCurrentSnapshot(element, currentOptions.surfaceId);
-  }, [writeCurrentSnapshot]);
+  }, [cancelPendingFrame, restoreSnapshot, syncTail]);
 
   // handleScroll classifies observed movement against the programmatic target ledger.
   // handleScroll 根据程序化目标账本对观察到的位移进行分类。
@@ -596,8 +518,7 @@ export function useConversationScrollController(
     if (!followTailRef.current) {
       reconcileTailReserve(element);
     }
-    writeCurrentSnapshot(element, surfaceId);
-  }, [cancelPendingFrame, publishFollowTail, reconcileTailReserve, writeCurrentSnapshot]);
+  }, [cancelPendingFrame, publishFollowTail, reconcileTailReserve]);
 
   // captureAndScheduleLayoutRestore preserves the current semantic viewport across one known geometry change.
   // captureAndScheduleLayoutRestore 在一次已知几何变化中保留当前语义视口。
@@ -618,41 +539,16 @@ export function useConversationScrollController(
     if (element.dataset.conversationSurfaceId !== currentOptions.surfaceId) {
       return;
     }
-    // Child composer layout effects run before this owner's surface restoration effect on navigation.
-    // 导航时，输入框子组件的布局副作用先于当前所有者的界面恢复副作用执行。
-    // Until restoration completes, the incoming DOM still carries the previous surface's tail ownership.
-    // 在恢复完成之前，新界面的 DOM 仍沿用上一界面的尾部所有权状态。
-    // Preserve the saved snapshot instead of replacing it with this uninitialized geometry.
-    // 保留已存快照，避免将其替换为尚未初始化的几何状态。
+    // A child layout effect can run before the incoming surface initializes its scroll ownership.
+    // 子组件布局副作用可能早于新界面的滚动所有权初始化。
     if (renderedSurfaceIdRef.current !== currentOptions.surfaceId) {
       return;
     }
-    // snapshot freezes the current business anchor before the geometry mutation commits.
-    // snapshot 在几何修改提交前固定当前业务锚点。
-    const snapshot = writeCurrentSnapshot(element, currentOptions.surfaceId);
-    scheduleSnapshotRestore(currentOptions.surfaceId, snapshot);
-  }, [scheduleSnapshotRestore, writeCurrentSnapshot]);
-
-  // scheduleStoredRestore reuses the latest surface snapshot for geometry changes observed after mutation.
-  // scheduleStoredRestore 为修改后观察到的几何变化复用最新界面快照。
-  // Parameters: none.
-  // 参数：无。
-  // Returns: nothing.
-  // 返回值：无。
-  const scheduleStoredRestore = React.useCallback((): void => {
-    // currentOptions selects the active business surface and its exact stored state.
-    // currentOptions 选择活动业务界面及其精确保存状态。
-    const currentOptions = latestOptionsRef.current;
-    if (!currentOptions.active || !currentOptions.surfaceId) {
-      return;
-    }
-    // snapshot is absent only for an unseen surface, which is initialized by the surface effect.
-    // snapshot 仅在未见界面中缺失，而该情况由界面 effect 初始化。
-    const snapshot = currentOptions.readSnapshot(currentOptions.surfaceId);
-    if (!snapshot) {
-      return;
-    }
-    scheduleSnapshotRestore(currentOptions.surfaceId, snapshot);
+    scheduleSnapshotRestore(
+      currentOptions.surfaceId,
+      captureConversationScrollSnapshot(element, followTailRef.current),
+      userRevisionRef.current,
+    );
   }, [scheduleSnapshotRestore]);
 
   // scrollToBottom transfers viewport ownership to tail following through one optional native animation.
@@ -672,11 +568,12 @@ export function useConversationScrollController(
       return;
     }
     cancelPendingFrame();
-    surfaceRestoreRef.current = null;
+    userRevisionRef.current += 1;
+    layoutTransactionRef.current = null;
+    pendingTurnRevealRef.current = null;
     publishFollowTail(true);
     writeScrollTop(element, element.scrollHeight, behavior);
-    writeCurrentSnapshot(element, currentOptions.surfaceId);
-  }, [cancelPendingFrame, publishFollowTail, writeCurrentSnapshot, writeScrollTop]);
+  }, [cancelPendingFrame, publishFollowTail, writeScrollTop]);
 
   // revealAnchor transfers viewport ownership to the reader and moves one mounted anchor near the viewport top.
   // revealAnchor 将视口所有权交还阅读者，并把一个已挂载锚点移动到视口顶部附近。
@@ -707,8 +604,7 @@ export function useConversationScrollController(
     const unloaded = anchor instanceof HTMLElement && anchor.hasAttribute("data-conversation-turn-placeholder");
     pendingTurnRevealRef.current = unloaded ? { shell: anchor, revision: userRevisionRef.current } : null;
     writeScrollTop(element, element.scrollTop + anchorOffset - topGap, unloaded ? "auto" : behavior);
-    writeCurrentSnapshot(element, currentOptions.surfaceId);
-  }, [cancelPendingFrame, publishFollowTail, writeCurrentSnapshot, writeScrollTop]);
+  }, [cancelPendingFrame, publishFollowTail, writeScrollTop]);
 
   // preserveHistoryPrepend holds the semantic anchor unless reader movement invalidates the async operation.
   // preserveHistoryPrepend 在阅读者位移使异步操作失效前保持语义锚点。
@@ -733,7 +629,7 @@ export function useConversationScrollController(
     const surfaceId = currentOptions.surfaceId;
     // snapshot is the only geometry input used after older rows mount.
     // snapshot 是更早行挂载后使用的唯一几何输入。
-    const snapshot = writeCurrentSnapshot(element, surfaceId);
+    const snapshot = captureConversationScrollSnapshot(element, followTailRef.current);
     // revision invalidates the restore when native reader movement is observed before completion.
     // revision 在完成前观察到原生阅读者移动时使恢复失效。
     const revision = userRevisionRef.current;
@@ -745,7 +641,7 @@ export function useConversationScrollController(
     }
     scheduleSnapshotRestore(surfaceId, snapshot, revision);
     return true;
-  }, [scheduleSnapshotRestore, writeCurrentSnapshot]);
+  }, [scheduleSnapshotRestore]);
 
   React.useEffect(() => {
     // Bind the listener to this owner so a child transcript cannot adjust the main transcript.
@@ -763,20 +659,13 @@ export function useConversationScrollController(
         applyScrollbarPosition(element, progress);
         return;
       }
-      if (programmaticTargetRef.current) return;
       if (followTailRef.current) {
-        scheduleStoredRestore();
+        syncTail();
         return;
       }
-      // A returning reader's original offset becomes usable when the target turn gains its real height.
-      // 目标回合取得真实高度后，恢复会话时保存的原始行内偏移才能生效。
-      const surfaceRestore = surfaceRestoreRef.current;
-      if (surfaceRestore?.surfaceId === surfaceId && surfaceRestore.userRevision === userRevisionRef.current) {
-        restoreSnapshot(element, surfaceRestore.snapshot);
-        return;
-      }
-      // A surface or fold restore already has an authoritative anchor of its own.
-      // 界面恢复或折叠恢复已有自己的权威锚点。
+      if (programmaticTargetRef.current) return;
+      // An in-progress layout mutation already owns its pre-mutation anchor.
+      // 正在进行的布局变化已持有修改前的锚点。
       if (pendingFrameRef.current !== null) return;
       // A jump targets the requested shell even when the preceding row intersects its top margin.
       // 即使上一回合与跳转顶部留白相交，仍以请求的外壳为跳转目标。
@@ -786,7 +675,6 @@ export function useConversationScrollController(
         pendingTurnRevealRef.current = null;
         writeScrollTop(element, element.scrollTop + reveal.shell.getBoundingClientRect().top
           - element.getBoundingClientRect().top - CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX);
-        writeCurrentSnapshot(element, surfaceId);
         return;
       }
       const { anchor } = (event as CustomEvent<ConversationTurnWindowLayoutDetail>).detail;
@@ -797,7 +685,6 @@ export function useConversationScrollController(
         scrollTop: element.scrollTop,
         followTail: false,
       }));
-      writeCurrentSnapshot(element, surfaceId);
     };
     // Pointer movement takes ownership from reading restores until release.
     // 指针移动接管阅读位置恢复，直至松手。
@@ -820,7 +707,6 @@ export function useConversationScrollController(
         reconcileTailReserve(element);
         applyScrollbarPosition(element, progress);
         publishFollowTail(conversationViewportAllowsTailFollow(element));
-        writeCurrentSnapshot(element, surfaceId);
       }
     };
     element.addEventListener(CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, handleWindowLayout);
@@ -831,7 +717,7 @@ export function useConversationScrollController(
       element.removeEventListener(CONVERSATION_SCROLLBAR_POSITION_EVENT, handleScrollbarPosition);
     };
   }, [options.active, options.scrollRef, options.surfaceId, applyScrollbarPosition, cancelPendingFrame,
-    publishFollowTail, reconcileTailReserve, restoreSnapshot, scheduleStoredRestore, writeCurrentSnapshot, writeScrollTop]);
+    publishFollowTail, reconcileTailReserve, syncTail, writeScrollTop]);
 
   React.useLayoutEffect(() => {
     // surfaceId is the exact active business identity after the latest React commit.
@@ -840,53 +726,27 @@ export function useConversationScrollController(
     // element is the shared scroll owner now representing that identity.
     // element 是当前表示该身份的共享滚动所有者。
     const element = options.scrollRef.current;
-    if (!options.active || !surfaceId || !element) {
-      // An unmaterialized surface must restore again even when the same business id remounts later.
-      // 未实体化界面必须在同一业务标识稍后重新挂载时再次执行恢复。
-      cancelPendingFrame();
-      renderedSurfaceIdRef.current = null;
-      return;
-    }
-    if (renderedSurfaceIdRef.current === surfaceId) {
-      return;
-    }
+    // A loading surface has no scroll ownership. A previously selected surface starts afresh when it remounts.
+    // 加载中的界面没有滚动所有权，之前选中的界面重新挂载时重新定位。
+    const nextSurfaceId = options.active && element ? surfaceId : null;
+    if (nextSurfaceId === renderedSurfaceIdRef.current) return;
     cancelPendingFrame();
+    userRevisionRef.current += 1;
     layoutTransactionRef.current = null;
-    renderedSurfaceIdRef.current = surfaceId;
+    renderedSurfaceIdRef.current = nextSurfaceId;
     pendingTurnRevealRef.current = null;
-    // A newly rendered surface starts without the previous surface's tail reserve.
-    // 新渲染的界面不继承上一界面的尾部预留。
-    element.querySelector<HTMLElement>(".vk-transcript-tail")?.style.setProperty("height", "0px");
+    scrollbarProgressRef.current = null;
+    programmaticTargetRef.current = null;
     tailTotalRef.current = 0;
     foldLimitRef.current = null;
-    observedScrollTopRef.current = element.scrollTop;
-    programmaticTargetRef.current = null;
-    // savedSnapshot restores a previously read position; unseen surfaces start with explicit tail ownership.
-    // savedSnapshot 恢复此前阅读位置；未见界面以显式尾部所有权开始。
-    const savedSnapshot = options.readSnapshot(surfaceId) ?? {
-      anchorKey: null,
-      anchorTop: 0,
-      followTail: true,
-      scrollTop: element.scrollHeight,
-    };
-    restoreSnapshot(element, savedSnapshot);
-    reconcileTailReserve(element);
-    surfaceRestoreRef.current = savedSnapshot.followTail
-      ? null
-      : { surfaceId, snapshot: savedSnapshot, userRevision: userRevisionRef.current };
-    // Keep the original keyed snapshot until the restored position can be captured against mounted content.
-    // 在能按已挂载正文捕获恢复位置之前，保留原始带键快照。
-    if (savedSnapshot.followTail || !savedSnapshot.anchorKey) writeCurrentSnapshot(element, surfaceId);
-  }, [
-    cancelPendingFrame,
-    options.active,
-    options.readSnapshot,
-    options.scrollRef,
-    options.surfaceId,
-    reconcileTailReserve,
-    restoreSnapshot,
-    writeCurrentSnapshot,
-  ]);
+
+    if (!nextSurfaceId || !element) return;
+    // The incoming surface starts at the current content bottom, before any late measurements.
+    // 新界面先定位到当前内容底部，后续测量完成时继续跟随。
+    element.querySelector<HTMLElement>(".vk-transcript-tail")?.style.setProperty("height", "0px");
+    publishFollowTail(true);
+    writeScrollTop(element, element.scrollHeight);
+  }, [cancelPendingFrame, options.active, options.scrollRef, options.surfaceId, publishFollowTail, writeScrollTop]);
 
   React.useLayoutEffect(() => {
     // element is the active transcript whose content geometry is observed as one aggregate surface.
@@ -907,6 +767,9 @@ export function useConversationScrollController(
     // observer corrects only explicit tail ownership or one active manual layout transaction.
     // observer 仅校正显式尾部所有权或单个活动手动布局事务。
     const observer = new ResizeObserver(() => {
+      if (latestOptionsRef.current.surfaceId !== surfaceId || element.dataset.conversationSurfaceId !== surfaceId) {
+        return;
+      }
       // During dragging the pointer stays authoritative even if streaming changes the total height.
       // 拖动期间即使流式输出改变总高度，仍以指针位置为准。
       const progress = scrollbarProgressRef.current;
@@ -917,14 +780,6 @@ export function useConversationScrollController(
       // The reserve absorbs shrinkage before any tail correction reads the new bottom.
       // 在任何尾部校正读取新底部之前，先由预留吸收收缩。
       reconcileTailReserve(element);
-      // A restored reading position keeps its anchor while the switched-in content finishes rendering.
-      // 切换进来的内容完成渲染期间，已恢复的阅读位置保持其锚点。
-      const restore = surfaceRestoreRef.current;
-      if (restore && restore.surfaceId === surfaceId && restore.userRevision === userRevisionRef.current) {
-        scheduleSnapshotRestore(restore.surfaceId, restore.snapshot, restore.userRevision);
-        return;
-      }
-      surfaceRestoreRef.current = null;
       // transaction keeps one immutable pre-mutation anchor instead of chasing snapshots rewritten every frame.
       // transaction 保持单个不可变修改前锚点，避免追逐每帧重写的快照。
       const transaction = layoutTransactionRef.current;
@@ -943,7 +798,6 @@ export function useConversationScrollController(
       if (ownershipDecision.adoptedTail) {
         layoutTransactionRef.current = null;
         publishFollowTail(true);
-        writeCurrentSnapshot(element, surfaceId);
       }
       // correctionMode is resolved only after bottom geometry has had a chance to restore ownership.
       // correctionMode 仅在底部几何状态获得恢复所有权机会后解析。
@@ -957,7 +811,7 @@ export function useConversationScrollController(
         return;
       }
       if (correctionMode === "tail") {
-        scheduleStoredRestore();
+        syncTail();
       }
     });
     observer.observe(content);
@@ -970,8 +824,7 @@ export function useConversationScrollController(
     publishFollowTail,
     reconcileTailReserve,
     scheduleSnapshotRestore,
-    scheduleStoredRestore,
-    writeCurrentSnapshot,
+    syncTail,
   ]);
 
   React.useLayoutEffect(() => {
@@ -1006,7 +859,7 @@ export function useConversationScrollController(
       if (Math.abs(element.scrollTop - observedScrollTopRef.current) <= 0.5) {
         return;
       }
-      scheduleStoredRestore();
+      syncTail();
     });
     observer.observe(content, {
       childList: true,
@@ -1016,7 +869,7 @@ export function useConversationScrollController(
       attributeFilter: ["class", "style", "hidden"],
     });
     return () => observer.disconnect();
-  }, [options.active, options.scrollRef, options.surfaceId, reconcileTailReserve, scheduleStoredRestore]);
+  }, [options.active, options.scrollRef, options.surfaceId, reconcileTailReserve, syncTail]);
 
   React.useEffect(() => {
     // element owns the native smooth-scroll lifecycle for this exact transcript.
@@ -1044,16 +897,10 @@ export function useConversationScrollController(
         cancelPendingFrame();
         publishFollowTail(conversationViewportAllowsTailFollow(element));
       }
-      // surfaceId binds the terminal native event to the still-active business transcript.
-      // surfaceId 将最终原生事件绑定到仍处于活动状态的业务转录。
-      const surfaceId = element.dataset.conversationSurfaceId;
-      if (surfaceId && surfaceId === latestOptionsRef.current.surfaceId) {
-        writeCurrentSnapshot(element, surfaceId);
-      }
     };
     element.addEventListener("scrollend", handleScrollEnd);
     return () => element.removeEventListener("scrollend", handleScrollEnd);
-  }, [cancelPendingFrame, options.active, options.scrollRef, options.surfaceId, publishFollowTail, writeCurrentSnapshot]);
+  }, [cancelPendingFrame, options.active, options.scrollRef, options.surfaceId, publishFollowTail]);
 
   React.useEffect(() => {
     // handleLayoutWillChange captures the exact semantic viewport before collapse or shell geometry mutation.
@@ -1090,7 +937,7 @@ export function useConversationScrollController(
       beginFoldReserve(element);
       // A fold click changes layout, not scroll intent: preserve tail ownership or the existing reader anchor.
       // 折叠点击只改变布局，不改变滚动意图：保留锁底状态或既有阅读锚点。
-      const snapshot = writeCurrentSnapshot(element, detail.surfaceId);
+      const snapshot = captureConversationScrollSnapshot(element, followTailRef.current);
       layoutTransactionRef.current = {
         surfaceId: detail.surfaceId,
         snapshot,
@@ -1100,7 +947,7 @@ export function useConversationScrollController(
     };
     window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
     return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
-  }, [beginFoldReserve, cancelPendingFrame, scheduleSnapshotRestore, writeCurrentSnapshot]);
+  }, [beginFoldReserve, cancelPendingFrame, scheduleSnapshotRestore]);
 
   React.useEffect(() => {
     // automaticFoldTimer releases a fold window that no settled event closes, such as a running tool
@@ -1184,17 +1031,15 @@ export function useConversationScrollController(
     captureAndScheduleLayoutRestore,
     handleScroll,
     preserveHistoryPrepend,
-    remember,
     revealAnchor,
-    scheduleStoredRestore,
+    syncTail,
     scrollToBottom,
   }), [
     captureAndScheduleLayoutRestore,
     handleScroll,
     preserveHistoryPrepend,
-    remember,
     revealAnchor,
-    scheduleStoredRestore,
+    syncTail,
     scrollToBottom,
   ]);
 }

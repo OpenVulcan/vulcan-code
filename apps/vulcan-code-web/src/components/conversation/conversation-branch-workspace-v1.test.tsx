@@ -529,6 +529,10 @@ describe("ConversationBranchWorkspaceV1", () => {
       await React.act(async () => root.render(workspaceTree(completeTurnEvents())));
       const scrollport = host.querySelector<HTMLElement>(".vk-transcript")!;
       const runtimeShell = scrollport.querySelector<HTMLElement>("[data-conversation-turn-shell]")!;
+      // The latest reply is present before the browser delivers its first viewport observation.
+      // 浏览器首次派发视口观察结果前，最新回复已挂载。
+      expect(runtimeShell.hasAttribute("data-conversation-turn-placeholder")).toBe(false);
+      expect(runtimeShell.querySelector(".vk-prompt-row")).not.toBeNull();
       const onLayout = vi.fn();
       scrollport.addEventListener(CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, onLayout);
       // Deliver a batch containing both source types, as the browser does when crossing their boundary.
