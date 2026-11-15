@@ -65,11 +65,62 @@ mod tests;
 /// A host check for the directory frozen into a project execution.
 /// 针对项目执行中冻结目录的宿主检查。
 #[derive(Clone)]
-pub struct ProjectShellGuard(
-    /// Checks that the captured binding is current and accessible, returning a model-facing error.
-    /// 检查捕获的绑定仍为当前绑定且可访问，失败时返回面向模型的错误。
-    pub Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
-);
+pub struct ProjectShellGuard {
+    /// Frozen validation used by the tools from this binding.
+    /// 此绑定工具使用的冻结校验。
+    check: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+    /// Exact project bound to a service-owned execution, absent for direct host utility calls.
+    /// 服务执行绑定的精确项目，直接宿主实用调用时缺省。
+    project: Option<Arc<vulcan_workbench_model::TaskProjectSummary>>,
+    /// Advances only to the current binding of this same project, never to another project.
+    /// 仅推进到同一项目的当前绑定，绝不切换到其他项目。
+    refresh: Option<Arc<dyn Fn() -> Result<Option<Self>, String> + Send + Sync>>,
+}
+
+impl ProjectShellGuard {
+    /// Builds a guard for the supplied synchronous launch validation.
+    /// 为指定同步启动校验构建守卫。
+    pub fn new(check: impl Fn() -> Result<(), String> + Send + Sync + 'static) -> Self {
+        Self {
+            check: Arc::new(check),
+            project: None,
+            refresh: None,
+        }
+    }
+
+    /// Attaches the service's exact captured project and its same-owner refresh.
+    /// 附加服务捕获的精确项目及其同所有者刷新。
+    pub fn with_project(
+        mut self,
+        project: vulcan_workbench_model::TaskProjectSummary,
+        refresh: impl Fn() -> Result<Option<Self>, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.project = Some(Arc::new(project));
+        self.refresh = Some(Arc::new(refresh));
+        self
+    }
+
+    /// Returns the captured project for an exact model request candidate.
+    /// 返回精确模型请求候选捕获的项目。
+    pub fn project(&self) -> Option<&vulcan_workbench_model::TaskProjectSummary> {
+        self.project.as_deref()
+    }
+
+    /// Rejects a stale or unavailable binding without substituting the new root.
+    /// 拒绝过时或不可用的绑定，绝不代换为新根目录。
+    pub fn validate(&self) -> Result<(), String> {
+        (self.check)()
+    }
+
+    /// Returns a fresh guard only when the service has committed a changed project binding.
+    /// 仅当服务已提交变更的项目绑定时返回新守卫。
+    pub(crate) fn refreshed(&self) -> Result<Option<Self>, String> {
+        match &self.refresh {
+            Some(refresh) => refresh(),
+            None => Ok(None),
+        }
+    }
+}
 
 impl std::fmt::Debug for ProjectShellGuard {
     /// Describes the guard without evaluating or exposing the captured host state.
@@ -122,7 +173,7 @@ pub fn build_vulcan_tools_manager(
             .clone()
             .filter(|_| host_project_id.is_some())?;
         let volume = vulcan_host_tools::project_directory::project_volume_identity(&root);
-        Some(ProjectShellGuard(Arc::new(move || {
+        Some(ProjectShellGuard::new(move || {
             use crate::tooling::native::shell_command::shell_directory_error;
             let expected_volume = volume
                 .as_ref()
@@ -132,7 +183,7 @@ pub fn build_vulcan_tools_manager(
                 expected_volume.as_deref(),
             )
             .map_err(shell_directory_error)
-        })))
+        }))
     });
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();

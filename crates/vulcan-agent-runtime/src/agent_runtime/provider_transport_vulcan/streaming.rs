@@ -131,6 +131,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestPrepared {
                 candidate: ProviderRequestPreparationCandidate {
+                    project_directory: None,
                     media_context: Some(
                         crate::agent_runtime::events::ProviderRequestMediaContext {
                             execution: std::sync::Arc::clone(&self.media_execution),

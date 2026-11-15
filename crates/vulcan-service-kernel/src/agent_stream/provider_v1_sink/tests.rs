@@ -626,6 +626,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
     ])
     .expect("persisted initialized baseline");
     let candidate = ProviderRequestPreparationCandidate {
+        project_directory: None,
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
@@ -3934,6 +3935,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
         initialized_locked_baseline: None,
     };
     let candidate = ProviderRequestPreparationCandidate {
+        project_directory: None,
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,

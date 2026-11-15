@@ -241,3 +241,108 @@ async fn finish_directory_fixture_api(
         )
         .unwrap();
 }
+
+/// Exercises the detached physical preparation entry with stale and refreshed tool bindings.
+/// 使用过时和已刷新的工具绑定测试分离物理请求准备入口。
+#[tokio::test]
+async fn detached_project_directory_rebuilds_before_releasing_model_payload() {
+    let (_directory, handle) = published_stored_open_turn();
+    let mut service =
+        crate::tests::test_support::test_service_state_with_parent_session(handle.session_id());
+    service
+        .session_runtime_registry
+        .register(Arc::clone(&handle))
+        .unwrap();
+    let old = TaskProjectSummary::new(
+        "project-1",
+        "Project",
+        "/old",
+        false,
+        0,
+        None,
+        None,
+        Vec::new(),
+    );
+    let mut current = old.clone();
+    current.path = "/current".into();
+    current.root_directory_change = Some(ProjectRootDirectoryChange {
+        previous_path: old.path.clone(),
+        changed_at_ms: 5,
+    });
+    service
+        .workspace_snapshot
+        .as_mut()
+        .unwrap()
+        .task_projects
+        .push(old.clone());
+    let state = Arc::new(std::sync::Mutex::new(service));
+    // Establish the directory actually used by the detached session before rebinding.
+    // 在换目录前建立独立会话实际使用过的目录。
+    let mut initial = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    let mut candidate = candidate_for(&handle);
+    candidate.project_directory = Some(old.clone());
+    candidate.dynamic_prompt_layers.runtime_context = format!(
+        "Current workspace: {}\nCurrent execution mode: Build",
+        old.path
+    );
+    let first = ProviderV1RequestFacts {
+        request: ApiRequestSnapshot::new("provider-1", "model-1"),
+        prepared_at_ms: 3,
+        ..request_facts()
+    };
+    let PreparedPhysicalApi::SessionV1 { core_start, .. } = initial
+        .prepare_request(&state, first.clone(), candidate)
+        .await
+        .unwrap()
+    else {
+        panic!("the original detached workspace must prepare");
+    };
+    finish_directory_fixture_api(&handle, &first, core_start.api_call_id).await;
+    *state
+        .lock()
+        .unwrap()
+        .workspace_snapshot
+        .as_mut()
+        .unwrap()
+        .task_projects
+        .iter_mut()
+        .find(|project| project.id == current.id)
+        .unwrap() = current.clone();
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    let facts = ProviderV1RequestFacts {
+        request: ApiRequestSnapshot::new("provider-1", "model-1"),
+        prepared_at_ms: 10,
+        ..request_facts()
+    };
+    let mut stale = candidate_for(&handle);
+    stale.project_directory = Some(old);
+    assert!(matches!(
+        sink.prepare_request(&state, facts.clone(), stale)
+            .await
+            .unwrap(),
+        PreparedPhysicalApi::RequestConfigurationChanged
+    ));
+    assert!(
+        handle
+            .read(|document| document.active_api().is_none())
+            .unwrap()
+    );
+
+    let mut fresh = candidate_for(&handle);
+    fresh.project_directory = Some(current);
+    let PreparedPhysicalApi::SessionV1 { exact_request, .. } =
+        sink.prepare_request(&state, facts, fresh).await.unwrap()
+    else {
+        panic!("the detached retry must obtain the new request");
+    };
+    assert!(exact_request.messages.iter().flat_map(|message| &message.content).any(|item| matches!(
+        item, ContentItem::Text { text } if text.contains(context_injection::PROJECT_DIRECTORY_CONTEXT_KEY)
+            && text.contains("/old") && text.contains("/current")
+    )));
+}

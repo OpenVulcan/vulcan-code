@@ -2164,9 +2164,12 @@ impl ProviderV1StreamSink {
         &mut self,
         state: &SharedServiceBridgeState,
         facts: ProviderV1RequestFacts,
-        candidate: ProviderRequestPreparationCandidate,
+        mut candidate: ProviderRequestPreparationCandidate,
     ) -> Result<PreparedPhysicalApi, ProviderV1SinkError> {
-        self.prepare_project_request(state, facts, candidate, None)
+        // Detached execution carries the exact directory used to build the candidate's tools.
+        // 分离执行携带构建候选请求工具时所用的精确目录。
+        let project = candidate.project_directory.take();
+        self.prepare_project_request(state, facts, candidate, project.as_ref())
             .await
     }
 
@@ -2183,6 +2186,16 @@ impl ProviderV1StreamSink {
             return Err(ProviderV1SinkError::RequestAlreadyActive);
         }
         validate_provider_transport_candidate(&facts, &candidate)?;
+        // Reject a stale child or root snapshot before publishing a directory notice.
+        // 发布目录通知前拒绝过时的子代理或根会话快照。
+        if let Some(project) = project {
+            let current =
+                crate::project_directories::active_project_directory_owner(state, &project.id)
+                    .map_err(provider_projection_runtime_error)?;
+            if !crate::project_directories::same_project_directory_binding(project, &current) {
+                return Ok(PreparedPhysicalApi::RequestConfigurationChanged);
+            }
+        }
         // Compaction summarizes history and must not consume messages addressed to the task execution.
         // 压缩只总结历史，不消费发给任务执行的消息。
         if facts.purpose != vulcan_session_core::v1::event::ApiPurposeKind::Compaction {

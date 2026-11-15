@@ -445,6 +445,9 @@ pub(crate) fn project_shell_guard(
     // Tool managers may outlive their stream; do not retain service ownership through them.
     // 工具管理器可能比流存活更久，避免它们持有服务所有权。
     let state = std::sync::Arc::downgrade(state);
+    let refresh_state = state.clone();
+    let original = prepared.clone();
+    let refresh_from = prepared.clone();
     // Older projects may not have a saved identity. Retain the mounted volume observed at launch when available.
     // 旧项目可能没有已保存卷标识。启动时能识别已挂载卷的话，保留此次观测。
     let volume_at_launch = match &prepared.root_volume_id {
@@ -453,7 +456,7 @@ pub(crate) fn project_shell_guard(
             .ok()
             .flatten(),
     };
-    vulcan_agent_runtime::vulcan_tools_bridge::ProjectShellGuard(std::sync::Arc::new(move || {
+    vulcan_agent_runtime::vulcan_tools_bridge::ProjectShellGuard::new(move || {
         let state = state
             .upgrade()
             .ok_or_else(|| String::from("The project directory owner is unavailable."))?;
@@ -468,7 +471,12 @@ pub(crate) fn project_shell_guard(
             .map_err(|error| format!(
                 "{error}. Ask the user whether to restore the unavailable directory or choose another directory. Wait for the user's answer before retrying this command."
             ))
-    }))
+    }).with_project(original, move || {
+        let state = refresh_state.upgrade().ok_or_else(|| String::from("The project directory owner is unavailable."))?;
+        let current = active_project_directory_owner(&state, &refresh_from.id)?;
+        Ok((!same_project_directory_binding(&refresh_from, &current))
+            .then(|| project_shell_guard(&state, current)))
+    })
 }
 
 /// Rebinds project_id from expected_path to the absolute selected_path; returns the refreshed snapshot.
@@ -1362,15 +1370,15 @@ mod tests {
         // 捕获权限批准后使用的同一启动守卫，确保已有效的 cwd 也不会随绑定更换。
         let previous = active_project_directory_owner(&state, project_id).unwrap();
         let old_shell_guard = project_shell_guard(&state, previous);
-        assert!((old_shell_guard.0)().is_ok());
+        assert!(old_shell_guard.validate().is_ok());
         fs::remove_dir(&old).unwrap();
-        let missing_error = (old_shell_guard.0)().unwrap_err();
+        let missing_error = old_shell_guard.validate().unwrap_err();
         assert!(missing_error.contains(&old_text));
         assert!(missing_error.contains("Ask the user"));
         // Restoring the same binding permits a new invocation without scheduling the failed one.
         // 恢复同一绑定后允许新调用，不调度已失败的调用。
         fs::create_dir(&old).unwrap();
-        assert!((old_shell_guard.0)().is_ok());
+        assert!(old_shell_guard.validate().is_ok());
         fs::remove_dir(&old).unwrap();
         assert!(
             service_change_project_directory(
@@ -1463,10 +1471,14 @@ mod tests {
         );
         // The old manager refuses a launch and only a new manager accepts the new binding.
         // 旧工具管理器拒绝启动，只有新工具管理器接受新绑定。
-        let stale_error = (old_shell_guard.0)().unwrap_err();
+        let stale_error = old_shell_guard.validate().unwrap_err();
         assert!(stale_error.contains(&format!("{old_text:?}")));
         assert!(stale_error.contains(&format!("{:?}", status.path)));
-        assert!((project_shell_guard(&state, project.clone()).0)().is_ok());
+        assert!(
+            project_shell_guard(&state, project.clone())
+                .validate()
+                .is_ok()
+        );
         let guard = state.lock().unwrap();
         let active = guard.active_stream_tasks.get(&session_id).unwrap();
         assert_eq!(active.task_id(), task_id);

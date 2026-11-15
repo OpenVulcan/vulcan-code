@@ -1166,7 +1166,7 @@ pub(crate) fn require_shell_project(
     request: &NativeToolExecutionRequest,
 ) -> Result<(), NativeToolError> {
     if let Some(guard) = &request.project_shell_guard {
-        return (guard.0)().map_err(NativeToolError::new);
+        return guard.validate().map_err(NativeToolError::new);
     }
     if let Some(root) = request.workspace_root.as_deref() {
         vulcan_host_tools::project_directory::require_project_directory(root)

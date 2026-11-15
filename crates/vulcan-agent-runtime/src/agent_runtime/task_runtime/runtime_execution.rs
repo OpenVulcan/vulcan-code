@@ -578,11 +578,22 @@ pub(super) fn spawn_admitted_task_execution(
             .map(|message| message.id.clone())
             .collect::<std::collections::BTreeSet<_>>();
         let mut mid_turn_compaction_attempted = false;
+        // Count only directory re-preparations without progress in this child run.
+        // 只统计此子代理运行在无进展时的目录重新准备。
+        let mut project_restarts = 0;
         let mut completed_provider_requests = 0usize;
         let mut completed_tool_results = 0usize;
         let mut completed_usage = None::<vulcan_core::types::ProviderUsageSnapshot>;
         let mut completed_last_usage = None::<vulcan_core::types::ProviderUsageSnapshot>;
         let report = loop {
+            // Retain the exact active child's launch, including the directory its tools captured.
+            // 保留活动子代理的精确启动信息，包括工具捕获的目录。
+            let launched_context = launch.task_execution_context.clone();
+            let launch_project = launched_context
+                .as_ref()
+                .and_then(|context| context.request_template.project_shell_guard.as_ref())
+                .and_then(|guard| guard.project())
+                .cloned();
             let config = launch
                 .task_execution_context
                 .as_ref()
@@ -596,10 +607,28 @@ pub(super) fn spawn_admitted_task_execution(
                 Box::pin(drive_runtime_stream_provider_loop(config, launch, None));
             let mut terminal_report = None;
             let mut compaction_state = None;
+            // Keep the re-preparation checkpoint separate from a real child failure or compaction.
+            // 将重新准备检查点与真正的子代理失败或压缩区分开。
+            let mut project_checkpoint = None;
             let mut checkpoint_provider_requests = 0usize;
             let mut checkpoint_usage = None::<vulcan_core::types::ProviderUsageSnapshot>;
-            while let Some(event) = child_event_stream.next().await {
-                match &event {
+            while let Some(mut event) = child_event_stream.next().await {
+                match &mut event {
+                    ExecutionStreamEvent::ProviderRequestPreparationBoundary {
+                        candidate, ..
+                    } => {
+                        candidate.project_directory = launch_project.clone();
+                    }
+                    ExecutionStreamEvent::ProviderRouteSwitchRequired {
+                        conversation_state,
+                        provider_request_continuation,
+                        ..
+                    } if launch_project.is_some() => {
+                        project_checkpoint = Some((
+                            conversation_state.clone(),
+                            provider_request_continuation.clone(),
+                        ));
+                    }
                     ExecutionStreamEvent::ConversationCheckpoint {
                         last_successful_provider_usage,
                         provider_request_count,
@@ -634,6 +663,41 @@ pub(super) fn spawn_admitted_task_execution(
                     completed_last_usage.as_ref(),
                 );
                 break terminal_report;
+            }
+            if let Some(((conversation_state, continuation), launched_context)) =
+                project_checkpoint.zip(launched_context)
+            {
+                if checkpoint_provider_requests > 0 {
+                    project_restarts = 0;
+                }
+                project_restarts += 1;
+                if project_restarts > crate::agent_runtime::events::MAX_REQUEST_REPREPARATIONS {
+                    return Err("The child project directory kept changing before dispatch.".into());
+                }
+                if let Some(replacement) = Box::pin(runtime_launch::reprepare_task_runtime_project(
+                    &launched_context,
+                    conversation_state.clone(),
+                    continuation,
+                ))
+                .await?
+                {
+                    // Provider accounting stays with this child run across the same logical turn.
+                    // 同一逻辑回合期间，供应商计量始终归于此子代理运行。
+                    let checkpoint = build_core_conversation_snapshot(&conversation_state)?;
+                    completed_provider_requests =
+                        completed_provider_requests.saturating_add(checkpoint_provider_requests);
+                    let (usage, last_usage) =
+                        task_snapshot_provider_usage_after(&checkpoint, &initial_message_ids);
+                    completed_usage = usage
+                        .or(completed_usage)
+                        .or_else(|| checkpoint_usage.clone());
+                    completed_last_usage = last_usage.or(checkpoint_usage).or(completed_last_usage);
+                    completed_tool_results = task_snapshot_tool_result_count(&checkpoint)
+                        .saturating_sub(initial_tool_result_count);
+                    background_request.snapshot = checkpoint;
+                    launch = replacement;
+                    continue;
+                }
             }
             let Some((conversation_state, reason)) = compaction_state else {
                 return Err(format!(
@@ -2032,6 +2096,7 @@ mod standalone_compaction_tests {
         snapshot: &CoreRequestSnapshot,
     ) -> ProviderRequestPreparationCandidate {
         ProviderRequestPreparationCandidate {
+            project_directory: None,
             media_context: None,
             exact_request: vulcan_ai_contract::AiExecutionRequest {
                 operation: vulcan_ai_contract::AiOperation::ConversationRespond,

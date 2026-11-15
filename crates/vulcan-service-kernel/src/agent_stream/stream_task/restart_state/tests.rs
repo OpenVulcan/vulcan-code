@@ -81,7 +81,7 @@ fn configuration_restarts_stop_after_three_before_next_permit() {
     for _ in 0..256 {
         assert!(!state.try_configuration_restart());
     }
-    assert_eq!(state.configuration_restarts, MAX_CONFIGURATION_RESTARTS);
+    assert_eq!(state.configuration_restarts, MAX_REQUEST_REPREPARATIONS);
 }
 
 /// Stale and failed preparation results do not impersonate a durable API permit.

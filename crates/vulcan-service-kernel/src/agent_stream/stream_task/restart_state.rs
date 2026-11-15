@@ -3,16 +3,14 @@
 
 use super::*;
 use crate::session_goal_lifecycle::registered_session_v1_handle_from_state;
-use vulcan_agent_runtime::agent_runtime::events::PreparedPhysicalApi;
+use vulcan_agent_runtime::agent_runtime::events::{
+    MAX_REQUEST_REPREPARATIONS, PreparedPhysicalApi,
+};
 use vulcan_session_core::v1::ApiCallId;
 use vulcan_session_core::v1::collaboration::{
     CollaborationExecutionId, CollaborationQuestionExecutionRecord,
     CollaborationQuestionExecutionState,
 };
-
-/// Maximum automatic input/configuration restarts before the next durable API permit must succeed.
-/// 下一次可靠API许可成功之前允许的最大自动输入/配置重启次数。
-const MAX_CONFIGURATION_RESTARTS: u8 = 3;
 
 /// Request-local restart state moved with the existing kernel generation and turn owner, never persisted into prompt media.
 /// 随既有内核代际及回合所有者移动的请求局部重启状态，绝不持久化进提示词媒体。
@@ -151,7 +149,7 @@ impl StreamRestartState {
     /// This bounds preparation churn, not the number of legitimate model switches across successful API calls.
     /// 此限制约束准备抖动，而非跨成功API调用的合法模型切换次数。
     pub(super) fn try_configuration_restart(&mut self) -> bool {
-        if self.configuration_restarts >= MAX_CONFIGURATION_RESTARTS {
+        if self.configuration_restarts >= MAX_REQUEST_REPREPARATIONS {
             return false;
         }
         self.configuration_restarts += 1;
@@ -198,7 +196,7 @@ pub(super) async fn commit_configuration_reprepare_limit(
     // Core rejects candidates for either newer inputs or configuration; neither is an upload, credential or cancellation failure.
     // Core可能因较新输入或配置拒绝候选；两者都不是上传、凭据或取消失败。
     let error = format!(
-        "Request inputs or configuration kept changing before the next durable API permit. Automatic re-preparation stopped after {MAX_CONFIGURATION_RESTARTS} restarts; retry after preparation inputs stabilize."
+        "Request inputs or configuration kept changing before the next durable API permit. Automatic re-preparation stopped after {MAX_REQUEST_REPREPARATIONS} restarts; retry after preparation inputs stabilize."
     );
     // The existing commit gate prevents an old stream from terminalizing a replacement owner.
     // 既有提交闸门阻止旧流终结替代所有者。

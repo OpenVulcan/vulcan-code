@@ -1092,13 +1092,13 @@ async fn project_shell_command_rechecks_the_binding_after_allow_once() {
     // 生产审批打开期间，测试服务可以更改当前绑定。
     let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let changed_for_guard = changed.clone();
-    let guard = super::ProjectShellGuard(Arc::new(move || {
+    let guard = super::ProjectShellGuard::new(move || {
         if changed_for_guard.load(std::sync::atomic::Ordering::SeqCst) {
             Err(String::from("stale directory after approval"))
         } else {
             Ok(())
         }
-    }));
+    });
     let questions = Arc::new(QuestionRuntime::new());
     questions
         .set_durability_callback(Some(Arc::new(|_| Ok(()))))

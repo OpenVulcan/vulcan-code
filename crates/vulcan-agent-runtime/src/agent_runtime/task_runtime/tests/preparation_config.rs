@@ -1738,6 +1738,87 @@ fn task_runtime_preparation_request_carries_subagent_prompt_context() {
     assert!(subagent_prompt_context.functional_system_prompt.is_none());
 }
 
+/// Verifies a detached re-preparation changes the workspace while keeping the exact child attempt.
+/// 验证分离执行重新准备会更换工作区，同时保留精确的子代理尝试。
+#[test]
+fn detached_project_directory_refresh_preserves_exact_child_request() {
+    use crate::agent_runtime::execution_models::{
+        ExecutionProviderRequestContinuation, ExecutionTurnStartMode,
+    };
+    use crate::vulcan_tools_bridge::ProjectShellGuard;
+    use vulcan_workbench_model::TaskProjectSummary;
+
+    // Both bindings belong to one project; the previous guard remains frozen for existing calls.
+    // 两份绑定属于同一项目；旧守卫保持冻结，供已有调用使用。
+    let child = Uuid::new_v4();
+    let config = ProviderConfigurationFile::default();
+    let foundation =
+        crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(&config);
+    let original = TaskProjectSummary::new(
+        "project",
+        "Project",
+        "/old",
+        false,
+        0,
+        None,
+        None,
+        vec![child],
+    );
+    let current = TaskProjectSummary::new(
+        "project",
+        "Project",
+        "/new",
+        false,
+        0,
+        None,
+        None,
+        vec![child],
+    );
+    let mut request = test_parent_execution_request(child);
+    request.workspace_path = original.path.clone();
+    request.project_id = Some(original.id.clone());
+    request.project_shell_guard = Some(
+        ProjectShellGuard::new(|| Err("stale binding".into())).with_project(original, move || {
+            Ok(Some(
+                ProjectShellGuard::new(|| Ok(())).with_project(current.clone(), || Ok(None)),
+            ))
+        }),
+    );
+    let context = TaskExecutionRuntimeContext::new(config, Arc::new(foundation), None, request);
+    let continuation = ExecutionProviderRequestContinuation {
+        logical_request_id: "same-request".into(),
+        logical_turn_id: Some("same-turn".into()),
+        next_provider_attempt_index: 1,
+        pending_continuation_action_id: None,
+        allows_assistant_tail_restore: false,
+    };
+    let refreshed = super::super::runtime_launch::prepare_task_runtime_project_request(
+        &context,
+        Default::default(),
+        continuation.clone(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(refreshed.session_id, child);
+    assert_eq!(refreshed.workspace_path, "/new");
+    assert_eq!(refreshed.provider_request_continuation, Some(continuation));
+    assert!(matches!(
+        refreshed.turn_start_mode,
+        Some(ExecutionTurnStartMode::RestoredCheckpoint)
+    ));
+    assert!(refreshed.project_shell_guard.unwrap().validate().is_ok());
+    assert_eq!(context.request_template.workspace_path, "/old");
+    assert!(
+        context
+            .request_template
+            .project_shell_guard
+            .as_ref()
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+}
+
 /// Verifies preparation reports a poisoned task registry instead of replacing the stored prompt snapshot with a fallback.
 /// 验证准备阶段会报告中毒的任务注册表，而不是用回退值替换已存储的提示词快照。
 #[test]

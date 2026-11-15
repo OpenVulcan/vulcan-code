@@ -477,6 +477,25 @@ pub struct ExecutionPreparationRequest {
 }
 
 impl ExecutionPreparationRequest {
+    /// Installs the current directory and its guard on a fresh execution preparation.
+    /// 在新的执行准备上安装当前目录及其守卫。
+    /// Returns true only when the service has changed the original directory binding.
+    /// 仅在服务已更换原目录绑定时返回 true。
+    pub(crate) fn refresh_project_directory(&mut self) -> Result<bool, String> {
+        let Some(guard) = self.project_shell_guard.as_ref() else {
+            return Ok(false);
+        };
+        let Some(replacement) = guard.refreshed()? else {
+            return Ok(false);
+        };
+        let project = replacement
+            .project()
+            .ok_or_else(|| String::from("The refreshed directory guard has no project."))?;
+        self.workspace_path = project.path.clone();
+        self.project_shell_guard = Some(replacement);
+        Ok(true)
+    }
+
     /// Adopts the next Provider-request identity and retains only an unconsumed Continue action.
     /// 采用下一 Provider 请求身份，并且仅保留尚未消费的 Continue 动作。
     ///

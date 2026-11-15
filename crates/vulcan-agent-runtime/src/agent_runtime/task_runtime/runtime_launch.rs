@@ -172,6 +172,7 @@ fn build_task_runtime_preparation_with_history(
         // Re-preparation and compaction retain the child's exact route and tool ceiling.
         // 重新准备与压缩保留子代理精确路由和工具上限。
         let mut request = context.request_template.clone();
+        request.refresh_project_directory()?;
         // Current host authorization is already intersected into this captured request.
         // 当前宿主授权已经与捕获请求求交，不能再次用原访问上限覆盖它。
         request.prompt.clear();
@@ -187,6 +188,7 @@ fn build_task_runtime_preparation_with_history(
         &resolved_config.effective_config.provider_model,
     );
     let mut request = context.request_template.clone();
+    request.refresh_project_directory()?;
     request.session_id = invocation.task_id;
     if request
         .knowledge_access
@@ -708,6 +710,59 @@ pub(super) async fn launch_prepared_task_runtime_execution(
     )
     .with_parent_snapshot(bootstrap.core_snapshot.clone());
     build_runtime_stream_launch_payload(&request, bootstrap, Some(child_context))
+}
+
+/// Rebuilds the same child execution at an undispatched request boundary using its current project.
+/// 在尚未分派的请求边界，使用当前项目重建同一个子代理执行。
+pub(super) async fn reprepare_task_runtime_project(
+    context: &TaskExecutionRuntimeContext,
+    conversation_state: vulcan_context::SessionConversationState,
+    continuation: crate::agent_runtime::execution_models::ExecutionProviderRequestContinuation,
+) -> Result<Option<crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch>, String>
+{
+    let Some(request) =
+        prepare_task_runtime_project_request(context, conversation_state, continuation)?
+    else {
+        return Ok(None);
+    };
+    // Reuse the child's admitted execution and keep its durable profile intact.
+    // 复用子代理已准入的执行，保留其持久配置。
+    let prepared = prepare_execution_with_tool_snapshot(
+        &context.foundation,
+        context.luaskills_runtime.clone(),
+        &context.config,
+        &request,
+    )?;
+    let execution = Box::new(PreparedTaskRuntimeExecution {
+        creation: None,
+        config: context.config.clone(),
+        request,
+        prepared,
+    });
+    Box::pin(launch_prepared_task_runtime_execution(context, execution))
+        .await
+        .map(Some)
+}
+
+/// Refreshes only the active child's project and replay-safe request checkpoint.
+/// 仅刷新活动子代理的项目与可安全回放的请求检查点。
+pub(super) fn prepare_task_runtime_project_request(
+    context: &TaskExecutionRuntimeContext,
+    conversation_state: vulcan_context::SessionConversationState,
+    continuation: crate::agent_runtime::execution_models::ExecutionProviderRequestContinuation,
+) -> Result<Option<ExecutionPreparationRequest>, String> {
+    // The launched child's own context preserves the admitted route and tool ceiling.
+    // 已启动子代理自身的上下文保留其已准入路由和工具上限。
+    let mut request = context.request_template.clone();
+    if !request.refresh_project_directory()? {
+        return Ok(None);
+    }
+    request.replace_retry_replay_with_provider_request_continuation(continuation);
+    request.conversation_state = conversation_state;
+    request.turn_start_mode =
+        Some(crate::agent_runtime::execution_models::ExecutionTurnStartMode::RestoredCheckpoint);
+    request.provider_visible_agent_messages.clear();
+    Ok(Some(request))
 }
 
 /// Builds one child runtime-stream launch through the same preparation and bootstrap bridge used by main sessions.
