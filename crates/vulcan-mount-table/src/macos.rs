@@ -1,8 +1,6 @@
 //! Safe read-only access to the macOS mount table.
 //! 以安全的只读接口访问 macOS 挂载表。
 
-#![cfg(target_os = "macos")]
-
 use std::ffi::OsString;
 use std::io;
 use std::mem::{MaybeUninit, size_of};
@@ -86,4 +84,40 @@ mod tests {
         );
         assert!(mounts.iter().all(|mount| mount.path.is_absolute()));
     }
+}
+
+/// Returns the filesystem UUID backing path. Filesystems without a UUID use their device number.
+/// 返回支撑 path 的文件系统 UUID。未提供 UUID 的文件系统使用设备号。
+#[allow(unsafe_code)]
+pub fn volume_identity(path: &std::path::Path) -> io::Result<Option<String>> {
+    use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+
+    // ATTR_VOL_INFO is required for requesting any Darwin volume attribute.
+    // 请求任意 Darwin 卷属性时必须设置 ATTR_VOL_INFO。
+    let mut attributes = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: 0,
+        volattr: libc::ATTR_VOL_INFO | libc::ATTR_VOL_UUID,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: 0,
+    };
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let mut output = [0_u32; 5];
+    // SAFETY: c_path is NUL terminated and output has room for the length word and 16-byte UUID.
+    // 安全性：c_path 以 NUL 结尾，output 包含长度字段和 16 字节 UUID 所需的空间。
+    let result = unsafe {
+        libc::getattrlist(
+            c_path.as_ptr(),
+            std::ptr::from_mut(&mut attributes).cast(),
+            output.as_mut_ptr().cast(),
+            std::mem::size_of_val(&output),
+            0,
+        )
+    };
+    if result == 0 && output[0] == 20 && output[1..].iter().any(|word| *word != 0) {
+        return Ok(Some(format!("mac:uuid:{:08x?}", &output[1..])));
+    }
+    Ok(Some(format!("mac:dev:{}", std::fs::metadata(path)?.dev())))
 }

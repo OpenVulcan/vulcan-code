@@ -2896,9 +2896,10 @@ async fn service_start_conversation_execution(
     if let Some(project_id) = project_admission.exact_project_id() {
         let project = workspace_task_project_for_project_id(&workspace_snapshot, project_id)
             .ok_or_else(|| format!("Project not found: {project_id}"))?;
-        vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
-            &project.path,
-        ))?;
+        vulcan_host_tools::project_directory::require_bound_project_directory(
+            std::path::Path::new(&project.path),
+            project.root_volume_id.as_deref(),
+        )?;
     }
     if existing_submission_requires_hydration(
         submission_session_id,
@@ -3285,10 +3286,13 @@ async fn service_start_conversation_execution(
     project_admission.validate_materialized_session(&materialized_session)?;
     // Unresolved admission can select a project during materialization. Recheck before publication.
     // 未解析的准入可以在物化时确定项目。在发布前再次检查。
-    if materialized_session.project_id.is_some() {
-        vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
-            &materialized_session.workspace_path,
-        ))?;
+    if let Some(project_id) = materialized_session.project_id.as_deref() {
+        let project = workspace_task_project_for_project_id(&workspace_snapshot, project_id)
+            .ok_or_else(|| format!("Project not found: {project_id}"))?;
+        vulcan_host_tools::project_directory::require_bound_project_directory(
+            std::path::Path::new(&materialized_session.workspace_path),
+            project.root_volume_id.as_deref(),
+        )?;
     }
     // Dedicated choices are validated before the root publication that installs them.
     // 专职选择在安装它们的根发布之前完成校验。

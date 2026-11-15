@@ -92,6 +92,13 @@ pub fn build_vulcan_tools_manager(
     native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
     native_agent_collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
 ) -> VulcanToolsManager {
+    // Physical native commands retain the filesystem backing their execution workspace before tools
+    // are exposed. Do not allow a subsequent cwd override to escape a detached volume.
+    // 在暴露工具前固定其执行工作区对应的文件系统，避免随后以 cwd 覆盖绕过被卸载的卷。
+    let shell_workspace_volume = workspace_root
+        .as_deref()
+        .filter(|_| host_project_id.is_some())
+        .map(vulcan_host_tools::project_directory::project_volume_identity);
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
     let vmm_effective = vulcan_vmm::VmmEffectiveConfig::resolve(
@@ -167,6 +174,9 @@ pub fn build_vulcan_tools_manager(
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
+        // Shell commands and terminal starts can set their own cwd; retain the workspace volume.
+        // Shell 命令和终端启动可设置各自 cwd，因此需保留工作区卷。
+        let shell_volume_for_context = shell_workspace_volume.clone();
         let host_project_id_for_context = host_project_id.clone();
         let controller_runtime_for_context = controller_runtime.clone();
         let native_goal_runtime_for_context = native_goal_runtime.clone();
@@ -192,6 +202,7 @@ pub fn build_vulcan_tools_manager(
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
+                let shell_volume = shell_volume_for_context.clone();
                 let host_project_id = host_project_id_for_context.clone();
                 let controller_runtime = controller_runtime_for_context.clone();
                 let goal_runtime = native_goal_runtime_for_context.clone();
@@ -208,6 +219,18 @@ pub fn build_vulcan_tools_manager(
                 let session_vmm = session_vmm_for_context.clone();
                 let native_browser_runtime = native_browser_runtime_for_context.clone();
                 Box::pin(async move {
+                    if (tool_id == "shell_command"
+                        || (tool_id == "terminal_session"
+                            && args.get("action").and_then(serde_json::Value::as_str)
+                                == Some("start")))
+                        && let (Some(root), Some(volume)) =
+                            (workspace_root.as_deref(), shell_volume)
+                    {
+                        vulcan_host_tools::project_directory::require_bound_project_directory(
+                            root,
+                            volume?.as_deref(),
+                        )?;
+                    }
                     catalog
                         .invoke(
                             &tool_id,

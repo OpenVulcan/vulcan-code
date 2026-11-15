@@ -681,6 +681,14 @@ fn spawn_agent_stream_task_with_restart_state(
     // Keep the exact execution path across physical requests, including requests after tools.
     // 跨实际请求保留精确执行路径，包括工具完成后的请求。
     let workspace_path = request.workspace_path.clone();
+    // Look up the mount by the execution's exact project id, never by the current UI selection.
+    // 按执行请求的精确项目标识查找卷，避免取到当前 UI 选中的其他项目。
+    let workspace_volume = request.project_id.as_deref().and_then(|project_id| {
+        let guard = state.lock().ok()?;
+        let snapshot = guard.workspace_snapshot.as_ref()?;
+        let project = crate::workspace_task_project_for_project_id(snapshot, project_id)?;
+        project.root_volume_id.clone()
+    });
     // expectedKernelGenerationOption retains the existing terminalization interface while registration uses the required generation directly.
     // expectedKernelGenerationOption 保留现有终态化接口，同时登记直接使用必需代际。
     let expected_kernel_generation_option = Some(expected_kernel_generation);
@@ -879,9 +887,11 @@ fn spawn_agent_stream_task_with_restart_state(
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 let path = workspace_path.clone();
+                let volume = workspace_volume.clone();
                 match tokio::task::spawn_blocking(move || {
-                    vulcan_host_tools::project_directory::require_project_directory(
+                    vulcan_host_tools::project_directory::require_bound_project_directory(
                         std::path::Path::new(&path),
+                        volume.as_deref(),
                     )
                 })
                 .await
@@ -963,8 +973,9 @@ fn spawn_agent_stream_task_with_restart_state(
                     let directory_check = if workspace_path.is_empty() {
                         Ok(())
                     } else {
-                        vulcan_host_tools::project_directory::require_project_directory(
+                        vulcan_host_tools::project_directory::require_bound_project_directory(
                             std::path::Path::new(&workspace_path),
+                            workspace_volume.as_deref(),
                         )
                     };
                     // Once any prior V1 durability checkpoint fails, reject later preparation locally.

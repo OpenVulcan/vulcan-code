@@ -53,7 +53,7 @@ async function openPicker(
   const root = createRoot(container)
   document.body.append(container)
   const browse = vi.fn(async (path: string | null) => browseDirectory(path))
-  const confirm = vi.fn(async () => undefined)
+  const confirm = vi.fn<(path: string, expectedVolume?: string) => Promise<void>>(async () => undefined)
   await act(async () => root.render(<I18nProvider initialLocale="en-US">
     <ProjectFolderPickerDialog open projectPaths={projectPaths} onBrowse={browse} onConfirm={confirm} onOpenChange={vi.fn()} />
   </I18nProvider>))
@@ -121,6 +121,28 @@ describe("folder picker paths", () => {
 })
 
 describe("folder picker browsing", () => {
+  // A disconnected volume must not silently confirm an identically named folder.
+  // 卷断开后不得静默确认同名目录。
+  it("keeps a failed confirmation on the mounted volume selected by the user", async () => {
+    // The browsed volume survives in the UI while the service detects its removal.
+    // 浏览卷仍显示于界面，服务则检测到该卷已被移除。
+    const projectPath = "C:\\Users\\dev\\projects"
+    const picker = await openPicker([], (path) => ({ ...listingOf(path ?? projectPath), volumeId: "usb-a" }))
+    picker.confirm.mockRejectedValueOnce(new Error("ERR_PROJECT_DIRECTORY_UNAVAILABLE"))
+    try {
+      await act(async () => picker.entry("alpha")!.click())
+      await act(async () => picker.query<HTMLButtonElement>("[data-folder-picker-confirm]")!.click())
+      expect(picker.confirm).toHaveBeenCalledExactlyOnceWith(
+        projectPath + "\\alpha",
+        "usb-a",
+      )
+      expect(picker.selection()).toBe(projectPath + "\\alpha")
+      expect(picker.query("[role=alert]")).toBeTruthy()
+    } finally {
+      await picker.cleanup()
+    }
+  })
+
   // Verifies one click selects a child for confirmation while the browsed folder stays put.
   // 验证单击选中子目录用于确认，而当前浏览目录保持不变。
   it("selects a child on click and confirms it without entering", async () => {

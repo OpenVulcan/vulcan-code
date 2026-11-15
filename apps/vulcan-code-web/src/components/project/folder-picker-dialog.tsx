@@ -208,7 +208,7 @@ export interface ProjectFolderPickerDialogProps {
   onBrowse: (path: string | null) => Promise<ProjectDirectoryListing>;
   // Confirms the selected directory path.
   // 确认选中的目录路径。
-  onConfirm: (path: string) => Promise<void>;
+  onConfirm: (path: string, expectedVolume?: string) => Promise<void>;
 }
 
 // ProjectFolderPickerDialog renders a service-host directory browser: a clickable breadcrumb, a
@@ -400,7 +400,11 @@ export function ProjectFolderPickerDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await onConfirm(selectedPath);
+      // Carry the displayed volume to the mutation. A child on a different volume can be opened
+      // to capture its own mount before confirming.
+      // 将已显示卷传给变更操作。位于另一个卷的子项可先打开以获取其挂载标识再确认。
+      if (listing?.volumeId) await onConfirm(selectedPath, listing.volumeId);
+      else await onConfirm(selectedPath);
       onOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -408,7 +412,7 @@ export function ProjectFolderPickerDialog({
       submittingRef.current = false;
       setSubmitting(false);
     }
-  }, [onConfirm, onOpenChange, selectedPath]);
+  }, [listing?.volumeId, onConfirm, onOpenChange, selectedPath]);
 
   // openTypedPath loads the manually entered path when it is not empty.
   // openTypedPath 在输入非空时加载手动输入的路径。

@@ -31,6 +31,7 @@ async fn upsert_active_project(
         SqliteValue::Text(project.id.clone()),
         SqliteValue::Text(project.title.clone()),
         SqliteValue::Text(project.path.clone()),
+        optional_sqlite_string(&project.root_volume_id),
         SqliteValue::Integer(i64::from(project.pinned)),
         SqliteValue::Integer(0),
         SqliteValue::Integer(sort_order),
@@ -50,6 +51,7 @@ INSERT INTO projects (
     id,
     name,
     root_path,
+    root_volume_id,
     pinned,
     archived,
     sort_order,
@@ -61,6 +63,7 @@ INSERT INTO projects (
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     root_path = excluded.root_path,
+    root_volume_id = excluded.root_volume_id,
     pinned = excluded.pinned,
     archived = excluded.archived,
     sort_order = excluded.sort_order,
@@ -827,6 +830,7 @@ pub async fn replace_project_root_path(
     project_id: &str,
     expected_path: &str,
     new_path: &str,
+    new_volume_id: Option<String>,
 ) -> Result<(), String> {
     validate_project_mutation_id(project_id, "change the project directory")?;
     // Update only the path; stable IDs keep session storage and other project records attached.
@@ -836,7 +840,7 @@ pub async fn replace_project_root_path(
         LogicalDatabase::AppState,
         r#"
 UPDATE projects
-SET root_path = ?1, updated_at = ?2
+SET root_path = ?1, root_volume_id = ?5, updated_at = ?2
 WHERE id = ?3 AND archived = 0 AND root_path = ?4
 RETURNING id;
 "#,
@@ -845,6 +849,7 @@ RETURNING id;
             SqliteValue::Text(current_unix_millis_text()),
             SqliteValue::Text(project_id.to_string()),
             SqliteValue::Text(expected_path.to_string()),
+            optional_sqlite_string(&new_volume_id),
         ],
     )
     .await

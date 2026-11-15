@@ -49,6 +49,9 @@ pub(super) struct StoredProjectRow {
     /// Absolute root path stored in SQLite.
     /// 存储在 SQLite 中的绝对根目录路径。
     pub(super) root_path: String,
+    /// Filesystem identity recorded when an explicit project binding was made.
+    /// 显式绑定项目时记录的文件系统标识。
+    pub(super) root_volume_id: Option<String>,
     /// SQLite numeric pinned flag.
     /// SQLite 数值型置顶标记。
     pub(super) pinned: i64,

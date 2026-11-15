@@ -1224,9 +1224,10 @@ pub(super) async fn prepare_webui_pending_prompt(
         if let Some(project_id) = owning_project_id_for_session(&workspace_snapshot, session_id) {
             let project = workspace_task_project_for_project_id(&workspace_snapshot, &project_id)
                 .ok_or_else(|| format!("Project not found: {project_id}"))?;
-            vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
-                &project.path,
-            ))?;
+            vulcan_host_tools::project_directory::require_bound_project_directory(
+                std::path::Path::new(&project.path),
+                project.root_volume_id.as_deref(),
+            )?;
             project.path.clone()
         } else {
             workspace_path_for_session(&workspace_snapshot, session_id)

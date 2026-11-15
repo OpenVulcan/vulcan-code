@@ -371,6 +371,10 @@ pub struct ProjectDirectoryRootSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDirectoryListing {
+    /// Observed filesystem identifier for the displayed directory, when supported by the host.
+    /// 宿主支持时返回所显示目录的已观测文件系统标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_id: Option<String>,
     /// Selectable filesystem roots available on the service host.
     /// 服务宿主上可选择的文件系统根列表。
     #[serde(default)]

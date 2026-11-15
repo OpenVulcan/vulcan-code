@@ -7,7 +7,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use vulcan_host_tools::project_directory::require_project_directory;
+use vulcan_host_tools::project_directory::{
+    project_volume_identity, require_bound_project_directory, require_project_directory,
+    validate_project_volume,
+};
 use vulcan_service_api::{
     PackageFileListing, PackageFileSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, WorkbenchSnapshot,
@@ -82,6 +85,10 @@ fn browse_project_directory_at(requested_path: &Path) -> Result<ProjectDirectory
         ));
     }
 
+    // Capture the browsed volume before enumerating children so a later remount cannot turn
+    // a stale listing into authority to select a directory on the underlying filesystem.
+    // 浏览前捕获卷，避免随后重新挂载时用过时列表授权选择底层文件系统的目录。
+    let volume_id = project_volume_identity(&directory_path)?;
     let mut entries = fs::read_dir(&directory_path)
         .map_err(|error| {
             format!(
@@ -98,6 +105,7 @@ fn browse_project_directory_at(requested_path: &Path) -> Result<ProjectDirectory
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(ProjectDirectoryListing {
+        volume_id,
         roots: service_project_directory_roots(&directory_path),
         path: normalized_workspace_path_text_from_path(&directory_path),
         parent_path: directory_path
@@ -268,7 +276,7 @@ fn mounted_project_volume_paths() -> Vec<PathBuf> {
 /// 读取 macOS 卷浏览器可见的挂载目标。
 #[cfg(target_os = "macos")]
 fn mounted_project_volume_paths() -> Vec<PathBuf> {
-    vulcan_macos_mount_table::mounted_filesystems()
+    vulcan_mount_table::mounted_filesystems()
         .unwrap_or_default()
         .into_iter()
         .filter(|mount| !mount.hidden && mount.path.is_absolute())
@@ -355,7 +363,9 @@ pub(crate) fn service_check_project_directory(
 ) -> Result<vulcan_service_api::ProjectDirectoryStatus, String> {
     let project = active_project_directory_owner(state, project_id)?;
     let path = project.path;
-    let available = require_project_directory(Path::new(&path)).is_ok();
+    let available =
+        require_bound_project_directory(Path::new(&path), project.root_volume_id.as_deref())
+            .is_ok();
     Ok(vulcan_service_api::ProjectDirectoryStatus { path, available })
 }
 
@@ -383,6 +393,7 @@ pub(crate) async fn service_change_project_directory(
     project_id: String,
     expected_path: String,
     selected_path: PathBuf,
+    expected_volume: Option<String>,
 ) -> Result<WorkbenchSnapshot, String> {
     if !selected_path.is_absolute() {
         return Err(format!(
@@ -418,6 +429,12 @@ pub(crate) async fn service_change_project_directory(
         )
     })?;
     require_project_directory(&canonical_path)?;
+    let volume_id = project_volume_identity(&canonical_path)?;
+    validate_project_volume(
+        &canonical_path,
+        expected_volume.as_deref(),
+        volume_id.as_deref(),
+    )?;
     let new_path = normalized_workspace_path_text_from_path(&canonical_path);
     if snapshot
         .task_projects
@@ -434,6 +451,7 @@ pub(crate) async fn service_change_project_directory(
         &project_id,
         &expected_path,
         &new_path,
+        volume_id,
     )
     .await?;
     refresh_workbench_snapshot(state).await
@@ -456,6 +474,16 @@ pub(crate) async fn service_change_project_directory(
 pub async fn service_add_project_from_path(
     state: SharedServiceBridgeState,
     selected_path: PathBuf,
+) -> Result<Option<WorkbenchSnapshot>, String> {
+    service_add_project_from_selected_volume(state, selected_path, None).await
+}
+
+/// Adds or restores a directory selected from a picker listing; validates its optional volume receipt.
+/// 添加或恢复选择器列表选出的目录，并校验其可选卷回执。
+pub(crate) async fn service_add_project_from_selected_volume(
+    state: SharedServiceBridgeState,
+    selected_path: PathBuf,
+    expected_volume: Option<String>,
 ) -> Result<Option<WorkbenchSnapshot>, String> {
     let normalized_path = normalize_task_project_path(&selected_path);
     if !normalized_path.exists() {
@@ -496,6 +524,27 @@ pub async fn service_add_project_from_path(
         )
         .await?;
 
+    // Revalidate after waiting for the write lock and loading the current index.
+    // 等待写锁并加载当前索引之后再次校验。
+    require_project_directory(&normalized_path)?;
+    let volume_id = project_volume_identity(&normalized_path)?;
+    validate_project_volume(
+        &normalized_path,
+        expected_volume.as_deref(),
+        volume_id.as_deref(),
+    )?;
+    if let Some(existing) = workspace_snapshot
+        .task_projects
+        .iter()
+        .chain(&workspace_snapshot.archived_task_projects)
+        .find(|project| task_project_matches_path(project, &normalized_path_text))
+    {
+        validate_project_volume(
+            &normalized_path,
+            existing.root_volume_id.as_deref(),
+            volume_id.as_deref(),
+        )?;
+    }
     if workspace_snapshot
         .task_projects
         .iter()
@@ -580,7 +629,8 @@ pub async fn service_add_project_from_path(
         None,
         None,
         Vec::new(),
-    );
+    )
+    .with_root_volume_id(volume_id);
     vulcan_workspace_store::workspace_store::persist_new_project(controller_runtime, &project)
         .await?;
     // The project row and its workbench membership must publish before releasing the workspace
@@ -1178,6 +1228,7 @@ mod tests {
                 project_id.into(),
                 old_text.clone(),
                 occupied,
+                None,
             )
             .await
             .is_err()
@@ -1188,13 +1239,39 @@ mod tests {
                 project_id.into(),
                 "stale".into(),
                 new.clone(),
+                None,
             )
             .await
             .is_err()
         );
-        service_change_project_directory(state.clone(), project_id.into(), old_text, new.clone())
-            .await
-            .unwrap();
+        let replaced_volume = service_change_project_directory(
+            state.clone(),
+            project_id.into(),
+            old_text.clone(),
+            new.clone(),
+            Some(String::from("disconnected-original-volume")),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            replaced_volume
+                .starts_with(vulcan_host_tools::project_directory::PROJECT_DIRECTORY_UNAVAILABLE)
+        );
+        assert_eq!(
+            service_check_project_directory(&state, project_id)
+                .unwrap()
+                .path,
+            old_text
+        );
+        service_change_project_directory(
+            state.clone(),
+            project_id.into(),
+            old_text,
+            new.clone(),
+            None,
+        )
+        .await
+        .unwrap();
         let status = service_check_project_directory(&state, project_id).unwrap();
         assert!(status.available);
         assert_eq!(

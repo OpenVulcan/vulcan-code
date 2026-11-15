@@ -116,8 +116,8 @@ it("opens a new conversation in the project added from the new-project action", 
   try {
     await act(async () => mounted.actions().handleCreateProject({ startConversation: true }));
     expect(mounted.pickerOpen).toHaveBeenLastCalledWith(true);
-    await act(async () => mounted.actions().handleConfirmProjectFolder("d:/work/added"));
-    expect(services.add).toHaveBeenCalledWith("d:/work/added");
+    await act(async () => mounted.actions().handleConfirmProjectFolder("d:/work/added", "usb-a"));
+    expect(services.add).toHaveBeenCalledWith("d:/work/added", "usb-a");
     expect(mounted.drafts).toHaveBeenCalledWith(expect.objectContaining({
       projectId: ADDED_PROJECT.id,
       projectName: ADDED_PROJECT.name,
@@ -131,8 +131,8 @@ it("adds a folder chosen for a group without opening a conversation", async () =
   const mounted = await mountHarness();
   try {
     await act(async () => mounted.actions().handleCreateProject({ groupId: "group-a" }));
-    await act(async () => mounted.actions().handleConfirmProjectFolder("D:/work/added"));
-    expect(services.addToGroup).toHaveBeenCalledWith("D:/work/added", "group-a");
+    await act(async () => mounted.actions().handleConfirmProjectFolder("D:/work/added", "usb-a"));
+    expect(services.addToGroup).toHaveBeenCalledWith("D:/work/added", "group-a", "usb-a");
     // Applying the snapshot clears any draft; only a created draft would carry a selection.
     // 应用快照会清空草稿；只有新建草稿才会携带选择对象。
     expect(mounted.drafts.mock.calls.filter(([value]) => value !== null)).toEqual([]);

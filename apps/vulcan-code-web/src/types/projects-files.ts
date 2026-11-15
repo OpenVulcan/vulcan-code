@@ -108,6 +108,9 @@ export interface ProjectDirectoryRootSummary {
 // ProjectDirectoryListing describes one browsed service-host directory.
 // ProjectDirectoryListing 描述一个已浏览的服务宿主目录。
 export interface ProjectDirectoryListing {
+  // Filesystem identity observed while loading this directory, when the host supports it.
+  // 宿主支持时，加载该目录时观测到的文件系统标识。
+  volumeId?: string | null;
   // Selectable filesystem roots.
   // 可选择的文件系统根。
   roots?: ProjectDirectoryRootSummary[];

@@ -18,9 +18,68 @@ pub fn require_project_directory(path: &Path) -> Result<(), String> {
     })
 }
 
+/// Returns the currently mounted volume identifier of path or a diagnostic containing the saved path.
+/// 返回 path 当前挂载卷的标识，或者包含原保存路径的诊断。
+pub fn project_volume_identity(path: &Path) -> Result<Option<String>, String> {
+    vulcan_mount_table::volume_identity(path).map_err(|error| {
+        format!(
+            "{PROJECT_DIRECTORY_UNAVAILABLE}: Cannot identify the volume for `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
+/// Returns success if path is readable and an expected volume, when supplied, is still mounted there.
+/// path 可读取且仍挂载所指定卷（若指定）时返回成功。
+pub fn require_bound_project_directory(
+    path: &Path,
+    expected_volume: Option<&str>,
+) -> Result<(), String> {
+    require_project_directory(path)?;
+    if let Some(expected) = expected_volume {
+        validate_project_volume(
+            path,
+            Some(expected),
+            project_volume_identity(path)?.as_deref(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Rejects a different or unidentified current volume when a previously selected identity was supplied.
+/// 提供先前选择的标识时拒绝当前为不同卷或无法识别卷。
+pub fn validate_project_volume(
+    path: &Path,
+    expected_volume: Option<&str>,
+    current_volume: Option<&str>,
+) -> Result<(), String> {
+    if expected_volume.is_some() && expected_volume != current_volume {
+        return Err(format!(
+            "{PROJECT_DIRECTORY_UNAVAILABLE}: The mounted volume for `{}` has changed. Reopen the directory after restoring its volume.",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Simulates an unmount leaving the original path readable on an underlying or replacement volume.
+    /// 模拟卸载后原路径在底层卷或替代卷上仍然可读。
+    #[test]
+    fn readable_mountpoint_rejects_a_replacement_volume() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        require_project_directory(path).unwrap();
+        let error = validate_project_volume(path, Some("usb-a"), Some("host")).unwrap_err();
+        assert!(error.starts_with(PROJECT_DIRECTORY_UNAVAILABLE));
+        assert!(error.contains(&path.display().to_string()));
+        assert!(validate_project_volume(path, Some("usb-a"), None).is_err());
+        assert!(validate_project_volume(path, Some("usb-a"), Some("usb-b")).is_err());
+        assert!(validate_project_volume(path, Some("usb-a"), Some("usb-a")).is_ok());
+    }
 
     /// A removed directory stays unavailable until the same path is restored.
     /// 已移除的目录在原路径恢复后才重新可用。

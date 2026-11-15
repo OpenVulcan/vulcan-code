@@ -51,6 +51,9 @@ pub struct TaskProjectSummary {
     /// Absolute project path used when opening the directory.
     /// 用于打开目录的项目绝对路径。
     pub path: String,
+    /// Filesystem identity saved when linking this root directory.
+    /// 链接此根目录时保存的文件系统标识。
+    pub root_volume_id: Option<String>,
     /// Whether the project is currently pinned in the tree.
     /// 当前项目是否已在树中置顶。
     pub pinned: bool,
@@ -92,6 +95,7 @@ impl TaskProjectSummary {
             id: id.into(),
             title: title.into(),
             path: path.into(),
+            root_volume_id: None,
             pinned,
             order,
             icon_pack,
@@ -99,6 +103,13 @@ impl TaskProjectSummary {
             session_ids,
             session_sort_mode: ProjectSessionSortMode::default(),
         }
+    }
+
+    /// Returns this summary with the observed filesystem identity of its linked root.
+    /// 返回带有已观测根目录文件系统标识的项目摘要。
+    pub fn with_root_volume_id(mut self, root_volume_id: Option<String>) -> Self {
+        self.root_volume_id = root_volume_id;
+        self
     }
 
     /// Records the persisted session sort mode of the project.

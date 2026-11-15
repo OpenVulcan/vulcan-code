@@ -10113,6 +10113,7 @@ dependencies = [
  "vt100",
  "vulcan-apply-patch",
  "vulcan-change-set",
+ "vulcan-mount-table",
  "vulcan-permission-judge",
  "vulcan-runtime-assets",
  "vulcan-terminal-host-protocol",
@@ -10230,13 +10231,6 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-tools-luaskills-call",
  "workspace-hack",
-]
-
-[[package]]
-name = "vulcan-macos-mount-table"
-version = "0.1.0"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -10369,6 +10363,14 @@ dependencies = [
  "serde",
  "vulcan-memorymesh-core-contracts",
  "workspace-hack",
+]
+
+[[package]]
+name = "vulcan-mount-table"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10627,10 +10629,10 @@ dependencies = [
  "vulcan-lancedb-engine",
  "vulcan-llm-core",
  "vulcan-luaskills-config",
- "vulcan-macos-mount-table",
  "vulcan-markdown-memory",
  "vulcan-mcp-service",
  "vulcan-memorymesh-core",
+ "vulcan-mount-table",
  "vulcan-permission-judge",
  "vulcan-plugin-runtime",
  "vulcan-process-lifecycle",

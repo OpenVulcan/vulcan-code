@@ -9,7 +9,7 @@ pub(super) async fn query_project_rows(
         host_runtime.local.as_ref(),
         LogicalDatabase::AppState,
         r#"
-SELECT p.id, p.name, p.root_path, p.pinned, p.sort_order, p.icon_pack, p.icon_key,
+SELECT p.id, p.name, p.root_path, p.root_volume_id, p.pinned, p.sort_order, p.icon_pack, p.icon_key,
        p.archived, preference.session_sort_mode
 FROM projects p
 LEFT JOIN project_session_preferences preference ON preference.project_id = p.id

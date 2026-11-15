@@ -110,9 +110,10 @@ pub(super) async fn dispatch(
         "service_add_project_from_path" => rpc_json_result(broadcast_after_success(
             &app,
             &state.clone(),
-            service_add_project_from_path(
+            crate::project_directories::service_add_project_from_selected_volume(
                 state,
                 PathBuf::from(rpc_required_param::<String>(params, "path")?),
+                rpc_optional_param(params, "expectedVolume")?,
             )
             .await,
         )),
@@ -150,6 +151,7 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "projectId")?,
                 rpc_required_param(params, "expectedPath")?,
                 PathBuf::from(rpc_required_param::<String>(params, "path")?),
+                rpc_optional_param(params, "expectedVolume")?,
             )
             .await,
         )),
@@ -249,6 +251,7 @@ pub(super) async fn dispatch(
                 state,
                 PathBuf::from(rpc_required_param::<String>(params, "path")?),
                 rpc_required_param(params, "groupId")?,
+                rpc_optional_param(params, "expectedVolume")?,
             )
             .await,
         ),

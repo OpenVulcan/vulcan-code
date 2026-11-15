@@ -148,9 +148,10 @@ pub(crate) fn start_admitted_detached_subagent_listener(
             &state,
             locator.project_id(),
         )?;
-        vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
-            &project.path,
-        ))?;
+        vulcan_host_tools::project_directory::require_bound_project_directory(
+            std::path::Path::new(&project.path),
+            project.root_volume_id.as_deref(),
+        )?;
         crate::session_plan_runtime::emit_lifetime_usage_changed(&app, &state, &child_handle);
         agent_runtime
             .task_runtime

@@ -346,6 +346,7 @@ pub(crate) async fn service_add_project_to_group(
     state: SharedServiceBridgeState,
     path: PathBuf,
     group_id: String,
+    expected_volume: Option<String>,
 ) -> Result<WorkbenchSnapshot, String> {
     let controller_runtime = controller_runtime_from_state(&state)?;
     if !load_project_tree(&controller_runtime)?.has_group(&group_id) {
@@ -355,9 +356,13 @@ pub(crate) async fn service_add_project_to_group(
     }
     // binding_notice belongs only to this add response, so it is carried over to the caller's snapshot.
     // binding_notice 只属于本次添加响应，因此转交给调用方的快照。
-    let binding_notice = service_add_project_from_path(state.clone(), path.clone())
-        .await?
-        .and_then(|workbench| workbench.vmm_memory.project_binding_notice);
+    let binding_notice = crate::project_directories::service_add_project_from_selected_volume(
+        state.clone(),
+        path.clone(),
+        expected_volume,
+    )
+    .await?
+    .and_then(|workbench| workbench.vmm_memory.project_binding_notice);
     let project_id = visible_project_id_for_path(&state, &path)?.ok_or_else(|| {
         String::from("Failed to add the project: the directory is not a visible project.")
     })?;

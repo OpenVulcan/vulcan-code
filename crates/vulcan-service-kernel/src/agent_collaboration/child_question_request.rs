@@ -118,9 +118,10 @@ async fn prepare_child_execution_request(
         &invocation.state,
         target.locator.project_id(),
     )?;
-    vulcan_host_tools::project_directory::require_project_directory(std::path::Path::new(
-        &project.path,
-    ))?;
+    vulcan_host_tools::project_directory::require_bound_project_directory(
+        std::path::Path::new(&project.path),
+        project.root_volume_id.as_deref(),
+    )?;
     request.workspace_path = project.path;
     // Restored children spawn under the root session's allowlist, never a wider one.
     // 恢复的子代理按根会话白名单派生，绝不放宽。

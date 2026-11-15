@@ -59,17 +59,17 @@ export async function checkProjectDirectory(projectId: string): Promise<{ path: 
 
 // changeProjectDirectory rebinds the existing project from the expected path to the chosen path.
 // changeProjectDirectory 将现有项目从预期路径重新绑定到所选路径。
-export async function changeProjectDirectory(projectId: string, expectedPath: string, path: string): Promise<WorkbenchSnapshot> {
-  return serviceClient.request("service_change_project_directory", { projectId, expectedPath, path });
+export async function changeProjectDirectory(projectId: string, expectedPath: string, path: string, expectedVolume?: string): Promise<WorkbenchSnapshot> {
+  return serviceClient.request("service_change_project_directory", { projectId, expectedPath, path, expectedVolume });
 }
 
 // addProjectFromPath registers one service-host directory as a project.
 // addProjectFromPath 将单个服务宿主目录注册为项目。
-export async function addProjectFromPath(path: string): Promise<WorkbenchSnapshot | null> {
+export async function addProjectFromPath(path: string, expectedVolume?: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     throw new Error("Browser service is unavailable, so the project cannot be added.");
   }
-  return serviceClient.request<WorkbenchSnapshot | null>("service_add_project_from_path", { path });
+  return serviceClient.request<WorkbenchSnapshot | null>("service_add_project_from_path", { path, expectedVolume });
 }
 
 // SelfFixWorkspace is the source directory prepared for an on-device fix, already added as a project.
@@ -223,11 +223,11 @@ export async function setProjectTreePinsOrder(pins: ProjectTreePin[]): Promise<W
 
 // addProjectToGroup adds a directory as a project in one group; an existing project only moves into the group.
 // addProjectToGroup 将目录作为项目添加到某分组；已存在的项目只会移入该分组。
-export async function addProjectToGroup(path: string, groupId: string): Promise<WorkbenchSnapshot> {
+export async function addProjectToGroup(path: string, groupId: string, expectedVolume?: string): Promise<WorkbenchSnapshot> {
   if (!hasServiceRuntime()) {
     throw new Error("Service runtime is unavailable; the project was not added.");
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_add_project_to_group", { path, groupId });
+  return serviceClient.request<WorkbenchSnapshot>("service_add_project_to_group", { path, groupId, expectedVolume });
 }
 
 // archiveProjectConversations asks the desktop shell to archive all conversations under one project.

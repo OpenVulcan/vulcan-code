@@ -1,6 +1,6 @@
 [package]
-name = "vulcan-macos-mount-table"
-description = "Narrow safe interface to the macOS kernel mount table."
+name = "vulcan-mount-table"
+description = "Narrow safe access to operating system volume identity and mount information."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,3 +13,6 @@ unsafe_code = "deny"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }

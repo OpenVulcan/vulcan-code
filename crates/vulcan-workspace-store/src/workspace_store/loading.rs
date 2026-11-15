@@ -328,7 +328,8 @@ pub async fn load_workspace_index_report(
             row.icon_key.clone(),
             Vec::new(),
         )
-        .with_session_sort_mode(validated_row.session_sort_mode);
+        .with_session_sort_mode(validated_row.session_sort_mode)
+        .with_root_volume_id(row.root_volume_id.clone());
 
         if validated_row.archived {
             archived_task_projects.push(project);
@@ -759,6 +760,7 @@ mod tests {
         StoredProjectRow {
             id: String::from("project-load"),
             name: String::from("严格项目加载"),
+            root_volume_id: None,
             root_path: std::env::temp_dir()
                 .join("vulcan-project-load")
                 .to_string_lossy()

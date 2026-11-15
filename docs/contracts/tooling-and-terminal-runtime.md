@@ -161,6 +161,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 
 - 动作为 `list`、`start`、`send`、`read`、`snapshot`、`stop`；会话只属于创建它的控制会话，跨会话访问被拒绝。
 - `cwd` 只在 `start` 生效；后续 `send` 只能通过输入 shell 命令改变终端内的工作目录。
+- 项目会话启动 `shell_command` 或 `terminal_session.start` 前先验证项目根目录。显式 `cwd` 也必须通过此检查。已保存卷标识的项目在原卷卸载或被替换时无法继续执行，恢复原目录或更换后由用户重试。
 - `read` 是轮询，不是事件推送：从 AI 游标返回新输出；`snapshot` 查看当前状态但不推进游标。
 - 省略 `wait_policy` 时等待预算为 `0`，立即返回当前缓冲；任何等待模式都受宿主读取等待硬上限约束。
 - `max_chunks` 默认值与上限分别是 `DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS` 与 `MAX_COMMAND_SESSION_READ_CHUNKS`

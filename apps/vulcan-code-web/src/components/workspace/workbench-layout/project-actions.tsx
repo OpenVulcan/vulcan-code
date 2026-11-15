@@ -494,15 +494,15 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   // was opened to start working there, continues into a new unsent conversation owned by that project.
   // handleConfirmProjectFolder 将选中的服务宿主目录添加为项目；若选择器是为开始工作而打开，则继续进入该项目的
   // 新未发送会话。
-  const handleConfirmProjectFolder = React.useCallback(async (path: string) => {
+  const handleConfirmProjectFolder = React.useCallback(async (path: string, expectedVolume?: string) => {
     // A rejected add keeps this intent so the picker's retry still starts the conversation; every open rewrites it.
     // 添加失败时保留该意图，使选择器重试后仍会开始会话；每次打开都会重写它。
     const start = projectFolderStartRef.current;
     // A folder chosen for a group joins that group, and an existing project only moves into it.
     // 为分组选择的文件夹加入该分组；已存在的项目只会移入其中。
     const snapshot = start.groupId
-      ? await addProjectToGroup(path, start.groupId)
-      : await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
+      ? await addProjectToGroup(path, start.groupId, expectedVolume)
+      : await addProjectFromPath(path, expectedVolume) ?? await loadWorkbenchSnapshot();
     const applied = applyProjectActionSnapshot(snapshot);
     toast.success(t("projectActions.listUpdated"));
     // The binding notice belongs only to this project-add response and must not be inferred later.

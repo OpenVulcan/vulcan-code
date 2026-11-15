@@ -74,8 +74,8 @@ export function ProjectDirectoryRecovery({ project, revision, showChange, onChan
 
   // Persist the replacement against the displayed old path before dismissing the picker.
   // 以界面显示的原路径为条件持久化更换，然后关闭选择器。
-  const replace = async (path: string) => {
-    onChanged(await changeProjectDirectory(project.id, project.path, path));
+  const replace = async (path: string, expectedVolume?: string) => {
+    onChanged(await changeProjectDirectory(project.id, project.path, path, expectedVolume));
     void check(false);
   };
 
