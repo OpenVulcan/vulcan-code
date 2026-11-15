@@ -22,7 +22,7 @@ use vulcan_install_core::update::read_manifest;
 use vulcan_install_core::update::{find_update, read_indexes};
 
 use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions, check_port_range};
-use crate::integrate::{self, CLI_DIR, Plan, Recorder, SETUP_PROGRAM};
+use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
 use crate::paths;
 use crate::report::{Action, BACK, Decision, DesktopWay, Outcome, Plain, Reporter, Review, Stage};
 use crate::root::{self, Current, Description, LEGACY_MARKER, Ownership, Version};
@@ -788,7 +788,7 @@ fn apply_target(
         action,
         version: version_text,
         directory: root_path.to_path_buf(),
-        terminal: terminal_command(platform, root_path, choices.path, &installed_version),
+        terminal: format!("{} tui", setup_command(root_path, choices.path)),
         desktop: desktop_way(
             platform,
             root_path,
@@ -1011,26 +1011,6 @@ fn quoted(path: &Path) -> String {
     format!("\"{}\"", path.display())
 }
 
-/// The command that starts the terminal client: its name on PATH, its full path otherwise.
-/// 启动终端客户端的命令：已加入 PATH 时为其名称，否则为完整路径。
-fn terminal_command(platform: Platform, root: &Path, on_path: bool, version: &Version) -> String {
-    let program = if on_path {
-        None
-    } else if platform.is_windows() {
-        Some(root.join(CLI_DIR).join(integrate::TUI_FORWARDER))
-    } else {
-        version
-            .layout
-            .tui_executable
-            .as_ref()
-            .map(|tui| root.join(CURRENT_LINK).join(tui))
-    };
-    program.map_or_else(
-        || String::from(integrate::TUI_COMMAND),
-        |path| quoted(&path),
-    )
-}
-
 /// How the desktop app is opened: the entry this run created, or the program itself.
 /// 桌面应用的打开方式：本次运行创建的入口，或程序本身。
 fn desktop_way(
@@ -1075,20 +1055,30 @@ fn desktop_way(
     )))
 }
 
-/// The command that runs the setup program again: its name on PATH, its full path otherwise.
-/// 再次运行安装器的命令：已加入 PATH 时为其名称，否则为完整路径。
+/// The installed entry's command on PATH or its full path.
+/// 已安装入口在 PATH 上的命令名，或该入口的完整路径。
 pub fn setup_command(root: &Path, on_path: bool) -> String {
     if on_path {
-        String::from(integrate::SETUP_COMMAND)
+        String::from(integrate::ENTRY_COMMAND)
     } else {
-        quoted(&root.join(SETUP_DIR).join(SETUP_PROGRAM))
+        quoted(&root.join(integrate::ENTRY_DIR).join(integrate::ENTRY_EXE))
     }
 }
 
 /// How to uninstall: the command on PATH when it was put there, the full path otherwise.
 /// 如何卸载：命令已加入 PATH 时给出命令，否则给出完整路径。
 pub fn uninstall_hint(root: &Path, on_path: bool) -> String {
-    let command = setup_command(root, on_path);
+    let command = if root
+        .join(integrate::ENTRY_DIR)
+        .join(integrate::ENTRY_EXE)
+        .is_file()
+    {
+        setup_command(root, on_path)
+    } else if on_path {
+        String::from(integrate::SETUP_COMMAND)
+    } else {
+        quoted(&root.join(SETUP_DIR).join(SETUP_PROGRAM))
+    };
     let mut hint = format!(
         "To uninstall: {command} uninstall (add --purge to also delete your sessions and settings)"
     );
@@ -1292,10 +1282,10 @@ mod tests {
     #[test]
     fn commands_are_named_on_path_and_quoted_otherwise() {
         let root = Path::new("/opt/vulcan");
-        assert_eq!(setup_command(root, true), integrate::SETUP_COMMAND);
+        assert_eq!(setup_command(root, true), integrate::ENTRY_COMMAND);
         let full = setup_command(root, false);
         assert!(full.starts_with('"') && full.ends_with('"'));
-        assert!(full.contains(SETUP_PROGRAM));
+        assert!(full.contains(integrate::ENTRY_EXE));
     }
 
     #[test]

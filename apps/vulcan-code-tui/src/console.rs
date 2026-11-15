@@ -11,6 +11,7 @@ use std::io;
 
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
 };
@@ -30,14 +31,22 @@ pub type ConsoleTerminal = Terminal<CrosstermBackend<ConsoleOutput>>;
 pub fn init() -> io::Result<ConsoleTerminal> {
     set_panic_hook();
     enable_raw_mode()?;
-    let mut output = ConsoleOutput::open()?;
-    execute!(
-        output,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
-    )?;
-    Terminal::new(CrosstermBackend::new(output))
+    // Roll back a partial setup even if opening the writer or querying the initial size fails.
+    // 即使打开输出或读取初始尺寸失败，也回滚已启用的终端模式。
+    let terminal = (|| {
+        let mut output = ConsoleOutput::open()?;
+        execute!(
+            output,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )?;
+        Terminal::new(CrosstermBackend::new(output))
+    })();
+    if terminal.is_err() {
+        restore();
+    }
+    terminal
 }
 
 /// Writes a control sequence the frame does not carry, such as an OSC 52 clipboard copy.
@@ -56,16 +65,20 @@ pub fn restore() {
     }
 }
 
+/// Restores the original screen, then enables ordinary input even if an output command failed.
+/// 恢复原屏幕，再恢复普通按键处理，即使某条输出指令失败也会恢复按键处理。
 fn try_restore() -> io::Result<()> {
-    // Raw mode goes first because it has more side effects than leaving the alternate screen.
-    // 先退出原始模式，因为它比离开备用屏幕有更多副作用。
-    disable_raw_mode()?;
-    execute!(
-        ConsoleOutput::open()?,
-        DisableMouseCapture,
-        DisableBracketedPaste,
-        LeaveAlternateScreen
-    )
+    // Keep Ctrl+C as a key while restoring the screen. On Windows, disabling raw mode
+    // re-enables console-wide Ctrl+C events that can terminate the client before it flushes.
+    // 恢复屏幕期间仍把 Ctrl+C 当作按键。在 Windows 上关闭原始模式会重新启用控制台级
+    // Ctrl+C 事件，可能在客户端冲刷终端输出前就将其终止。
+    let screen = ConsoleOutput::open().and_then(|mut output| {
+        let input_features = execute!(output, DisableMouseCapture, DisableBracketedPaste);
+        let main_display = execute!(output, LeaveAlternateScreen, Show);
+        main_display.and(input_features)
+    });
+    let input = disable_raw_mode();
+    screen.and(input)
 }
 
 fn set_panic_hook() {

@@ -104,6 +104,9 @@ fn run() -> Result<()> {
 
     let mut terminal = console::init()?;
     let result = event_loop(&mut terminal, &mut app);
+    // Let Ratatui release its cursor state while the alternate screen is still active.
+    // 在备用屏幕仍处于活动状态时，让 Ratatui 释放它管理的光标状态。
+    drop(terminal);
     console::restore();
     result
 }
@@ -114,6 +117,9 @@ fn event_loop(terminal: &mut ConsoleTerminal, app: &mut App) -> Result<()> {
     // 侧栏时长按整分钟计，因此空闲画面在分钟变化时重绘。
     let mut drawn_minute = crate::model::now_unix_ms() / crate::ui::age::MINUTE_MS;
     loop {
+        if app.should_quit {
+            return Ok(());
+        }
         while let Ok(event) = app.backend.events.try_recv() {
             app.apply(event);
             dirty = true;
@@ -127,9 +133,6 @@ fn event_loop(terminal: &mut ConsoleTerminal, app: &mut App) -> Result<()> {
         if dirty || app.animating() {
             terminal.draw(|frame| ui::draw(frame, app))?;
             dirty = false;
-        }
-        if app.should_quit {
-            return Ok(());
         }
         let wait = if app.animating() { FRAME } else { IDLE_POLL };
         if event::poll(wait)? {
@@ -151,6 +154,9 @@ fn event_loop(terminal: &mut ConsoleTerminal, app: &mut App) -> Result<()> {
             }
             for event in composer::coalesce(batch) {
                 input::handle_event(app, event);
+                if app.should_quit {
+                    return Ok(());
+                }
             }
             if let Some(sequence) = app.clipboard.take_sequence() {
                 console::write_sequence(terminal, &sequence)?;

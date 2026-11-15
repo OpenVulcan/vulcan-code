@@ -36,8 +36,8 @@ pub(super) struct Launcher {
     /// The started Core and when it started, until it is seen running or seen exiting.
     /// 已启动的 Core 及其启动时刻，直到确认其运行或退出为止。
     child: Option<(Child, Instant)>,
-    /// Whether this TUI already started its one Core.
-    /// 本 TUI 是否已启动过它唯一的一次 Core。
+    /// Whether startup has been attempted or this TUI connected to an existing Core.
+    /// 本 TUI 是否已尝试启动或连接到现有 Core。
     started: bool,
 }
 
@@ -111,9 +111,12 @@ impl Launcher {
             .is_some_and(|(_, started)| started.elapsed() < STARTUP_WAIT)
     }
 
-    /// Forgets the started Core once a client connected; it keeps running on its own.
-    /// 客户端连上后不再跟踪已启动的 Core；它自行继续运行。
+    /// Completes initial startup after connecting, even when another process started Core.
+    /// 连上后结束初次启动阶段，即使 Core 是由其他进程启动的。
     pub(super) fn connected(&mut self) {
+        // Continue reconnecting, but respect an explicit stop while this TUI stays open.
+        // 继续尝试重连，但在此 TUI 仍打开时尊重用户显式停止 Core 的操作。
+        self.started = true;
         self.child = None;
     }
 }
@@ -148,6 +151,20 @@ fn detach(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ensures a previously connected TUI never starts a replacement Core during reconnect.
+    /// 确保已连接过的 TUI 在重连期间不会启动替代 Core。
+    #[test]
+    fn a_reconnecting_client_does_not_restart_core() {
+        let mut launcher = Launcher {
+            root: PathBuf::new(),
+            executable: PathBuf::new(),
+            child: None,
+            started: false,
+        };
+        launcher.connected();
+        assert!(!launcher.start().expect("only reconnect"));
+    }
 
     /// Lays out a version root with a TUI and the given manifest, returning the TUI path.
     /// 布置一个含 TUI 与给定清单的版本根，返回 TUI 路径。

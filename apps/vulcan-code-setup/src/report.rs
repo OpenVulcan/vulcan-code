@@ -235,7 +235,8 @@ impl Outcome {
         }
         let setup = &self.setup;
         println!("Next time:");
-        println!("  {setup}  changes the components, shortcuts or channel");
+        println!("  {setup} manager  changes the components, shortcuts or channel");
+        println!("  {setup} web  opens the WebUI");
         println!("  {setup} update  installs the newest version");
         println!(
             "  {setup} uninstall  removes Vulcan Code (add --purge to also delete your sessions \

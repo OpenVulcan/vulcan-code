@@ -174,7 +174,7 @@
                 $Added = $true
             }
         }
-        if ($Added) { Write-Host 'vulcan-tui and vulcan-code-setup work in this PowerShell session now.' }
+        if ($Added) { Write-Host 'vcode works in this PowerShell session now.' }
     } finally {
         if ($Work) { Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue }
     }

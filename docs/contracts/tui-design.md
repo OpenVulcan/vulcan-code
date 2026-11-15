@@ -19,6 +19,7 @@ cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
 
 发行物把 `vulcan-tui` 与服务一同发布到 `bin/`，并在运行布局清单中声明为 `tuiExecutable`。Windows 托盘的“打开终端客户端”
 在新控制台中按该条目启动，并以 `--service-root` 绑定到托盘所属 Core 的发现根目录，因此不会连到其他服务实例。
+确认退出后停止绘制，先退出备用屏幕、恢复光标，再恢复普通终端输入。Windows 在这一步才重新启用系统级 Ctrl+C 处理。
 
 ## 分层
 
@@ -152,7 +153,8 @@ WebUI 卡片一样仅在判定启用时出现在导航中。
   相对路径）；工作区构建与以 `--service-root` 绑定的 TUI（托盘启动）只连接。首次连接失败时分离启动一次 Core
   （有桌面会话时 `--service`，Linux 没有 `DISPLAY`/`WAYLAND_DISPLAY` 时 `--headless`），工作目录为版本根，TUI
   退出后 Core 继续运行；并发启动由 Core 的数据根锁裁决。启动后提示“正在启动”，等待期（`STARTUP_WAIT`，与 GUI
-  的就绪等待一致）内不显示连接失败；Core 在可连接前退出或无法启动时报告原因。实现见 `backend/service/launch.rs`。
+  的就绪等待一致）内不显示连接失败；Core 在可连接前退出或无法启动时报告原因。第一次连接成功后，后续断线
+  仅尝试重连，以便用户停止 Core 后能让其保持关闭。实现见 `backend/service/launch.rs`。
 - **共享 DTO**：TUI 链接 `vulcan-service-api` 与 `vulcan-session-core`，事件帧、工作台快照、增量、会话事件窗口
   及各 RPC 响应都按共享类型严格解析，事件状态枚举直接复用共享类型；不符合类型的数据以“无法读取”提示报告来源
   与期望类型，不回显取值（serde 错误可能引用凭据）。只有 Git 载荷（DTO 位于服务内核、未共享）仍由

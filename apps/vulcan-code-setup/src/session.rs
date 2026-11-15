@@ -649,11 +649,13 @@ fn done_lines<'a>(translator: &'a Translator, outcome: &Outcome) -> Vec<Line<'a>
     lines.push(Line::default());
     lines.push(heading("setup.done.next"));
     let setup = [("command", outcome.setup.as_str())];
-    for key in [
+    let manager = format!("{} manager", outcome.setup);
+    lines.push(item(filled(
+        translator,
         "setup.done.modify",
-        "setup.done.update",
-        "setup.done.uninstall",
-    ] {
+        &[("command", &manager)],
+    )));
+    for key in ["setup.done.update", "setup.done.uninstall"] {
         lines.push(item(filled(translator, key, &setup)));
     }
     if outcome.platform.is_windows() {

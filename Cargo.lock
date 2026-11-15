@@ -10930,16 +10930,18 @@ dependencies = [
 
 [[package]]
 name = "vulcan-code-setup"
-version = "0.2.14"
+version = "0.2.16"
 dependencies = [
  "crossterm",
  "dirs",
  "iced",
  "image",
+ "libc",
  "ratatui",
  "serde",
  "serde_json",
  "tempfile",
+ "ureq",
  "vulcan-i18n",
  "vulcan-install-core",
  "windows 0.62.2",

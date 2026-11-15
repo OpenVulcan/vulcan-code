@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS,
-    HANDLE, INVALID_HANDLE_VALUE,
+    FILETIME, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -24,14 +24,15 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
-    GetCurrentProcess, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, INFINITE,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
+    GetShellWindow, HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
 };
 
 /// Key of the per-user environment.
@@ -45,6 +46,14 @@ const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstal
 /// The AppId-derived entry written by scripts/windows-installer.mjs.
 /// scripts/windows-installer.mjs 按 AppId 生成的注册项。
 pub const INNO_ENTRY: &str = "{4AA6A407-B39F-4AF7-9F9B-167D14D64368}_is1";
+
+/// Reports whether the launching process can see the interactive Windows shell.
+/// 判断启动进程是否能看到当前的 Windows 交互式桌面外壳。
+pub fn interactive_desktop() -> bool {
+    // SAFETY: GetShellWindow has no parameters and returns a borrowed window handle or null.
+    // 安全性：GetShellWindow 无参数，返回借用的窗口句柄或空值。
+    !unsafe { GetShellWindow() }.is_null()
+}
 
 /// Reports whether Explorer started the installer without a shared interactive console.
 /// 判断资源管理器是否在没有共享交互控制台的情况下启动了安装器。
@@ -234,6 +243,37 @@ const RUN_VALUE: &str = "Vulcan Code";
 /// 将 `text` 编码为以 NUL 结尾的 UTF-16 字符串。
 fn wide(text: impl AsRef<OsStr>) -> Vec<u16> {
     text.as_ref().encode_wide().chain(Some(0)).collect()
+}
+
+/// Opens a verified WebUI URL in the registered browser.
+/// 使用已登记的浏览器打开已校验的 WebUI 网址。
+pub fn open_browser(url: &str) -> Result<(), String> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::PCWSTR;
+
+    let verb = wide("open");
+    let url = wide(url);
+    // SAFETY: verb and target are terminated UTF-16, and unused arguments are null.
+    // 安全性：操作和目标均为已终止的 UTF-16，未使用参数为空指针。
+    let status = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(url.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if status.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Windows could not open the WebUI (error {})",
+            status.0 as isize
+        ))
+    }
 }
 
 /// An open registry key, closed when dropped.
@@ -428,9 +468,9 @@ impl Drop for Handle {
     }
 }
 
-/// The program of the process `pid`, when this user may query it.
-/// 进程 `pid` 的程序路径（当本用户有权查询时）。
-fn program_of(pid: u32) -> Option<String> {
+/// Returns the image and creation time of the process associated with this identifier.
+/// 返回该进程号对应进程的映像路径和创建时间。
+fn program_of(pid: u32) -> Option<(String, u64)> {
     // SAFETY: OpenProcess takes plain values and returns null on failure.
     // SAFETY：OpenProcess 接收普通值，失败时返回空。
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
@@ -438,6 +478,28 @@ fn program_of(pid: u32) -> Option<String> {
         return None;
     }
     let process = Handle(process);
+    Some((program_path(&process)?, process_birth(&process)?))
+}
+
+/// Reads creation time from a bound process handle, guarding against PID reuse.
+/// 从绑定的进程句柄读取创建时间，防止进程号复用。
+fn process_birth(process: &Handle) -> Option<u64> {
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: the four distinct writable fields remain live until the Win32 query returns.
+    // 安全性：四个独立的可写字段在 Win32 查询返回前均有效。
+    let result =
+        unsafe { GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user) };
+    (result != 0)
+        .then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+/// Reads the image path from an already-open handle to the process.
+/// 通过已经打开的进程句柄读取映像路径。
+fn program_path(process: &Handle) -> Option<String> {
     let mut buffer = vec![0u16; 32_768];
     let mut size = buffer.len() as u32;
     // SAFETY: the buffer holds `size` UTF-16 units; `size` receives the length written.
@@ -460,11 +522,25 @@ fn program_of(pid: u32) -> Option<String> {
 /// Processes other than this one whose program lies below `root`, as process id and program.
 /// 程序位于 `root` 之下的其他进程，以进程号与程序路径表示。
 pub fn processes_below(root: &Path) -> Vec<(u32, PathBuf)> {
+    process_snapshot()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, path, _)| below(&path.to_string_lossy(), root))
+        .map(|(pid, path, _)| (pid, path))
+        .collect()
+}
+
+/// Enumerates process images and their creation times from the native snapshot.
+/// 从原生快照枚举进程映像及其创建时间。
+pub fn process_snapshot() -> Result<Vec<(u32, PathBuf, u64)>, String> {
     // SAFETY: the snapshot call takes plain values and returns INVALID_HANDLE_VALUE on failure.
     // SAFETY：快照调用接收普通值，失败时返回 INVALID_HANDLE_VALUE。
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
-        return Vec::new();
+        return Err(format!(
+            "cannot scan Windows processes: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     let snapshot = Handle(snapshot);
     // SAFETY: PROCESSENTRY32W is plain data, valid when zeroed.
@@ -480,15 +556,42 @@ pub fn processes_below(root: &Path) -> Vec<(u32, PathBuf)> {
         let pid = entry.th32ProcessID;
         if pid != 0
             && pid != own
-            && let Some(program) = program_of(pid).filter(|program| below(program, root))
+            && let Some((program, created)) = program_of(pid)
         {
-            found.push((pid, PathBuf::from(program)));
+            found.push((pid, PathBuf::from(program), created));
         }
         // SAFETY: as for Process32FirstW above.
         // SAFETY：与上面的 Process32FirstW 相同。
         more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
     }
-    found
+    Ok(found)
+}
+
+/// Ends an approved executable only after checking the image on the same process handle.
+/// 通过同一个进程句柄核对映像后，只结束已获授权的可执行文件。
+pub fn end_matching_process(pid: u32, expected: &Path, created: u64) {
+    // SAFETY: a successful open returns an owned handle to one process.
+    // 安全性：成功时返回指向单个进程的独占句柄。
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            pid,
+        )
+    };
+    if process.is_null() {
+        return;
+    }
+    let process = Handle(process);
+    if process_birth(&process) == Some(created)
+        && program_path(&process).is_some_and(|path| same_install_dir(Path::new(&path), expected))
+    {
+        // SAFETY: image identification and termination refer to the same open handle.
+        // 安全性：映像识别和终止都使用同一个打开的句柄。
+        unsafe {
+            TerminateProcess(process.0, 1);
+        }
+    }
 }
 
 /// Ends the process `pid` and waits up to `wait` for it to exit; a process that is gone or cannot
@@ -598,6 +701,44 @@ pub fn run_with_only(
     stdout: &std::fs::File,
     stderr: &std::fs::File,
 ) -> Result<u32, String> {
+    let process = spawn_with_only(program, args, stdout, stderr, None)?;
+    let mut code = 0u32;
+    // SAFETY: the process handle from CreateProcessW remains open through the wait.
+    // 安全性：CreateProcessW 返回的进程句柄在等待期间保持打开。
+    let finished = unsafe {
+        WaitForSingleObject(process.0, INFINITE);
+        GetExitCodeProcess(process.0, &mut code)
+    };
+    if finished == 0 {
+        return Err(format!(
+            "cannot read its exit code: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(code)
+}
+
+/// Starts `program` with `args` from `directory`, without waiting or holding the caller's pipes.
+/// 从 `directory` 启动 `program` 并传入 `args`，立即返回且不占用调用方的管道。
+pub fn start_background(program: &Path, args: &[&str], directory: &Path) -> Result<(), String> {
+    let output = std::fs::File::options()
+        .write(true)
+        .open("NUL")
+        .map_err(|error| format!("cannot open NUL: {error}"))?;
+    spawn_with_only(program, args, &output, &output, Some(directory)).map(drop)
+}
+
+/// Creates `program` with `args` and only the given output handles. Returns the owned process.
+/// 以 `args` 创建 `program`，只传递指定的输出句柄，并返回独占进程句柄。
+/// The child reads from NUL and starts in `directory` if one is specified.
+/// 子进程从 NUL 读取输入，并在指定了 `directory` 时从该目录启动。
+fn spawn_with_only(
+    program: &Path,
+    args: &[&str],
+    stdout: &std::fs::File,
+    stderr: &std::fs::File,
+    directory: Option<&Path>,
+) -> Result<Handle, String> {
     let input = std::fs::File::open("NUL").map_err(|error| format!("cannot open NUL: {error}"))?;
     let passed = [
         inheritable(&input)?,
@@ -660,6 +801,8 @@ pub fn run_with_only(
     // SAFETY: PROCESS_INFORMATION is a plain C structure for which all zeroes is a valid value.
     // SAFETY：PROCESS_INFORMATION 是普通 C 结构，全零是有效值。
     let mut started: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let directory = directory.map(wide);
+    let working_dir = directory.as_deref().map_or(null(), <[u16]>::as_ptr);
     // SAFETY: the command line is a writable NUL-terminated buffer, the startup information and
     // its attribute list are initialized, and the process information is written on success.
     // SAFETY：命令行是可写且以 NUL 结尾的缓冲区，启动信息及其属性列表已初始化，成功时写入进程信息。
@@ -672,7 +815,7 @@ pub fn run_with_only(
             1,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
             null(),
-            null(),
+            working_dir,
             &startup.StartupInfo,
             &mut started,
         )
@@ -680,24 +823,8 @@ pub fn run_with_only(
     if created == 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
-    let process = Handle(started.hProcess);
     drop(Handle(started.hThread));
-    drop(attributes);
-    drop(passed);
-    let mut code = 0u32;
-    // SAFETY: the process handle is open with full access, as CreateProcessW returns it.
-    // SAFETY：进程句柄由 CreateProcessW 以完全权限返回并保持打开。
-    let finished = unsafe {
-        WaitForSingleObject(process.0, INFINITE);
-        GetExitCodeProcess(process.0, &mut code)
-    };
-    if finished == 0 {
-        return Err(format!(
-            "cannot read its exit code: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(code)
+    Ok(Handle(started.hProcess))
 }
 
 /// Whether two PATH entries name the same directory.

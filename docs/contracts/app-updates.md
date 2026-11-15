@@ -172,6 +172,16 @@
   管道会一直保持打开；同理，Windows 上安装器以显式句柄列表启动 Core，只交出 NUL 与这两个文件（Windows
   PowerShell 等会把其输出的额外可继承副本交给安装器），调用方经管道读取安装器输出时不会被服务挂住。
 
+## 安装后的 vcode 命令
+
+- 裸 `vcode` 与不受支持的命令显示帮助及安装管理器版本。用 `vcode tui` 或 `vcode gui` 启动对应客户端。
+- `vcode web` 打开经健康探测确认的本机 WebUI，`vcode start` 只启动 Core 并显示网址。两者均复用已运行的 Core，
+  冷启动时在桌面会话选择托盘模式，在无桌面会话选择无头模式。`vcode stop` 只停止当前安装目录中的 Core，
+  会中断运行中的任务，桌面和终端窗口保持打开。已连接过的新版 TUI 在断线后只尝试重连。
+- `vcode manager` 与 `vcode manager tui` 在终端管理安装和服务登记，`vcode manager gui` 打开已安装的图形管理器，
+  `vcode update` 更新产品。选择不加入 PATH 时仍可运行安装目录下的 `cli/vcode`（Windows 为
+  `setup/vcode.exe`）。此前版本用来升级的 `setup/` 内部程序路径继续保留。
+
 ## Linux 桌面应用的 AppArmor 配置
 
 - **原因**：Ubuntu 23.10 及以后（`/proc/sys/kernel/apparmor_restrict_unprivileged_userns` 为 `1`）只允许

@@ -15,7 +15,9 @@ mod gui;
 mod inno;
 mod install;
 mod integrate;
+mod launcher;
 pub mod paths;
+mod processes;
 mod prompt;
 mod report;
 mod root;
@@ -47,6 +49,17 @@ pub const CANCELLED_EXIT_CODE: i32 = 130;
 /// Runs the setup program with the arguments after the program name; returns the exit code.
 /// 以程序名之后的参数运行安装器；返回退出码。
 pub fn run(arguments: &[String]) -> i32 {
+    // The installed entry forwards to this engine without intercepting compatibility commands.
+    // 已安装入口转发到当前引擎，兼容命令沿用原入口。
+    if let Some(result) = launcher::dispatch(arguments) {
+        return result;
+    }
+    run_engine(arguments)
+}
+
+/// Runs the setup engine without dispatching the public launcher name.
+/// 运行安装引擎，跳过公开启动器名称的分派。
+pub(crate) fn run_engine(arguments: &[String]) -> i32 {
     #[cfg(windows)]
     if arguments == ["--supports-inno-adoption"] {
         return 0;

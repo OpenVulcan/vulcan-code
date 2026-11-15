@@ -43,6 +43,7 @@ pub const ROOT_LAUNCHER: &str = "VulcanCode.exe";
 
 /// File name of the PATH forwarder in [`CLI_DIR`] on Windows.
 /// Windows 上 [`CLI_DIR`] 中 PATH 转发器的文件名。
+#[cfg(windows)]
 pub const TUI_FORWARDER: &str = "vulcan-tui.exe";
 
 /// Command of the terminal client on PATH.
@@ -56,6 +57,22 @@ pub const DESKTOP_COMMAND: &str = "vulcan-code";
 /// Command of the setup program on PATH.
 /// PATH 上安装器的命令。
 pub const SETUP_COMMAND: &str = "vulcan-code-setup";
+
+/// The installed command that launches or manages Vulcan Code.
+/// 启动或管理 Vulcan Code 的已安装命令。
+pub const ENTRY_COMMAND: &str = "vcode";
+
+/// The filename of the installed primary entry.
+/// 已安装主入口的文件名。
+pub const ENTRY_EXE: &str = if cfg!(windows) {
+    "vcode.exe"
+} else {
+    ENTRY_COMMAND
+};
+
+/// The entry's directory relative to the installation root.
+/// 主入口相对于安装根目录的目录。
+pub const ENTRY_DIR: &str = if cfg!(windows) { SETUP_DIR } else { CLI_DIR };
 
 /// Command of Core on the Unix user PATH.
 /// Unix 用户 PATH 上的 Core 命令。
@@ -188,7 +205,10 @@ impl Plan<'_> {
     /// Linux 与 macOS 的命令启动器：名称及相对根目录的目标。
     fn launchers(&self, layout: &Layout) -> Vec<(&'static str, String)> {
         let current = |entry: &str| format!("current/{entry}");
-        let mut launchers = vec![(SETUP_COMMAND, format!("{SETUP_DIR}/{SETUP_PROGRAM}"))];
+        let mut launchers = vec![
+            (ENTRY_COMMAND, format!("{CLI_DIR}/{ENTRY_EXE}")),
+            (SETUP_COMMAND, format!("{SETUP_DIR}/{SETUP_PROGRAM}")),
+        ];
         launchers.push((SERVICE_COMMAND, current(&layout.service_executable)));
         if let Some(tui) = &layout.tui_executable {
             launchers.push((TUI_COMMAND, current(tui)));
@@ -549,6 +569,11 @@ fn integrate_windows(
 ) -> Result<(), String> {
     let cli = plan.root.join(CLI_DIR);
     recorder.ensure_dir(&cli)?;
+    let setup = plan.root.join(SETUP_DIR).join(SETUP_PROGRAM);
+    // Keep the entry with the setup engine so existing deferred cleanup covers its running image.
+    // 将入口与安装引擎放在一起，让已有延迟清理覆盖运行中的映像。
+    let entry = plan.root.join(ENTRY_DIR).join(ENTRY_EXE);
+    replace_running_file(&setup, &entry)?;
     let forwarder = cli.join(TUI_FORWARDER);
     // Windows has no current link; programs outside the versions are copied from the version.
     // Windows 没有 current 链接；版本之外的程序从版本目录复制。
@@ -565,7 +590,7 @@ fn integrate_windows(
         // 程序无法修改启动它的 Shell 的环境；install.ps1 会把新条目复制到其 PowerShell 会话中。
         if added {
             recorder.notes.push(String::from(
-                "vulcan-tui and vulcan-code-setup are on the user PATH; terminals opened from now on \
+                "vcode is on the user PATH; terminals opened from now on \
                  find them.",
             ));
         }
@@ -574,7 +599,6 @@ fn integrate_windows(
     if plan.gui {
         integrate_desktop_windows(plan, version, &launcher, recorder)?;
     }
-    let setup = plan.root.join(SETUP_DIR).join(SETUP_PROGRAM);
     let key = windows_uninstall_key(plan.root)?;
     crate::windows::write_uninstall_entry(
         &key,
@@ -697,6 +721,21 @@ fn integrate_unix(
     recorder: &mut Recorder<'_>,
     reporter: &dyn Reporter,
 ) -> Result<(), String> {
+    let cli = plan.root.join(CLI_DIR);
+    recorder.ensure_dir(&cli)?;
+    let entry = cli.join(ENTRY_EXE);
+    let script = format!(
+        "#!/bin/sh\n{LAUNCHER_MARKER}\nexec \"{root}/{SETUP_DIR}/{SETUP_PROGRAM}\" {flag} \"{root}\" \"$@\"\n",
+        root = plan.root.display(),
+        flag = crate::launcher::ENTRY_FLAG,
+    );
+    if !write_marked(&entry, &script)? {
+        return Err(format!(
+            "{} is not owned by the setup program",
+            entry.display()
+        ));
+    }
+    recorder.add(Item::File { path: entry });
     if plan.path {
         let bin = paths::bin_dir()?;
         recorder.ensure_dir(&bin)?;
