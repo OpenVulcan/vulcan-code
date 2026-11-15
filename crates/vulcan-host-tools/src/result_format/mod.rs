@@ -185,14 +185,47 @@ pub fn render_tool_result_text(
     client_budget: &ToolResultBudgetSnapshot,
     render_options: &HostRenderOptions,
 ) -> Result<String, String> {
+    render_tool_result_text_with_spill_policy(
+        output,
+        skill_name,
+        client_budget,
+        render_options,
+        true,
+    )
+}
+
+/// Renders into a spill directory that the caller has opened without recreating its ancestors.
+/// 将结果渲染到调用方已打开且未重建祖先目录的超限目录。
+pub fn render_tool_result_text_in_existing_spill(
+    output: &HostTextRenderInput,
+    client_budget: &ToolResultBudgetSnapshot,
+    render_options: &HostRenderOptions,
+) -> Result<String, String> {
+    render_tool_result_text_with_spill_policy(output, None, client_budget, render_options, false)
+}
+
+/// Applies the selected output policy with caller-controlled spill directory creation.
+/// 应用选择的输出策略，由调用方决定是否创建超限目录。
+fn render_tool_result_text_with_spill_policy(
+    output: &HostTextRenderInput,
+    skill_name: Option<&str>,
+    client_budget: &ToolResultBudgetSnapshot,
+    render_options: &HostRenderOptions,
+    create_spill: bool,
+) -> Result<String, String> {
     let policy = resolve_overflow_policy(skill_name, output);
     match policy.mode {
         OverflowMode::Truncate => {
             render_truncate_text(output, skill_name, &policy, client_budget, render_options)
         }
-        OverflowMode::Page => {
-            render_page_text(output, skill_name, &policy, client_budget, render_options)
-        }
+        OverflowMode::Page => render_page_text(
+            output,
+            skill_name,
+            &policy,
+            client_budget,
+            render_options,
+            create_spill,
+        ),
     }
 }
 
@@ -293,6 +326,7 @@ fn render_page_text(
     policy: &OverflowPolicy,
     client_budget: &ToolResultBudgetSnapshot,
     render_options: &HostRenderOptions,
+    create_spill: bool,
 ) -> Result<String, String> {
     let tool_result_budget = &client_budget.tool_result;
     if content_fits_budget(output, tool_result_budget) {
@@ -307,7 +341,7 @@ fn render_page_text(
         .as_deref()
         .ok_or_else(|| PAGE_SPILL_ROOT_REQUIRED_ERROR.to_string())?;
 
-    let pending_file = stage_overflow_text_file(&output.content, spill_root)?;
+    let pending_file = stage_overflow_text_file(&output.content, spill_root, create_spill)?;
     let raw_file = pending_file.path();
 
     let mut context = HashMap::new();
@@ -511,11 +545,25 @@ fn render_chunk_lines(chunk_plan: &OverflowChunkPlan, maximum: usize) -> String 
 fn stage_overflow_text_file(
     content: &str,
     spill_root: &Path,
+    create_spill: bool,
 ) -> Result<tempfile::NamedTempFile, String> {
     use std::io::Write;
 
-    fs::create_dir_all(spill_root)
-        .map_err(|error| format!("Failed to create the overflow directory: {error}."))?;
+    if create_spill {
+        // Recognize the standard project spill path via its authoritative resolver.
+        // 通过权威解析函数识别标准的项目分页目录。
+        let project_root = spill_root.parent().and_then(Path::parent).filter(|root| {
+            crate::project_temp_maintenance::resolve_project_temp_dir(root) == spill_root
+        });
+        if let Some(root) = project_root {
+            // Only create descendants; an unplugged or removed project must never be restored here.
+            // 仅创建子目录，拔盘或移除的项目目录绝不能在此处被重建。
+            crate::project_temp_maintenance::prepare_existing_project_temp_dir(root)?;
+        } else {
+            fs::create_dir_all(spill_root)
+                .map_err(|error| format!("Failed to create the overflow directory: {error}."))?;
+        }
+    }
     // Exclusive allocation, not clock precision, prevents concurrent results from aliasing.
     // 依靠独占分配而非时钟精度，避免并发结果指向同一文件。
     let mut file = tempfile::Builder::new()
@@ -533,7 +581,7 @@ fn stage_overflow_text_file(
 
 #[cfg(test)]
 fn write_overflow_text_file(content: &str, spill_root: &Path) -> Result<PathBuf, String> {
-    stage_overflow_text_file(content, spill_root)?
+    stage_overflow_text_file(content, spill_root, true)?
         .keep()
         .map(|(_, path)| path)
         .map_err(|error| format!("Failed to retain the overflow file: {error}."))
@@ -552,6 +600,28 @@ fn normalize_text(content: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Preserves a disappeared spill parent after the caller's validation.
+    /// 调用方完成校验后，保留已消失的超限父目录状态。
+    #[test]
+    fn existing_output_spill_does_not_recreate_missing_ancestors() {
+        let workspace = tempfile::tempdir().unwrap();
+        // Establish the standard project spill destination used by terminal results.
+        // 使用终端结果所用的标准项目分页目录。
+        let root = workspace.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let spill = crate::project_temp_maintenance::resolve_project_temp_dir(&root);
+        assert!(stage_overflow_text_file("retained result", &spill, true).is_ok());
+        fs::remove_dir(&spill).unwrap();
+        fs::remove_dir(spill.parent().unwrap()).unwrap();
+        fs::remove_dir(&root).unwrap();
+        // Both terminal's normal renderer and shell's prevalidated renderer preserve the missing root.
+        // 终端的普通渲染器和 Shell 的预校验渲染器都保留目录缺失状态。
+        for create_spill in [true, false] {
+            assert!(stage_overflow_text_file("retained result", &spill, create_spill).is_err());
+            assert!(!root.exists());
+        }
+    }
 
     /// Linear truncation preserves byte, line, Unicode and CRLF boundary behavior.
     /// 线性截断保留字节、行数、Unicode 及 CRLF 边界行为。

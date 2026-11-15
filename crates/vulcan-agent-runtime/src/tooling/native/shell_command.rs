@@ -1182,6 +1182,49 @@ pub(crate) fn require_shell_cwd(cwd: &Path) -> Result<(), NativeToolError> {
         .map_err(|error| NativeToolError::new(shell_directory_error(error)))
 }
 
+/// Pages shell text under an existing project, or returns the completed job and a log pointer.
+/// 在已有项目下分页 Shell 文本；无法分页时返回已完成的任务和日志定位。
+fn render_shell_overflow(
+    request: &NativeToolExecutionRequest,
+    input: &HostTextRenderInput,
+    budget: &ToolResultBudgetSnapshot,
+    mut options: HostRenderOptions,
+    job_id: Option<&str>,
+    status: &str,
+) -> Result<(String, bool), String> {
+    let Some(project_root) = request
+        .workspace_root
+        .as_deref()
+        .filter(|_| request.spill_root.is_none())
+    else {
+        return render_tool_result_text(input, None, budget, &options).map(|text| (text, true));
+    };
+    // The generic writer must never recreate the project if it disappears during pagination.
+    // 项目在分页期间消失时，共用写入器不得重建项目。
+    let page = (|| {
+        require_shell_project(request).map_err(|error| error.to_string())?;
+        options.spill_root = Some(project_temp_maintenance::prepare_existing_project_temp_dir(
+            project_root,
+        )?);
+        require_shell_project(request).map_err(|error| error.to_string())?;
+        crate::tool_result_format::render_tool_result_text_in_existing_spill(
+            input, budget, &options,
+        )
+    })();
+    match page {
+        Ok(text) => Ok((text, true)),
+        Err(error) => {
+            let mut text = format!("Status: {status}\nProject output page unavailable: {error}");
+            if let Some(job_id) = job_id {
+                text.push_str(&format!(
+                    "\nRead the retained output with shell_job (job_id `{job_id}`)."
+                ));
+            }
+            Ok((text, false))
+        }
+    }
+}
+
 /// Executes one `shell_command` invocation after applying the generic plugin transform chain.
 /// 在应用通用插件转换链后执行一次 `shell_command` 调用。
 pub(crate) async fn execute_shell_command_tool(
@@ -1238,13 +1281,6 @@ pub(crate) async fn execute_shell_command_tool(
         build_shell_command_text_render_input(&effective_args, &execution_report, &hook_report);
     let budget = default_shell_command_budget_snapshot();
     let exceeds_inline_budget = shell_command_output_exceeds_inline_budget(&render_input, &budget);
-    let host_payload = build_shell_command_host_payload(
-        session_id,
-        &effective_args,
-        &execution_report,
-        exceeds_inline_budget,
-        &hook_report,
-    );
     let render_options = HostRenderOptions {
         spill_root,
         template_skill_roots: Vec::new(),
@@ -1252,9 +1288,20 @@ pub(crate) async fn execute_shell_command_tool(
     };
     // Only overflowing output writes a spill page; keep that filesystem work off the async worker.
     // 只有超限输出会写入分页文件；该文件系统操作不占用异步工作线程。
-    let model_output = if exceeds_inline_budget {
+    let (model_output, output_paged) = if exceeds_inline_budget {
+        // Preserve the real job receipt even if the workspace disappears after the process starts.
+        // 进程启动后工作区消失时，仍保留真实的任务回执。
+        let job_id = execution_report.job_id.clone();
+        let status = execution_report.status_label();
         tokio::task::spawn_blocking(move || {
-            render_tool_result_text(&render_input, None, &budget, &render_options)
+            render_shell_overflow(
+                &request,
+                &render_input,
+                &budget,
+                render_options,
+                job_id.as_deref(),
+                status,
+            )
         })
         .await
         .map_err(|error| {
@@ -1262,8 +1309,16 @@ pub(crate) async fn execute_shell_command_tool(
         })?
     } else {
         render_tool_result_text(&render_input, None, &budget, &render_options)
+            .map(|text| (text, false))
     }
     .map_err(NativeToolError::new)?;
+    let host_payload = build_shell_command_host_payload(
+        session_id,
+        &effective_args,
+        &execution_report,
+        output_paged,
+        &hook_report,
+    );
 
     // The raw streams stay in memory so a chain step can read them even when the text spilled.
     // 原始流仅保留在内存中，使链条步骤在文本已溢出时仍可读取。
@@ -1470,6 +1525,45 @@ mod process_option_tests {
             assert!(error.message.contains("Ask the user"));
             assert!(!temp.path().join("launch-marker").exists());
         }
+    }
+
+    /// Keeps the completed job's log reachable without creating a deleted workspace during pagination.
+    /// 分页时不创建已删除的工作区，同时保留已完成任务的日志入口。
+    #[test]
+    fn project_shell_output_spill_preserves_the_deleted_root() {
+        use crate::tooling::native::tests::test_native_request;
+        // Model the moment after the admitted command completed and the original directory was removed.
+        // 模拟已准入命令结束且原目录已移除的时刻。
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let mut request = test_native_request(json!({}));
+        request.workspace_root = Some(root.clone());
+        let options = HostRenderOptions {
+            spill_root: resolve_shell_command_spill_root(None, Some(&root), &root),
+            ..Default::default()
+        };
+        std::fs::remove_dir(&root).unwrap();
+        let content = "retained line\n".repeat(20);
+        let input = HostTextRenderInput {
+            content_bytes: content.len(),
+            content_lines: content.lines().count(),
+            content,
+            overflow_mode: Some(HostToolOverflowMode::Page),
+            template_hint: None,
+        };
+        let (text, paged) = render_shell_overflow(
+            &request,
+            &input,
+            &ToolResultBudgetSnapshot::uniform_bytes(100),
+            options,
+            Some("existing-job"),
+            "completed",
+        )
+        .unwrap();
+        assert!(!paged);
+        assert!(text.contains("existing-job"));
+        assert!(!root.exists());
     }
 
     /// Arguments of one test command.

@@ -29,6 +29,29 @@ pub fn resolve_project_temp_dir(project_root: &Path) -> PathBuf {
         .join(PROJECT_TEMP_DIRECTORY_NAME)
 }
 
+/// Creates only the two managed descendants of an existing project directory.
+/// 只在已有项目目录中创建两个受管理的下级目录。
+pub fn prepare_existing_project_temp_dir(project_root: &Path) -> Result<PathBuf, String> {
+    // Individual mkdir operations fail if the parent disappears instead of rebuilding the project path.
+    // 单层 mkdir 遇到父目录消失时失败，避免重建项目路径。
+    let managed_root = project_root.join(PROJECT_VULCAN_DIRECTORY_NAME);
+    let temp_root = resolve_project_temp_dir(project_root);
+    for directory in [&managed_root, &temp_root] {
+        match std::fs::create_dir(directory) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists && directory.is_dir() => {}
+            Err(error) => {
+                return Err(format!(
+                    "Cannot open output directory `{}`: {error}",
+                    directory.display()
+                ));
+            }
+        }
+    }
+    Ok(temp_root)
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests for deterministic project temp location without maintenance scans.
