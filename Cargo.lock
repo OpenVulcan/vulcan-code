@@ -11216,6 +11216,7 @@ dependencies = [
  "ureq",
  "vulcan-i18n",
  "vulcan-install-core",
+ "vulcan-luaskills-config",
  "windows 0.62.2",
  "windows-sys 0.61.2",
  "winresource",
@@ -11470,7 +11471,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "workspace-hack",
 ]
 
 [[package]]

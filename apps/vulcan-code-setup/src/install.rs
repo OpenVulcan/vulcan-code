@@ -13,6 +13,7 @@ use vulcan_install_core::assemble::Assembly;
 use vulcan_install_core::fetch::{Downloader, Route};
 use vulcan_install_core::index::ComponentIndex;
 use vulcan_install_core::install_root::{CURRENT_LINK, InstallLock, InstallRoot, UPDATES_DIR};
+use vulcan_install_core::layout::CHINA_ORIGIN;
 use vulcan_install_core::manifest::ReleaseManifest;
 use vulcan_install_core::names::{Channel, ComponentName, Platform, ReleaseVersion};
 use vulcan_install_core::record::RECORD_FILE_NAME;
@@ -20,6 +21,7 @@ use vulcan_install_core::repair::prepare_repair;
 use vulcan_install_core::signing::BUILT_IN_KEYS;
 use vulcan_install_core::update::read_manifest;
 use vulcan_install_core::update::{find_update, read_indexes};
+use vulcan_luaskills_config::{OfficialSkillHub, initialize_official_skill_hub};
 
 use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions, check_port_range};
 use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
@@ -697,6 +699,16 @@ fn apply_target(
 
     reporter.stage(Stage::Integrating);
     let installed_version = Version::read(&root.version_dir(&version))?;
+    // Seed the Hub before integrating any shortcut or service that can start Core. A retry of an
+    // interrupted first install is still fresh until its setup state is written.
+    // 在登记可能启动 Core 的快捷方式或服务之前初始化 Hub。安装状态写入前，首次安装中断后的重试仍属于首次安装。
+    if *ownership == Ownership::Fresh {
+        let description = Description::read(&installed_version.dir)?;
+        initialize_official_skill_hub(
+            &description.data_root.join("config"),
+            initial_skill_hub(choices.route, downloader.preferred_origin()),
+        )?;
+    }
     // A migration adopts only verified integrations and retains the registered user's choices.
     // 迁移只接管已核验的集成，并保留已登记的用户选择。
     let previous_items: &[Item] = prior.as_ref().map_or(&[], |state| &state.items);
@@ -1121,6 +1133,19 @@ fn check_release_build(version_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Maps the chosen route to an official Hub. Auto follows the download origin that was used.
+/// 将选定线路映射到官方 Hub；自动线路采用实际使用的下载源。
+fn initial_skill_hub(route: Route, preferred_origin: &str) -> OfficialSkillHub {
+    match route {
+        Route::China => OfficialSkillHub::China,
+        Route::International => OfficialSkillHub::Global,
+        // Auto has exactly the international primary and the China mirror as candidate origins.
+        // 自动线路只有国际主源和国内镜像两个候选下载源。
+        Route::Auto if preferred_origin == CHINA_ORIGIN => OfficialSkillHub::China,
+        Route::Auto => OfficialSkillHub::Global,
+    }
+}
+
 /// Installs the console executable into the root, preserving an existing Unix console installation.
 /// 将终端可执行文件安装到根目录，保留 Unix 上已有的终端安装器。
 fn copy_self(root: &Path, _console_image: Option<&[u8]>) -> Result<(), String> {
@@ -1257,6 +1282,30 @@ fn join(components: &BTreeSet<ComponentName>) -> String {
 mod tests {
     use super::*;
     use crate::state::tests::plain_state;
+
+    /// Verifies the installer route selects the corresponding official runtime Hub.
+    /// 验证安装线路为运行时选用相应的官方 Hub。
+    #[test]
+    fn initial_skill_hub_follows_the_install_route() {
+        use vulcan_install_core::layout::PRIMARY_ORIGIN;
+
+        assert_eq!(
+            initial_skill_hub(Route::China, PRIMARY_ORIGIN),
+            OfficialSkillHub::China
+        );
+        assert_eq!(
+            initial_skill_hub(Route::International, CHINA_ORIGIN),
+            OfficialSkillHub::Global
+        );
+        assert_eq!(
+            initial_skill_hub(Route::Auto, CHINA_ORIGIN),
+            OfficialSkillHub::China
+        );
+        assert_eq!(
+            initial_skill_hub(Route::Auto, PRIMARY_ORIGIN),
+            OfficialSkillHub::Global
+        );
+    }
 
     /// Checks that the graphical package upgrades an old executable and preserves a current one.
     /// 验证图形安装包会升级旧命令行安装器，并保留当前版本。

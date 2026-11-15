@@ -72,6 +72,44 @@ pub(crate) fn write_file_atomically(target: &Path, contents: &[u8]) -> Result<()
     Ok(())
 }
 
+/// Publishes `contents` at `target` only if the target is still absent.
+/// 仅当 `target` 仍不存在时才发布 `contents`。
+pub(crate) fn create_file_atomically(target: &Path, contents: &[u8]) -> Result<(), String> {
+    // Stage beside the target so publishing can be atomic and cannot replace a concurrent save.
+    // 在目标旁暂存文件，使发布具有原子性且无法替换并发保存的文件。
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let publish = || -> std::io::Result<bool> {
+        match fs::symlink_metadata(target) {
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        fs::create_dir_all(parent)?;
+        let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+        staged.write_all(contents)?;
+        staged.as_file().sync_all()?;
+        match staged.persist_noclobber(target) {
+            Ok(_) => Ok(true),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error.error),
+        }
+    };
+    let published = publish().map_err(|error| {
+        format!(
+            "failed to initialize LuaSkills settings `{}`: {error}",
+            target.display()
+        )
+    })?;
+    match published {
+        #[cfg(unix)]
+        true => synchronize_parent_directory(parent),
+        _ => Ok(()),
+    }
+}
+
 /// Create one unique sibling staging file without opening existing candidates.
 /// 创建一个唯一同级暂存文件且不打开已有候选文件。
 ///

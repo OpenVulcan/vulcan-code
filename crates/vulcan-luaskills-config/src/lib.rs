@@ -1,8 +1,8 @@
 //! Vulcan-owned LuaSkills runtime settings stored under the user's configuration directory.
 //! 存储在用户配置目录下、由 Vulcan 持有的 LuaSkills 运行时设置。
 //!
-//! No template ships with the distribution: an absent file means the compiled defaults.
-//! 发行物不附带模板：文件不存在即表示编译默认值。
+//! An absent file means the compiled defaults. Fresh installations can initialize the selected Hub.
+//! 文件不存在即表示编译默认值；首次安装可初始化所选的 Hub。
 
 mod atomic_file;
 
@@ -25,6 +25,29 @@ pub const LUASKILLS_RUNTIME_SETTINGS_SCHEMA_VERSION: u32 = 1;
 /// The default lives only in memory so an unset field keeps following future defaults.
 /// 默认值只存在于内存中，使未设置的字段持续跟随将来的默认值。
 pub const DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL: &str = "https://hub.luaskills.com";
+
+/// The official Hub region chosen by the installer on a fresh installation.
+/// 首次安装时由安装器选定的官方 Hub 区域。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfficialSkillHub {
+    /// The international LuaSkills Hub.
+    /// 国际 LuaSkills Hub。
+    Global,
+    /// The mainland China LuaSkills Hub.
+    /// 中国大陆 LuaSkills Hub。
+    China,
+}
+
+impl OfficialSkillHub {
+    /// Returns the official base URL of this region.
+    /// 返回该区域官方 Hub 的基础地址。
+    pub fn base_url(self) -> &'static str {
+        match self {
+            Self::Global => DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL,
+            Self::China => "https://hub.luaskills.cn",
+        }
+    }
+}
 
 /// Pool sizing and idle-retirement settings for one Lua VM pool.
 /// 单个 Lua VM 池的容量与空闲回收设置。
@@ -585,11 +608,34 @@ pub fn save_runtime_settings(
     settings: &LuaSkillsRuntimeSettings,
 ) -> Result<LuaSkillsRuntimeSettings, String> {
     let normalized = settings.normalized()?;
-    let mut contents = serde_json::to_vec_pretty(&normalized)
-        .map_err(|error| format!("failed to serialize LuaSkills runtime settings: {error}"))?;
-    contents.push(b'\n');
+    let contents = encode_runtime_settings(&normalized)?;
     atomic_file::write_file_atomically(&runtime_settings_file_path(config_directory), &contents)?;
     Ok(normalized)
+}
+
+/// Creates the runtime settings with `hub` when no settings document exists in `config_directory`.
+/// 当 `config_directory` 下不存在设置文档时，创建使用 `hub` 的运行时设置。
+/// Concurrent saves and existing user settings keep their original contents.
+/// 并发保存及已有用户设置保留原内容。
+pub fn initialize_official_skill_hub(
+    config_directory: &Path,
+    hub: OfficialSkillHub,
+) -> Result<(), String> {
+    // Start with the regular runtime defaults so older published services can load the document.
+    // 从常规运行时默认值构建，确保已发布的旧版服务也能读取文档。
+    let mut settings = LuaSkillsRuntimeSettings::default();
+    settings.network.official_skill_hub_base_url = Some(hub.base_url().to_owned());
+    let contents = encode_runtime_settings(&settings.normalized()?)?;
+    atomic_file::create_file_atomically(&runtime_settings_file_path(config_directory), &contents)
+}
+
+/// Serializes validated runtime settings with their terminating newline.
+/// 序列化已验证的运行时设置，并附加末尾换行。
+fn encode_runtime_settings(settings: &LuaSkillsRuntimeSettings) -> Result<Vec<u8>, String> {
+    let mut contents = serde_json::to_vec_pretty(settings)
+        .map_err(|error| format!("failed to serialize LuaSkills runtime settings: {error}"))?;
+    contents.push(b'\n');
+    Ok(contents)
 }
 
 /// Trim one optional free-form text value and discard blank strings.
@@ -615,6 +661,32 @@ mod tests {
             load_runtime_settings(root.path()).expect("load default settings"),
             LuaSkillsRuntimeSettings::default()
         );
+    }
+
+    /// Initializes both official regions and preserves the exact bytes of settings already saved.
+    /// 验证两个官方区域均可初始化，并且已有设置按原字节保留。
+    #[test]
+    fn initial_hub_never_replaces_an_existing_settings_document() {
+        for region in [OfficialSkillHub::China, OfficialSkillHub::Global] {
+            let directory = tempfile::tempdir().expect("isolated settings");
+            let root = directory.path();
+            initialize_official_skill_hub(root, region).expect("initialize Hub");
+            let mut settings = load_runtime_settings(root).expect("load seeded settings");
+            assert_eq!(
+                settings.network.official_skill_hub_base_url.as_deref(),
+                Some(region.base_url())
+            );
+
+            // A later initializer must leave a manually selected Hub and its containing document intact.
+            // 后续初始化必须保留手动选定的 Hub 及其所在文档。
+            settings.network.official_skill_hub_base_url = Some("https://hub.example.test".into());
+            save_runtime_settings(root, &settings).expect("save custom Hub");
+            let path = runtime_settings_file_path(root);
+            let previous = fs::read(&path).expect("read user settings");
+            initialize_official_skill_hub(root, OfficialSkillHub::China)
+                .expect("retry initialization");
+            assert_eq!(fs::read(path).expect("read preserved settings"), previous);
+        }
     }
 
     /// Verify pre-RunLua settings documents enable the new host tools through serde defaults.
@@ -715,7 +787,8 @@ mod tests {
         saved.network.allow_downloads = false;
         saved.network.github_base_url = Some("https://ghfast.top/https://github.com".to_string());
         saved.network.github_api_base_url = Some("https://api.example.test".to_string());
-        saved.network.official_skill_hub_base_url = Some("https://hub.luaskills.cn".to_string());
+        saved.network.official_skill_hub_base_url =
+            Some(OfficialSkillHub::China.base_url().to_owned());
         saved
             .network
             .custom_github_mirrors

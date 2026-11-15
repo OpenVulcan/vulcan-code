@@ -159,6 +159,10 @@
   `fish/conf.d`，POSIX 登录 Shell 使用 `.profile`。重复安装复用原区块，关闭 PATH 集成或卸载时只移除该安装
   的区块。纯命令行安装结束后显示服务注册、前台启动和停止、适用的服务管理器命令，以及从已安装 Core
   的 `--describe` 读取的 WebUI 端口范围。服务启动输出显示实际绑定地址。
+- **首次安装的 LuaSkills Hub**：安装器从已组装 Core 的 `--describe` 取得用户数据目录。登记快捷方式或服务前，
+  若安装根属于首次安装且用户尚无 LuaSkills 运行时设置，则按安装线路初始化官方 Hub。国内入口选国内 Hub，国际线路选国际 Hub，
+  自动线路跟随这次产品下载选中的来源。已有 LuaSkills 设置、升级与旧安装接管保留原值。Hub 地址和设置格式由
+  `vulcan-luaskills-config` 管理。
 - **Windows 桌面集成**：GUI 安装时把 `bin/vulcan-code-launcher.exe` 复制为 `<root>\VulcanCode.exe`，快捷方式用
   运行布局（schema 4）的 `desktopIdentity` 写入 AppUserModelID 与通知激活 CLSID，与 Inno 安装包一致；同时把
   安装器放入 PATH 并作为卸载入口的 `DisplayIcon`/卸载命令。完成与 `status` 时告知卸载命令。
