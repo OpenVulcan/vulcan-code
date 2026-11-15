@@ -62,6 +62,11 @@ use luaskills_dispatch::{
 #[cfg(test)]
 mod tests;
 
+/// Resolves the shared project lock used to order command launches and directory changes.
+/// 解析用于排序命令启动与目录更换的项目共享锁。
+type ProjectShellLaunchLock =
+    Arc<dyn Fn() -> Result<Arc<tokio::sync::RwLock<()>>, String> + Send + Sync>;
+
 /// A host check for the directory frozen into a project execution.
 /// 针对项目执行中冻结目录的宿主检查。
 #[derive(Clone)]
@@ -69,6 +74,9 @@ pub struct ProjectShellGuard {
     /// Frozen validation used by the tools from this binding.
     /// 此绑定工具使用的冻结校验。
     check: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+    /// Optional project lock supplied by the binding owner; standalone tool callers have no rebind.
+    /// 绑定所有者提供的可选项目锁，独立工具调用方没有目录更换操作。
+    launch_lock: Option<ProjectShellLaunchLock>,
     /// Exact project bound to a service-owned execution, absent for direct host utility calls.
     /// 服务执行绑定的精确项目，直接宿主实用调用时缺省。
     project: Option<Arc<vulcan_workbench_model::TaskProjectSummary>>,
@@ -83,8 +91,30 @@ impl ProjectShellGuard {
     pub fn new(check: impl Fn() -> Result<(), String> + Send + Sync + 'static) -> Self {
         Self {
             check: Arc::new(check),
+            launch_lock: None,
             project: None,
             refresh: None,
+        }
+    }
+
+    /// Attaches a resolver for the binding owner's launch lock, evaluated only at process start.
+    /// 附加绑定所有者的启动锁解析器，仅在启动进程时求值。
+    pub fn with_launch_lock(
+        mut self,
+        resolve_lock: impl Fn() -> Result<Arc<tokio::sync::RwLock<()>>, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.launch_lock = Some(Arc::new(resolve_lock));
+        self
+    }
+
+    /// Acquires the launch lease or returns the owner's lock error.
+    /// 获取启动租约，或返回所有者的锁错误。
+    pub(crate) async fn acquire_launch_lease(
+        &self,
+    ) -> Result<Option<tokio::sync::OwnedRwLockReadGuard<()>>, String> {
+        match &self.launch_lock {
+            Some(resolve_lock) => Ok(Some(resolve_lock()?.read_owned().await)),
+            None => Ok(None),
         }
     }
 

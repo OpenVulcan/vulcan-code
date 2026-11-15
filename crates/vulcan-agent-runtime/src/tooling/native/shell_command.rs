@@ -900,6 +900,7 @@ pub(crate) async fn execute_shell_command_process(
     shell_support: &HostCommandShellSupport,
     process_options: &ShellCommandProcessOptions,
     job_context: &ShellCommandJobContext,
+    launch_lease: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
 ) -> ShellCommandExecutionReport {
     let not_started = |shell_label: String, reason: String| ShellCommandExecutionReport {
         end: ShellCommandCallEnd::NotStarted { reason },
@@ -937,7 +938,7 @@ pub(crate) async fn execute_shell_command_process(
     let runtime = ShellJobRuntime::global();
     let owner = &job_context.owner_session_id;
     let background = parsed_args.background;
-    let job = match runtime.spawn(
+    let spawn = runtime.spawn(
         ShellJobSpawn {
             owner_session_id: owner.clone(),
             origin: job_context.origin,
@@ -952,7 +953,11 @@ pub(crate) async fn execute_shell_command_process(
             capture_streams: !background,
         },
         command,
-    ) {
+    );
+    // The OS has accepted or rejected the launch. Running jobs do not hold the project lock.
+    // 操作系统已接受或拒绝启动。运行中的任务不持有项目锁。
+    drop(launch_lease);
+    let job = match spawn {
         Ok(job) => job,
         Err(error) => return not_started(shell_label, error.to_string()),
     };
@@ -1182,6 +1187,26 @@ pub(crate) fn require_shell_cwd(cwd: &Path) -> Result<(), NativeToolError> {
         .map_err(|error| NativeToolError::new(shell_directory_error(error)))
 }
 
+/// Orders a command launch against directory publication and validates its frozen root and actual cwd.
+/// 将命令启动与目录发布排序，并检查冻结根目录及实际 cwd。
+pub(crate) async fn admit_shell_launch(
+    request: &NativeToolExecutionRequest,
+    cwd: &Path,
+) -> Result<Option<tokio::sync::OwnedRwLockReadGuard<()>>, NativeToolError> {
+    // Read the binding only after obtaining the lease so a waiting writer can publish first.
+    // 取得租约后才读取绑定，确保已排队的写入方可以先发布目录变更。
+    let lease = match &request.project_shell_guard {
+        Some(guard) => guard
+            .acquire_launch_lease()
+            .await
+            .map_err(NativeToolError::new)?,
+        None => None,
+    };
+    require_shell_project(request)?;
+    require_shell_cwd(cwd)?;
+    Ok(lease)
+}
+
 /// Pages shell text under an existing project, or returns the completed job and a log pointer.
 /// 在已有项目下分页 Shell 文本；无法分页时返回已完成的任务和日志定位。
 fn render_shell_overflow(
@@ -1265,16 +1290,16 @@ pub(crate) async fn execute_shell_command_tool(
     process_options.host_environment = rtk_host_environment(rtk.telemetry_disabled);
     process_options.vulcan_environment = vulcan_environment;
 
-    // Hooks and environment resolution can suspend the invocation after its initial check.
-    // Hook 和环境解析可能在首次检查后挂起调用。
-    require_shell_project(&request)?;
-    require_shell_cwd(&effective_cwd)?;
+    // Hooks may suspend. Acquire the lease only after preparation and hold it through process creation.
+    // Hook 可能挂起。仅在准备完成后取得租约，并保持到进程创建完成。
+    let launch_lease = admit_shell_launch(&request, &effective_cwd).await?;
     let execution_report = execute_shell_command_process(
         &effective_args,
         &effective_cwd,
         shell_support,
         &process_options,
         &job_context,
+        launch_lease,
     )
     .await;
     let render_input =
@@ -1604,6 +1629,7 @@ mod process_option_tests {
                 &HostCommandShellSupport::from_configured_default_id(None),
                 &ShellCommandProcessOptions::default(),
                 context,
+                None,
             ),
         )
         .await
@@ -1969,6 +1995,7 @@ mod process_option_tests {
             &HostCommandShellSupport::from_configured_default_id(None),
             &process_options,
             &job_context(),
+            None,
         )
         .await;
         assert_eq!(report.status_label(), "completed");

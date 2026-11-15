@@ -50,15 +50,15 @@ impl CommandSessionRuntime {
         self: &Arc<Self>,
         request: CommandSessionStartRequest,
     ) -> Result<CommandSessionSnapshot, String> {
-        self.start_session_checked(request, || Ok(())).await
+        self.start_session_checked(request, async { Ok(()) }).await
     }
 
-    /// Runs the caller's directory check before submitting the start frame to the terminal host.
-    /// 向终端宿主提交启动帧前运行调用方的目录检查。
-    pub async fn start_session_checked(
+    /// Awaits the caller's admission and holds its returned lease through the terminal host's start acknowledgement.
+    /// 等待调用方准入并持有返回的租约，直到终端宿主确认启动。
+    pub async fn start_session_checked<Lease>(
         self: &Arc<Self>,
         mut request: CommandSessionStartRequest,
-        check: impl FnOnce() -> Result<(), String>,
+        admission: impl Future<Output = Result<Lease, String>>,
     ) -> Result<CommandSessionSnapshot, String> {
         // cwd crosses both the child-process and snapshot boundaries, so it must use one standard native spelling.
         // cwd 同时跨越子进程与快照边界，因此必须统一使用标准原生写法。
@@ -68,16 +68,16 @@ impl CommandSessionRuntime {
         request.launcher_program =
             vulcan_runtime_assets::native_host_path_text(&request.launcher_program);
         match request.backend {
-            CommandSessionBackend::Pty => self.start_pty_session(request, check).await,
+            CommandSessionBackend::Pty => self.start_pty_session(request, admission).await,
         }
     }
 
     /// Starts one PTY-backed host-managed command session and returns its initial snapshot.
     /// 启动一条 PTY 后端的宿主管理命令会话并返回其初始快照。
-    async fn start_pty_session(
+    async fn start_pty_session<Lease>(
         self: &Arc<Self>,
         request: CommandSessionStartRequest,
-        check: impl FnOnce() -> Result<(), String>,
+        admission: impl Future<Output = Result<Lease, String>>,
     ) -> Result<CommandSessionSnapshot, String> {
         let connection = crate::terminal_host_client::spawn_terminal_host_checked(
             crate::terminal_host_protocol::TerminalHostStartRequest {
@@ -89,7 +89,7 @@ impl CommandSessionRuntime {
             },
             &request.path_prefixes,
             &request.environment,
-            check,
+            admission,
         )
         .await?;
 

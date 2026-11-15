@@ -1,5 +1,7 @@
 use super::*;
-use crate::tooling::native::shell_command::{require_shell_cwd, require_shell_project};
+use crate::tooling::native::shell_command::{
+    admit_shell_launch, require_shell_cwd, require_shell_project,
+};
 
 pub(crate) async fn execute_terminal_session_list_action(
     request: NativeToolExecutionRequest,
@@ -183,9 +185,9 @@ pub(crate) async fn execute_terminal_session_start_action(
                 environment,
                 environment_fingerprint,
             },
-            || {
-                require_shell_project(&request)
-                    .and_then(|()| require_shell_cwd(&launch_cwd))
+            async {
+                admit_shell_launch(&request, &launch_cwd)
+                    .await
                     .map_err(|error| error.to_string())
             },
         )

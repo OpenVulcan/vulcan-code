@@ -1073,10 +1073,10 @@ impl crate::agent_runtime::tool_permission::ToolPermissionHost for DirectoryAppr
     }
 }
 
-/// Proves an approved old Shell request cannot spawn after the binding changes during the actual approval wait.
-/// 验证通过真实等待审批流程的旧 Shell 调用在目录更换后不会启动。
+/// Exercises a directory writer racing with the final start of a manually approved command.
+/// 测试目录写入方与人工审批通过的命令最后启动时发生的并发竞争。
 #[tokio::test]
-async fn project_shell_command_rechecks_the_binding_after_allow_once() {
+async fn project_shell_command_orders_allow_once_launch_with_directory_change() {
     use crate::agent_runtime::question_runtime::{APPROVAL_ALLOW_LABEL, QuestionRuntime};
     use crate::agent_runtime::tool_permission::PermissionTexts;
     use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
@@ -1088,16 +1088,28 @@ async fn project_shell_command_rechecks_the_binding_after_allow_once() {
     let new = temp.path().join("new");
     fs::create_dir(&old).unwrap();
     fs::create_dir(&new).unwrap();
-    // The test service can change its current binding while the production approval is open.
-    // 生产审批打开期间，测试服务可以更改当前绑定。
+    // The binding stays unchanged until the approved call reaches process admission.
+    // 审批放行的调用到达进程准入前，绑定保持不变。
     let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let changed_for_guard = changed.clone();
+    // The simulated publisher and real tool launch use the same lock.
+    // 模拟发布方与真实工具启动使用同一把锁。
+    let cutover = Arc::new(tokio::sync::RwLock::new(()));
+    let cutover_for_guard = cutover.clone();
+    // The resolver signals precisely when the launch starts waiting on the directory writer.
+    // 解析器在启动开始等待目录写入方时发出信号。
+    let launch_requested = Arc::new(tokio::sync::Notify::new());
+    let launch_for_guard = launch_requested.clone();
     let guard = super::ProjectShellGuard::new(move || {
         if changed_for_guard.load(std::sync::atomic::Ordering::SeqCst) {
             Err(String::from("stale directory after approval"))
         } else {
             Ok(())
         }
+    })
+    .with_launch_lock(move || {
+        launch_for_guard.notify_one();
+        Ok(cutover_for_guard.clone())
     });
     let questions = Arc::new(QuestionRuntime::new());
     questions
@@ -1184,12 +1196,28 @@ async fn project_shell_command_rechecks_the_binding_after_allow_once() {
     .await
     .expect("shell must reach production approval");
     assert_eq!(pending.tool_name, "shell_command");
-    changed.store(true, std::sync::atomic::Ordering::SeqCst);
+    // Reserve publication before allowing the call, while leaving the old binding visible.
+    // 放行前预留发布锁，同时保持旧绑定可见。
+    let writer = cutover
+        .try_write()
+        .expect("approval must not hold the launch lease");
     assert!(
         questions
             .reply(&pending.id, vec![vec![APPROVAL_ALLOW_LABEL.into()]])
             .unwrap()
     );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        launch_requested.notified(),
+    )
+    .await
+    .expect("approved shell must reach final process admission");
+    assert!(
+        !call.is_finished(),
+        "the writer still owns process admission"
+    );
+    changed.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(writer);
     assert_eq!(
         call.await.unwrap().unwrap_err(),
         "stale directory after approval"

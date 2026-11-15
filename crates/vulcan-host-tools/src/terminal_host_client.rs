@@ -248,16 +248,16 @@ pub async fn spawn_terminal_host(
     path_prefixes: &[PathBuf],
     environment: &[(String, String)],
 ) -> Result<TerminalHostConnection, String> {
-    spawn_terminal_host_checked(request, path_prefixes, environment, || Ok(())).await
+    spawn_terminal_host_checked(request, path_prefixes, environment, async { Ok(()) }).await
 }
 
-/// Starts the PTY only after `check` approves the start frame; an error drops the waiting helper.
-/// 仅当 `check` 放行启动帧时启动 PTY；出错时释放正在等待命令的辅助进程。
-pub(crate) async fn spawn_terminal_host_checked(
+/// Takes the admission lease before sending Start and holds it until the PTY child has started.
+/// 发送 Start 前取得准入租约，并保持至 PTY 子进程启动。
+pub(crate) async fn spawn_terminal_host_checked<Lease>(
     request: TerminalHostStartRequest,
     path_prefixes: &[PathBuf],
     environment: &[(String, String)],
-    check: impl FnOnce() -> Result<(), String>,
+    admission: impl Future<Output = Result<Lease, String>>,
 ) -> Result<TerminalHostConnection, String> {
     let host_path = resolve_terminal_host_path()?;
     let mut command =
@@ -283,6 +283,9 @@ pub(crate) async fn spawn_terminal_host_checked(
         command.env(name, value);
     }
     apply_child_path_prefixes(&mut command, path_prefixes)?;
+    // Declare the lease first so failure or cancellation drops the kill-on-drop helper before it.
+    // 先声明租约，使失败或取消时先释放并终止辅助进程，再释放租约。
+    let launch_lease;
     let mut child = command.spawn().map_err(|error| {
         format!(
             "Failed to start terminal host `{}`: {error}",
@@ -300,7 +303,7 @@ pub(crate) async fn spawn_terminal_host_checked(
     })?;
     let start_payload = encode_terminal_host_json(&request)
         .map_err(|error| format!("Failed to encode terminal-host start request: {error}"))?;
-    check()?;
+    launch_lease = admission.await?;
     timeout(
         TERMINAL_HOST_CONTROL_WRITE_TIMEOUT,
         write_terminal_host_frame_async(
@@ -345,6 +348,9 @@ pub(crate) async fn spawn_terminal_host_checked(
             ));
         }
     };
+    // A confirmed terminal continues independently of later project changes.
+    // 已确认启动的终端在后续项目更换时继续独立运行。
+    drop(launch_lease);
     Ok(TerminalHostConnection {
         child,
         request_writer: TerminalHostRequestWriter::after_start(stdin),

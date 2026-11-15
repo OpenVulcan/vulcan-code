@@ -448,6 +448,9 @@ pub(crate) fn project_shell_guard(
     let refresh_state = state.clone();
     let original = prepared.clone();
     let refresh_from = prepared.clone();
+    // Command launch and directory publication must use the same project lock.
+    // 命令启动与目录发布必须使用同一把项目锁。
+    let launch_project_id = prepared.id.clone();
     // Older projects may not have a saved identity. Retain the mounted volume observed at launch when available.
     // 旧项目可能没有已保存卷标识。启动时能识别已挂载卷的话，保留此次观测。
     let volume_at_launch = match &prepared.root_volume_id {
@@ -471,7 +474,8 @@ pub(crate) fn project_shell_guard(
             .map_err(|error| format!(
                 "{error}. Ask the user whether to restore the unavailable directory or choose another directory. Wait for the user's answer before retrying this command."
             ))
-    }).with_project(original, move || {
+    }).with_launch_lock(move || project_directory_cutover(&launch_project_id))
+    .with_project(original, move || {
         let state = refresh_state.upgrade().ok_or_else(|| String::from("The project directory owner is unavailable."))?;
         let current = active_project_directory_owner(&state, &refresh_from.id)?;
         Ok((!same_project_directory_binding(&refresh_from, &current))
