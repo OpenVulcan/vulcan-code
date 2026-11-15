@@ -261,7 +261,7 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
 
 /// Runs the shared install engine with an optional bundled console executable.
 /// 使用可选的内嵌终端可执行文件运行共用安装引擎。
-#[cfg(any(windows, all(unix, feature = "desktop-package")))]
+#[cfg(any(windows, target_os = "macos", all(unix, feature = "desktop-package")))]
 pub(super) fn graphical_run(
     options: &InstallOptions,
     update: bool,
@@ -1127,6 +1127,11 @@ fn copy_self(root: &Path, _console_image: Option<&[u8]>) -> Result<(), String> {
     #[cfg(unix)]
     if let Some(image) = _console_image {
         copy_embedded_console(root, image)?;
+        // The macOS engine already contains the graphical manager, so it needs no second executable.
+        // macOS 引擎已经包含图形管理器，无需安装第二个可执行文件。
+        #[cfg(target_os = "macos")]
+        return Ok(());
+        #[cfg(not(target_os = "macos"))]
         return copy_gui_manager(root);
     }
     let running = std::env::current_exe()
@@ -1158,7 +1163,7 @@ fn copy_self(root: &Path, _console_image: Option<&[u8]>) -> Result<(), String> {
 
 /// Retains the native graphical manager for subsequent `vcode manager gui` calls.
 /// 保留原生图形管理器，以支持后续的 `vcode manager gui` 调用。
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn copy_gui_manager(root: &Path) -> Result<(), String> {
     let source = std::env::current_exe()
         .map_err(|error| format!("cannot locate graphical manager: {error}"))?;

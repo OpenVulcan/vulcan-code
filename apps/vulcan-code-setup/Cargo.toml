@@ -4,7 +4,7 @@ description = "Setup program that installs, updates, modifies and removes a per-
 # The setup program is released apart from the product (`release-setup.yml`) and keeps its own
 # version here; only a change to the setup program itself raises it.
 # 安装器独立于产品发布（`release-setup.yml`），其版本只在此处定义；只有安装器本身变化时才递增。
-version = "0.2.16"
+version = "0.2.17"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -70,19 +70,26 @@ tempfile.workspace = true
 iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "advanced-shaping", "tokio", "image-without-codecs"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
-[target.'cfg(unix)'.dependencies.iced]
+[target.'cfg(target_os = "macos")'.dependencies]
+# The installed macOS command opens the manager itself, including after a terminal-only install.
+# macOS 已安装的命令可直接打开图形管理器，从终端安装后也能使用。
+iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "advanced-shaping", "tokio", "image-without-codecs"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rfd = { version = "0.15.4", default-features = false }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.iced]
 version = "0.14.0"
 default-features = false
 features = ["tiny-skia", "advanced-shaping", "tokio", "image-without-codecs"]
 optional = true
 
-[target.'cfg(unix)'.dependencies.image]
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.image]
 version = "0.25"
 default-features = false
 features = ["png"]
 optional = true
 
-[target.'cfg(unix)'.dependencies.rfd]
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.rfd]
 version = "0.15.4"
 default-features = false
 features = ["xdg-portal", "tokio"]

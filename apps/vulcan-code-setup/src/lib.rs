@@ -9,7 +9,7 @@ pub mod args;
 mod desktop_package;
 #[cfg(all(windows, feature = "desktop-package"))]
 pub use desktop_package::run as desktop_package;
-#[cfg(any(windows, all(unix, feature = "desktop-package")))]
+#[cfg(any(windows, target_os = "macos", all(unix, feature = "desktop-package")))]
 mod gui;
 #[cfg(windows)]
 mod inno;
@@ -108,7 +108,11 @@ pub(crate) fn run_engine(arguments: &[String]) -> i32 {
             windows::release_standalone_console();
             return gui::run(command, None);
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        if common.ui == Some(args::Ui::Gui) {
+            return gui::run(command, None);
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         if common.ui == Some(args::Ui::Gui) {
             eprintln!("vulcan-code-setup: open the graphical setup package to use --ui=gui");
             return 2;

@@ -28,13 +28,13 @@ enum Scope {
     Core,
     /// Match Core and installed workbench clients for installer changes.
     /// 安装变更时匹配 Core 及已安装的工作台客户端。
-    #[cfg(any(windows, all(unix, feature = "desktop-package")))]
+    #[cfg(any(windows, target_os = "macos", all(unix, feature = "desktop-package")))]
     Product,
 }
 
 /// Returns the running product programs for this installation, including older installed versions.
 /// 返回此安装正在运行的产品程序，包括较早已安装版本。
-#[cfg(any(windows, all(unix, feature = "desktop-package")))]
+#[cfg(any(windows, target_os = "macos", all(unix, feature = "desktop-package")))]
 pub fn scan(root: &Path) -> Result<Vec<Running>, String> {
     scan_scope(root, Scope::Product)
 }
@@ -153,7 +153,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
 
 /// Sends a force-stop request to each approved process and polls for observed exit.
 /// 向每个已获授权的进程发送强制停止请求，并轮询确认退出。
-#[cfg(any(windows, all(unix, feature = "desktop-package")))]
+#[cfg(any(windows, target_os = "macos", all(unix, feature = "desktop-package")))]
 pub fn force(root: &Path, approved: &[Running]) -> Result<Vec<Running>, String> {
     force_scope(root, approved, Scope::Product)
 }

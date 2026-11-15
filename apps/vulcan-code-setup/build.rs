@@ -23,9 +23,9 @@ fn main() {
         }
     }
     #[cfg(windows)]
-    {
-        // Use the same icon as the application launcher.
-        // 使用与应用启动器相同的图标。
+    if std::env::var_os("CARGO_CFG_TARGET_OS").is_some_and(|target| target == "windows") {
+        // Use the launcher icon for Windows targets; cross-built Unix binaries have no PE resources.
+        // Windows 目标使用启动器图标；交叉构建的 Unix 程序不包含 PE 资源。
         let icon = "../vulcan-code-service/icons/icon.ico";
         println!("cargo:rerun-if-changed={icon}");
         winresource::WindowsResource::new()

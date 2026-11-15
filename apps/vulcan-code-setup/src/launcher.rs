@@ -16,9 +16,9 @@ use crate::root::{self, Current, Description, Version};
 /// Unix 生成的入口脚本使用的私有参数。
 pub const ENTRY_FLAG: &str = "--vcode-entry";
 
-/// The installed Unix GUI manager executable stored beside its console engine.
-/// 存在终端引擎旁的 Unix 图形管理器可执行文件。
-#[cfg(unix)]
+/// The graphical manager installed beside the static Unix console engine.
+/// 安装在静态 Unix 终端引擎旁的图形管理器。
+#[cfg(all(unix, not(target_os = "macos")))]
 pub const GUI_MANAGER: &str = "manager";
 
 /// Detects the installed entry, returning its exit code when used.
@@ -168,6 +168,9 @@ fn setup(root: &Path, args: &[String]) -> Result<i32, String> {
 #[cfg(unix)]
 fn setup_unix(root: &Path, args: &[String]) -> Result<i32, String> {
     let engine = InstallRoot::new(root).setup_program();
+    // macOS can open the manager through its own engine, even if setup/manager was never installed.
+    // 即使安装时没有写入 setup/manager，macOS 也能通过自身的安装引擎打开图形管理器。
+    #[cfg(not(target_os = "macos"))]
     let engine = {
         let graphical = args.iter().any(|arg| arg == "--ui=gui")
             || args.windows(2).any(|pair| pair == ["--ui", "gui"]);
@@ -408,6 +411,33 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    /// Verifies that a macOS installation with only the engine can dispatch the GUI request.
+    /// 验证 macOS 安装仅有安装引擎时也能正确分派图形管理请求。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_manager_gui_uses_the_installed_engine() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Use a synthetic engine so the test checks dispatch without opening a real window.
+        // 使用合成引擎验证命令分派，无需打开真实窗口。
+        let fixture = tempfile::tempdir().expect("isolated installation");
+        let engine = InstallRoot::new(fixture.path()).setup_program();
+        std::fs::create_dir_all(fixture.path().join(crate::state::SETUP_DIR)).expect("setup");
+        std::fs::write(
+            &engine,
+            "#!/bin/sh\n[ \"$#\" = 3 ] && [ \"$1\" = --ui=gui ] && [ \"$2\" = --prefix ] && [ \"$3\" = \"$(dirname \"$(dirname \"$0\")\")\" ]\n",
+        )
+        .expect("write engine");
+        std::fs::set_permissions(engine, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert_eq!(
+            run(
+                fixture.path(),
+                &[String::from("manager"), String::from("gui")]
+            ),
+            Ok(0)
+        );
+    }
 
     /// Checks the mode passed to Core when opening the WebUI or starting it directly.
     /// 检查打开 WebUI 或直接启动时传给 Core 的运行模式。
