@@ -21,6 +21,7 @@ required_files:
   - node/pnpm-lock.yaml
   - config/schema.json
   - config/defaults.json
+  - skills/browser-workflow/SKILL.md
 execution:
   dependencies:
     manifest: dependencies.yaml

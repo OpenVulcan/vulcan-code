@@ -41,6 +41,12 @@ Playwright 版本取自 MCP 0.0.82 的精确依赖。Chromium 由该 Playwright 
 
 Core 根据架构版本 2 的 `runtime-layout.json` 启动 `browserHostExecutable`，不再通过 Electron 的 Node 模式启动。首次使用时插件框架仍会复制到用户目录下、按版本与内容指纹隔离的私有执行代次；此过程完全本地进行。旧下载目录不会覆盖随包 Chromium，也不会被静默删除。
 
+## 随包浏览器使用指南
+
+插件启用后注册 `vulcan-browser:browser-workflow`。技能目录里的简短描述要求模型在首次使用浏览器前调用 `skill` 读取指南。指南覆盖 Core 浏览器与标签页选择、快照引用、动作结果验证、截图附件和常见失败处理。
+
+工作流借鉴了公开 Skill 的页面勘察、快照更新和验证方法，并按 Vulcan 的 Core 浏览器与受管 MCP 工具调整。[Playwright CLI Skill](https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/tools/skills/playwright-cli/SKILL.md) · [OpenAI Playwright Skill](https://github.com/openai/skills/blob/main/skills/.curated/playwright/SKILL.md) · [Anthropic Web App Testing Skill](https://github.com/anthropics/skills/blob/main/skills/webapp-testing/SKILL.md) · [Playwright 点击检查](https://playwright.dev/docs/actionability#receives-events)
+
 ## 故障与验证
 
 AI 浏览器面板保留浏览器、页面两层选择；每层只有一项时隐藏标签栏，唯一浏览器自动连接观察，不自动获取控制权。浏览器名称使用该客户端当前显示页面的标题；切换后名称、地址与画面对应同一页面，不使用会话中历史导航地址。视口区域保持固定布局，只有页面画面流随选择更换。底部 FPS 是最近 2 秒实际接收帧数除以 2，静止或断流后会归零。
