@@ -21,28 +21,18 @@ async fn project_directory_change_reaches_the_physical_request_and_durable_timel
         .register(Arc::clone(&handle))
         .unwrap();
     let state = Arc::new(std::sync::Mutex::new(service));
-    let mut sink = ProviderV1StreamSink::new(
-        Arc::clone(&handle),
-        Arc::new(ProjectResourceCatalogRegistry::default()),
-    );
-    // Use names that distinguish model-escaped path data from display formatting.
-    // 使用可区分模型路径数据转义与界面格式的目录名称。
+    // A is the last path actually sent to this session before B and C are selected.
+    // 用户先后选择 B、C 前，实际发给此会话的最后路径是 A。
     let mut project = TaskProjectSummary::new(
         "project-1",
         "Project",
-        r"D:\new project",
+        r"E:\old project",
         false,
         0,
         None,
         None,
         Vec::new(),
     );
-    project.root_directory_change = Some(ProjectRootDirectoryChange {
-        previous_path: r"E:\old project".into(),
-        changed_at_ms: 5,
-    });
-    // Install the exact binding required by the final permit check.
-    // 安装最终许可复核要求的精确绑定。
     state
         .lock()
         .unwrap()
@@ -51,12 +41,59 @@ async fn project_directory_change_reaches_the_physical_request_and_durable_timel
         .unwrap()
         .task_projects
         .push(project.clone());
+    let mut initial = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    let mut candidate = candidate_for(&handle);
+    candidate.dynamic_prompt_layers.runtime_context = format!(
+        "Current workspace: {}\nCurrent execution mode: Build",
+        project.path
+    );
+    let first = ProviderV1RequestFacts {
+        request: ApiRequestSnapshot::new("provider-1", "model-1"),
+        prepared_at_ms: 3,
+        ..request_facts()
+    };
+    let PreparedPhysicalApi::SessionV1 { core_start, .. } = initial
+        .prepare_project_request(&state, first.clone(), candidate, Some(&project))
+        .await
+        .unwrap()
+    else {
+        panic!("the original workspace must prepare");
+    };
+    finish_directory_fixture_api(&handle, &first, core_start.api_call_id).await;
+
+    // Persisted project history contains just the most recent B to C link.
+    // 项目持久记录只包含最近的 B 到 C 变更。
+    project.path = r"D:\new project".into();
+    project.root_directory_change = Some(ProjectRootDirectoryChange {
+        previous_path: r"F:\never dispatched".into(),
+        changed_at_ms: 8,
+    });
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    // Install the exact binding required by the final permit check.
+    // 安装最终许可复核要求的精确绑定。
+    state
+        .lock()
+        .unwrap()
+        .workspace_snapshot
+        .as_mut()
+        .unwrap()
+        .task_projects[0] = project.clone();
     let facts = ProviderV1RequestFacts {
         request: ApiRequestSnapshot::new("provider-1", "model-1"),
         prepared_at_ms: 10,
         ..request_facts()
     };
-    let candidate = candidate_for(&handle);
+    let mut candidate = candidate_for(&handle);
+    candidate.dynamic_prompt_layers.runtime_context = format!(
+        "Current workspace: {}\nCurrent execution mode: Build",
+        project.path
+    );
     // Preparation retries before a permit must preserve exactly one copy of the update.
     // 许可前重试准备时，必须只保留一份变更注入。
     for _ in 0..2 {
@@ -98,34 +135,8 @@ async fn project_directory_change_reaches_the_physical_request_and_durable_timel
     assert!(notices[0].contains(r"E:\\old project"));
     assert!(notices[0].contains(r"D:\\new project"));
 
-    // The model update is consumed by actual transport. Settle that API before preparing the next one.
-    // 模型更新由实际传输消耗。准备下一次请求之前先结算该 API。
-    handle
-        .mark_api_transport_observed_durable(core_start.api_call_id, 11)
-        .await
-        .unwrap();
-    handle
-        .mutate_durable(
-            SessionMutationAdmission::ExistingTurn,
-            SessionFlushReason::ApiCompleted,
-            |document| {
-                document.complete_api_group(
-                    core_start.api_call_id,
-                    ApiCompletion {
-                        request: facts.request.clone(),
-                        usage: UsageSnapshot::default(),
-                        status: ApiCallStatus::Completed,
-                        end_reason: Some(ApiEndReason::CompletedSuccessfully),
-                        error: None,
-                        continuation_eligibility: ContinuationEligibility::Forbidden,
-                        timing: ApiTimings::default(),
-                        provider_source: None,
-                        completed_at_ms: 12,
-                    },
-                )
-            },
-        )
-        .unwrap();
+    assert!(!notices[0].contains("never dispatched"));
+    finish_directory_fixture_api(&handle, &facts, core_start.api_call_id).await;
     // Reopen canonical storage and ensure synchronization expires the active instruction.
     // 重新打开规范存储，并验证同步操作使活动指令失效。
     let locator = handle.storage_locator().unwrap();
@@ -156,4 +167,77 @@ async fn project_directory_change_reaches_the_physical_request_and_durable_timel
         }));
         assert!(!document.metadata.dynamic_context.contains_key(context_injection::PROJECT_DIRECTORY_CONTEXT_KEY));
     }).unwrap();
+}
+
+/// An unused project path creates no previous-directory notice for the first real request.
+/// 尚未使用过的项目路径不会让首次真实请求显示虚假的旧路径。
+#[tokio::test]
+async fn project_directory_first_request_has_no_unused_previous_path() {
+    let (_directory, handle) = published_stored_open_turn();
+    // Reuse the live producer with a saved change and a session that never dispatched.
+    // 使用实时生产器，输入已保存的变更以及从未实际派发过的会话。
+    let mut project = TaskProjectSummary::new(
+        "project-1",
+        "Project",
+        "/current",
+        false,
+        0,
+        None,
+        None,
+        vec![],
+    );
+    project.root_directory_change = Some(ProjectRootDirectoryChange {
+        previous_path: "/never-used".into(),
+        changed_at_ms: 5,
+    });
+    context_injection::synchronize_project_request_dynamic_context(
+        &handle,
+        &request_facts(),
+        &candidate_for(&handle),
+        Some(&project),
+    )
+    .unwrap();
+    assert!(
+        !handle
+            .read(|document| document
+                .metadata
+                .dynamic_context
+                .contains_key(context_injection::PROJECT_DIRECTORY_CONTEXT_KEY))
+            .unwrap()
+    );
+}
+
+/// Observes and settles the fixture's API in the same logical turn before the next request prepares.
+/// 在同一逻辑回合内观测并结算夹具的 API，然后准备下一次请求。
+async fn finish_directory_fixture_api(
+    handle: &Arc<SessionHandle>,
+    facts: &ProviderV1RequestFacts,
+    api_call_id: ApiCallId,
+) {
+    handle
+        .mark_api_transport_observed_durable(api_call_id, facts.prepared_at_ms + 1)
+        .await
+        .unwrap();
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ApiCompleted,
+            |document| {
+                document.complete_api_group(
+                    api_call_id,
+                    ApiCompletion {
+                        request: facts.request.clone(),
+                        usage: UsageSnapshot::default(),
+                        status: ApiCallStatus::Completed,
+                        end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                        error: None,
+                        continuation_eligibility: ContinuationEligibility::Forbidden,
+                        timing: ApiTimings::default(),
+                        provider_source: None,
+                        completed_at_ms: facts.prepared_at_ms + 2,
+                    },
+                )
+            },
+        )
+        .unwrap();
 }

@@ -218,6 +218,33 @@ pub(crate) fn resolve_assistant_tail_restore(
     }
 }
 
+/// Leading title of the workspace field in the rendered environment prompt.
+/// 渲染后的环境提示词中工作区字段的前缀。
+const WORKSPACE_CONTEXT_PREFIX: &str = "Current workspace: ";
+/// Exact delimiter separating the environment's two fields.
+/// 环境上下文两个字段之间的精确分隔符。
+const EXECUTION_MODE_CONTEXT_PREFIX: &str = "\nCurrent execution mode: ";
+
+/// Renders the two environment fields inside one provider prompt segment.
+/// 在一个供应商提示词片段中渲染两个环境字段。
+pub(crate) fn render_workspace_environment_context(path: &str, mode: &str) -> String {
+    format!("{WORKSPACE_CONTEXT_PREFIX}{path}{EXECUTION_MODE_CONTEXT_PREFIX}{mode}")
+}
+
+/// Reads the single workspace field from a previously dispatched runtime-context segment.
+/// 从先前已派发的运行时上下文中读取唯一的工作区字段。
+pub fn workspace_from_runtime_context(content: &str) -> Option<&str> {
+    // Only accept the environment producer's complete two-line segment, never a loose mention of a path.
+    // 只接受环境生产者完整的双行片段，避免把随意提及的路径识别为工作区。
+    let mut environments = content.split("\n\n").filter_map(|segment| {
+        let environment = segment.strip_prefix(WORKSPACE_CONTEXT_PREFIX)?;
+        let (workspace, mode) = environment.rsplit_once(EXECUTION_MODE_CONTEXT_PREFIX)?;
+        (!workspace.is_empty() && !mode.is_empty() && !mode.contains('\n')).then_some(workspace)
+    });
+    let workspace = environments.next()?;
+    environments.next().is_none().then_some(workspace)
+}
+
 /// Minimal execution request captured from the current workbench state.
 /// 从当前工作台状态捕获的最小执行请求。
 #[derive(Debug, Clone)]

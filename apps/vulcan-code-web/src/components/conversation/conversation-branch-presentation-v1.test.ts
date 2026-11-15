@@ -212,7 +212,7 @@ describe("V1 branch request configuration presentation", () => {
   });
   // A persisted directory change shows the actual platform paths once, including after expiry.
   // 持久保存的目录变更显示实际系统路径，失效后仍只显示一次。
-  it("shows the old and new project paths in the restored transcript", () => {
+  it("shows the last dispatched and latest project paths as one live and restored notice", () => {
     const previousDirectory = String.raw`E:\old project`;
     const workingDirectory = String.raw`D:\new project`;
     const content = `${JSON.stringify({ previousDirectory, workingDirectory })}\nModel direction.`;
@@ -222,6 +222,14 @@ describe("V1 branch request configuration presentation", () => {
         kind: "system_context", context_key: "dynamic.project_directory", operation: "upsert", scope: "turn", content,
       },
     } satisfies ConversationEventSummary;
+    // The UI uses session-scoped path data supplied by Core, even when the matching project was moved twice.
+    // 即使项目已两次移动，界面也使用 Core 提供的会话级路径数据。
+    const live = projectConversationBranchPresentationV1("session-context", [update], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
+    const livePaths = live.renderItems.flatMap((item) => item.blocks)
+      .flatMap((block) => readContextInjectionEntries(block.rawMetadata) ?? [])
+      .find((entry) => entry.category === "projectDirectory");
+    expect(livePaths?.content).toContain(previousDirectory);
+    expect(livePaths?.content).toContain(workingDirectory);
     const expiry = {
       ...update, seq: 8,
       event: { ...update.event, operation: "remove", content: "expired_source_seq=7" },

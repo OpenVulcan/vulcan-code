@@ -273,62 +273,82 @@ fn tool_chain_input(
 /// 标识请求和会话时间线中的临时工作目录变更。
 pub(super) const PROJECT_DIRECTORY_CONTEXT_KEY: &str = "dynamic.project_directory";
 
+/// Returns the workspace context carried by the last dispatched business request.
+/// 返回最近一次实际派发的业务请求所携带的工作区上下文。
+fn last_dispatched_workspace(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+) -> Option<(&str, i64)> {
+    use vulcan_agent_runtime::agent_runtime::execution_models::workspace_from_runtime_context;
+    use vulcan_session_core::v1::event::{
+        ApiPurposeKind, EventBody, ExecutionControlKind, SystemContextOperation,
+    };
+
+    // A prepared but abandoned request can publish context without ever sending it to the model.
+    // 已准备但废弃的请求可能发布上下文，模型却从未收到它。
+    let mut observed_apis = std::collections::BTreeSet::new();
+    let mut timeline = document.events().iter().rev();
+    // Use the admitted request's start time because its response may arrive after a later rebind.
+    // 使用已准入请求的起始时间，因为响应可能在后续目录更换后才到达。
+    let dispatched = timeline.find(|event| match &event.event {
+        EventBody::ExecutionControl(control)
+            if control.control_kind == ExecutionControlKind::ApiTransportObserved =>
+        {
+            if let Some(api_call_id) = control.api_call_id {
+                observed_apis.insert(api_call_id);
+            }
+            false
+        }
+        EventBody::ApiStarted(api) => {
+            api.purpose != ApiPurposeKind::Compaction && observed_apis.contains(&api.api_call_id)
+        }
+        _ => false,
+    })?;
+    let event = timeline.find_map(|event| match &event.event {
+        EventBody::SystemContext(context) if context.context_key == DYNAMIC_CONTEXT_RUNTIME_KEY => {
+            Some(context)
+        }
+        _ => None,
+    })?;
+    if event.operation != SystemContextOperation::Upsert {
+        return None;
+    }
+    Some((
+        workspace_from_runtime_context(&event.content)?,
+        dispatched.created_at_ms,
+    ))
+}
+
 /// Produces a single physical request's old and new directory notice for an existing session.
 /// 为已有会话的一次物理请求生成新旧目录通知。
 fn project_directory_input(
     document: &vulcan_session_core::v1::document::SessionDocument,
     project: &vulcan_workbench_model::TaskProjectSummary,
 ) -> Option<DynamicContextInput> {
-    use vulcan_session_core::v1::event::{
-        ApiPurposeKind, EventBody, ExecutionControlKind, SystemContextOperation,
-    };
     // An existing session needs the latest user-authored change; a newly created session starts at the current path.
     // 已有会话需要最近一次用户发起的变更，新会话直接使用当前路径。
     let change = project.root_directory_change.as_ref()?;
     if change.changed_at_ms <= document.metadata.created_at_ms {
         return None;
     }
+    // Without a dispatched workspace, the first model request simply starts at the current path.
+    // 没有实际发出的工作区时，第一次模型请求直接使用当前路径。
+    let (previous_directory, previous_started_at_ms) = last_dispatched_workspace(document)?;
+    // A same-path volume replacement still deserves one notice if it followed the last dispatch.
+    // 如果同路径的卷更换发生在上次派发之后，仍需通知一次。
+    if previous_directory == project.path
+        && (change.previous_path != project.path || previous_started_at_ms >= change.changed_at_ms)
+    {
+        return None;
+    }
     // Quote both paths as data so an unusual filesystem name cannot introduce instructions into the envelope.
     // 将两个路径按数据引用，避免特殊的文件系统路径在信封中引入指令。
     let paths = serde_json::json!({
-        "previousDirectory": change.previous_path,
+        "previousDirectory": previous_directory,
         "workingDirectory": project.path,
     });
     let content = format!(
         "{paths}\nThe user changed the project working directory. Use workingDirectory for new work and reconsider paths or commands prepared for previousDirectory."
     );
-    // Preserve the update across undispatched permits. Only actual business transport consumes it.
-    // 尚未派发的许可保留更新。只有实际业务传输才会消耗该更新。
-    let mut observed_apis = std::collections::BTreeSet::new();
-    let mut later_business_request = false;
-    for event in document.events().iter().rev() {
-        match &event.event {
-            EventBody::ExecutionControl(control)
-                if control.control_kind == ExecutionControlKind::ApiTransportObserved
-                    && let Some(api_call_id) = control.api_call_id =>
-            {
-                observed_apis.insert(api_call_id);
-            }
-            EventBody::ApiStarted(api)
-                if api.purpose != ApiPurposeKind::Compaction
-                    && observed_apis.contains(&api.api_call_id) =>
-            {
-                later_business_request = true;
-            }
-            EventBody::SystemContext(previous)
-                if previous.context_key == PROJECT_DIRECTORY_CONTEXT_KEY
-                    && previous.operation == SystemContextOperation::Upsert
-                    && previous.content == content
-                    && event.created_at_ms >= change.changed_at_ms =>
-            {
-                if later_business_request {
-                    return None;
-                }
-                break;
-            }
-            _ => {}
-        }
-    }
     Some(DynamicContextInput::new(
         PROJECT_DIRECTORY_CONTEXT_KEY,
         Some(content),
