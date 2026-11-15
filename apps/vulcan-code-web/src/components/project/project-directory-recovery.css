@@ -1,0 +1,17 @@
+/* Keep the recovery controls above the transcript and preserve long paths.
+   将恢复控件置于对话记录上方，并保持长路径可读。 */
+.project-directory-recovery {
+  flex: none;
+  padding: 0.5rem 1rem;
+}
+
+.project-directory-recovery[data-unavailable] [role="alert"] {
+  margin-bottom: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.project-directory-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

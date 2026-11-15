@@ -54,6 +54,7 @@ import { useWorkbenchSessionActions } from "@/components/workspace/workbench-lay
 import { useStopConversationRunDecision } from "@/components/workspace/workbench-layout/use-stop-conversation-run-decision";
 import { useWorkbenchRevisionGates, useWorkbenchServiceSync } from "@/components/workspace/workbench-layout/use-workbench-revision-sync";
 import { useProjectTerminalRunningCounts } from "@/components/workspace/workbench-layout/use-project-terminal-running-counts";
+import { ProjectDirectoryRecovery } from "@/components/project/project-directory-recovery";
 import { useSessionTitleToasts } from "@/components/workspace/workbench-layout/use-session-title-toasts";
 import { useAppUpdatePrompts } from "@/components/workspace/workbench-layout/use-app-update-prompts";
 import { useAppUpdate } from "@/components/features/app-update/use-app-update";
@@ -699,6 +700,10 @@ export function WorkbenchLayout(props: {
   // selectedRouteProjectId changes only when the user selects a conversation or draft in another project.
   // selectedRouteProjectId 仅在用户选择另一个项目的会话或草稿时变化。
   const selectedRouteProjectId = selectedDraftConversation?.projectId ?? selectedConversation?.projectId ?? null;
+  // Recovery follows the conversation owner and the saved path, including after a replacement.
+  // 恢复入口跟随会话所属项目与保存路径，更换目录后同样如此。
+  const conversationProject = workbenchState.projects.find((project) => project.id === selectedRouteProjectId);
+  const [directoryCheckRevision, setDirectoryCheckRevision] = React.useState(0);
   // activeProject resolves the explicit owner used by project-level floating tools.
   // activeProject 解析项目级浮动工具使用的明确归属项目。
   const activeProject = workbenchState.projects.find((project) => project.id === activeProjectId) ?? null;
@@ -1325,6 +1330,19 @@ export function WorkbenchLayout(props: {
     }
   }, [handleCompactSelectedConversationContext, handleOpenWorkspaceSkills]);
 
+  // Recheck after rejected composer or continuation actions without changing the draft outcome.
+  // 输入区提交或继续会话被拒后重新检查，同时保留原草稿处理结果。
+  const submitWithDirectoryRefresh: typeof handleSubmitConversationPrompt = async (...args) => {
+    const accepted = await handleSubmitConversationPrompt(...args);
+    if (!accepted) setDirectoryCheckRevision((revision) => revision + 1);
+    return accepted;
+  };
+  const continueWithDirectoryRefresh: typeof handleContinueConversation = async (...args) => {
+    const accepted = await handleContinueConversation(...args);
+    if (!accepted) setDirectoryCheckRevision((revision) => revision + 1);
+    return accepted;
+  };
+
   // projectHomeView carries the visible project home into the workspace shell, or null for the conversation stage.
   // projectHomeView 将可见的项目首页交给工作区外壳；为 null 时显示会话舞台。
   const projectHomeView = projectHomeProject ? {
@@ -1332,6 +1350,13 @@ export function WorkbenchLayout(props: {
     onClose: closeProjectHome,
     content: (
       <React.Suspense fallback={null}>
+        <ProjectDirectoryRecovery
+          key={JSON.stringify([projectHomeProject.id, projectHomeProject.path])}
+          project={projectHomeProject}
+          revision={String(props.serviceInstanceEpoch)}
+          onChanged={acceptServiceWorkbenchSnapshot}
+          showChange
+        />
         <LazyProjectHome
           project={projectHomeProject}
           workbench={workbenchState}
@@ -1485,7 +1510,15 @@ export function WorkbenchLayout(props: {
             agentActions={agentActions}
             memoryActions={memoryActions}
             onSlashCommand={handleComposerSlashCommand}
-            onSubmitPrompt={handleSubmitConversationPrompt}
+            projectDirectoryRecovery={conversationProject && (
+              <ProjectDirectoryRecovery
+                key={JSON.stringify([conversationProject.id, conversationProject.path])}
+                project={conversationProject}
+                revision={JSON.stringify([props.serviceInstanceEpoch, selectedConversationId, selectedConversation?.status, directoryCheckRevision])}
+                onChanged={acceptServiceWorkbenchSnapshot}
+              />
+            )}
+            onSubmitPrompt={submitWithDirectoryRefresh}
             onSaveSessionGoal={handleSaveSessionGoal}
             onResumeSessionGoal={handleResumeSessionGoal}
             onClearSessionGoal={handleClearSessionGoal}
@@ -1495,7 +1528,7 @@ export function WorkbenchLayout(props: {
             onSetSessionOutputStyle={handleSetSessionOutputStyle}
             onSetSessionContextCompactionWindow={handleSetSessionContextCompactionWindow}
             onStopConversationRun={handleStopConversationRun}
-            onContinueConversation={handleContinueConversation}
+            onContinueConversation={continueWithDirectoryRefresh}
             onEditConversationGeneration={handleEditConversationGeneration}
             onForkConversationGeneration={handleForkConversationGeneration}
             onOpenSubagentPanel={handleOpenSubagentPanel}

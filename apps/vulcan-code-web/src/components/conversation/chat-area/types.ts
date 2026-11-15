@@ -20,6 +20,9 @@ import type {
 // ChatAreaProps contains the state and service edges needed by the conversation surface.
 // ChatAreaProps 包含会话展示面所需的状态与服务边界。
 export interface ChatAreaProps {
+  // Project-directory recovery region above the conversation transcript.
+  // 会话记录上方的项目目录恢复区域。
+  projectDirectoryRecovery?: React.ReactNode;
   // Current startup state used for parity with the shell contract.
   // 当前启动状态，用于保持与外壳契约一致。
   startup: StartupSnapshot;

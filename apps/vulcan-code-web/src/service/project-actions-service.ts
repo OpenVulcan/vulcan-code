@@ -43,6 +43,26 @@ export async function browseProjectDirectories(path: string | null): Promise<Pro
   return serviceClient.request<ProjectDirectoryListing>("service_browse_project_directories", { path });
 }
 
+// browseProjectReplacement starts at the service directory when the saved project is missing.
+// browseProjectReplacement 在保存项目不可用时从服务目录开始浏览。
+export async function browseProjectReplacement(path: string | null): Promise<ProjectDirectoryListing> {
+  return path === null
+    ? serviceClient.request("service_browse_project_replacement_start", {})
+    : browseProjectDirectories(path);
+}
+
+// checkProjectDirectory reads current availability for the exact saved project.
+// checkProjectDirectory 读取指定项目保存目录的当前可用性。
+export async function checkProjectDirectory(projectId: string): Promise<{ path: string; available: boolean }> {
+  return serviceClient.request("service_check_project_directory", { projectId });
+}
+
+// changeProjectDirectory rebinds the existing project from the expected path to the chosen path.
+// changeProjectDirectory 将现有项目从预期路径重新绑定到所选路径。
+export async function changeProjectDirectory(projectId: string, expectedPath: string, path: string): Promise<WorkbenchSnapshot> {
+  return serviceClient.request("service_change_project_directory", { projectId, expectedPath, path });
+}
+
 // addProjectFromPath registers one service-host directory as a project.
 // addProjectFromPath 将单个服务宿主目录注册为项目。
 export async function addProjectFromPath(path: string): Promise<WorkbenchSnapshot | null> {

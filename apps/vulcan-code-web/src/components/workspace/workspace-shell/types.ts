@@ -59,6 +59,9 @@ export const WORKSPACE_FEATURE_AREAS: ReadonlyArray<{ id: WorkspaceFeatureView; 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
 export interface WorkspaceShellProps {
+  // Directory recovery controls for the selected conversation's project.
+  // 所选会话所属项目的目录恢复控件。
+  projectDirectoryRecovery?: React.ReactNode;
   // Startup snapshot shown by nested workspace panels.
   // 嵌套工作区面板展示的启动快照。
   startup: StartupSnapshot;
