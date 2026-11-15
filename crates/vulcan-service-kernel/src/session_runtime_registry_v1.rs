@@ -274,6 +274,20 @@ pub(crate) struct SessionProviderProjectionSnapshot {
     pub(crate) initialized_locked_baseline: Option<LockedBaselineProjection>,
 }
 
+/// Host-side admission at the final synchronous physical request commit.
+/// 在最终同步物理请求提交时执行的宿主准入。
+pub(crate) type PhysicalApiCommitCheck<'a> = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<
+                    Option<vulcan_provider_adapters::ProviderDispatchLease>,
+                    SessionRuntimeError,
+                >,
+            > + Send
+            + 'a,
+    >,
+>;
+
 /// Transport payload and projection proof built from one immutable V1 snapshot.
 /// 从一份不可变 V1 快照构建的传输载荷与投影证明。
 #[derive(Debug)]
@@ -296,6 +310,9 @@ pub(crate) struct SessionPreparedPhysicalRequest<T> {
 /// 可靠 API 起始回执及其授权的精确传输请求。
 #[derive(Debug)]
 pub(crate) struct SessionPreparedPhysicalApi<T> {
+    /// Keeps its directory binding until the physical transport starts.
+    /// 直到物理传输启动前持有目录绑定。
+    pub(crate) dispatch_lease: Option<vulcan_provider_adapters::ProviderDispatchLease>,
     /// Core receipt proving the physical API start is durable.
     /// 证明物理 API 起始已可靠落盘的 Core 回执。
     pub(crate) core_start: PreparedApiStart,
@@ -1885,6 +1902,45 @@ impl SessionHandle {
                 Output = Result<Option<SessionPreparedPhysicalRequest<T>>, SessionRuntimeError>,
             >,
     {
+        self.prepare_physical_api_durable_with_commit_check(
+            purpose,
+            request,
+            candidate_locked_baseline,
+            continuation_action_id,
+            now_ms,
+            manual_request,
+            None,
+            build,
+        )
+        .await
+    }
+
+    /// Prepares and durably starts a physical request after the optional host binding grants a commit guard.
+    /// 可选宿主绑定发放提交守卫后，准备并持久化启动物理请求。
+    /// The synchronous guard still owns the binding while the exact session permit commits.
+    /// 精确会话许可提交期间，同步守卫继续持有绑定。
+    pub(crate) async fn prepare_physical_api_durable_with_commit_check<T, BuildFuture>(
+        self: &Arc<Self>,
+        purpose: ApiPurposeKind,
+        request: ApiRequestSnapshot,
+        candidate_locked_baseline: LockedBaselineProjection,
+        continuation_action_id: Option<ClientActionId>,
+        now_ms: i64,
+        manual_request: Option<&ManualCompactionPendingRequest>,
+        check: Option<PhysicalApiCommitCheck<'_>>,
+        build: impl FnOnce(
+            SessionProviderProjectionSnapshot,
+            Arc<SessionPhysicalPreparation>,
+        ) -> BuildFuture,
+    ) -> Result<
+        Option<SessionConditionalMutationReceipt<SessionPreparedPhysicalApi<T>>>,
+        SessionRuntimeError,
+    >
+    where
+        BuildFuture: std::future::Future<
+                Output = Result<Option<SessionPreparedPhysicalRequest<T>>, SessionRuntimeError>,
+            >,
+    {
         // Serialize whole preparations without holding the synchronous document or persistence locks across I/O.
         // 串行化完整准备，不跨输入输出持有同步文档或持久化锁。
         let lease = Arc::new(
@@ -1993,6 +2049,16 @@ impl SessionHandle {
                 String::from("request proof does not match the captured durable V1 frontier"),
             ));
         }
+        // Recheck outside the session locks and keep project publication ordered through the durable permit.
+        // 在会话锁外复核，并让项目发布与持久化许可保持有序。
+        let dispatch_lease = if let Some(check) = check {
+            let Some(guard) = check.await? else {
+                return Ok(None);
+            };
+            Some(guard)
+        } else {
+            None
+        };
         // Reacquire the same owner's locks before accepting any prepared result.
         // 接受任何准备结果之前，重新取得同一所有者的锁。
         self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
@@ -2054,6 +2120,7 @@ impl SessionHandle {
                 match mutation {
                     IdempotentMutation::Committed(core_start) => {
                         Ok(SessionMutationChange::Changed(SessionPreparedPhysicalApi {
+                            dispatch_lease,
                             core_start,
                             transport: prepared.transport,
                             locked_baseline: receipt_locked_baseline,
@@ -2085,6 +2152,7 @@ impl SessionHandle {
                         }
                         Ok(SessionMutationChange::Unchanged(
                             SessionPreparedPhysicalApi {
+                                dispatch_lease,
                                 core_start,
                                 transport: prepared.transport,
                                 locked_baseline: receipt_locked_baseline,

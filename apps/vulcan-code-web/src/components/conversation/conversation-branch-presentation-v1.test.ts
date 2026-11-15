@@ -210,6 +210,40 @@ describe("V1 branch request configuration presentation", () => {
     // 围栏长于正文中的反引号串，使原文保持为一个代码块。
     expect(notices[0]!.body).toContain("````text\nModel extensions changed: image_generate uses ```fixed```.\n````");
   });
+  // A persisted directory change shows the actual platform paths once, including after expiry.
+  // 持久保存的目录变更显示实际系统路径，失效后仍只显示一次。
+  it("shows the last dispatched and latest project paths as one live and restored notice", () => {
+    const previousDirectory = String.raw`E:\old project`;
+    const workingDirectory = String.raw`D:\new project`;
+    const content = `${JSON.stringify({ previousDirectory, workingDirectory })}\nModel direction.`;
+    const update = {
+      seq: 7, turn_id: 2, created_at_ms: 7, updated_at_ms: 7, event_revision: 1, visibility: "provider",
+      event: {
+        kind: "system_context", context_key: "dynamic.project_directory", operation: "upsert", scope: "turn", content,
+      },
+    } satisfies ConversationEventSummary;
+    // The UI uses session-scoped path data supplied by Core, even when the matching project was moved twice.
+    // 即使项目已两次移动，界面也使用 Core 提供的会话级路径数据。
+    const live = projectConversationBranchPresentationV1("session-context", [update], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
+    const livePaths = live.renderItems.flatMap((item) => item.blocks)
+      .flatMap((block) => readContextInjectionEntries(block.rawMetadata) ?? [])
+      .find((entry) => entry.category === "projectDirectory");
+    expect(livePaths?.content).toContain(previousDirectory);
+    expect(livePaths?.content).toContain(workingDirectory);
+    const expiry = {
+      ...update, seq: 8,
+      event: { ...update.event, operation: "remove", content: "expired_source_seq=7" },
+    } satisfies ConversationEventSummary;
+    const t = (key: keyof typeof zhCNTranslations) => zhCNTranslations[key];
+    const items = projectConversationBranchPresentationV1("session-context", [update, expiry], EMPTY_RESOURCES, t);
+    const entries = items.renderItems.flatMap((item) => item.blocks)
+      .flatMap((block) => readContextInjectionEntries(block.rawMetadata) ?? []);
+    const paths = entries.filter((entry) => entry.category === "projectDirectory");
+    expect(paths).toHaveLength(1);
+    expect(paths[0]?.content).toContain(previousDirectory);
+    expect(paths[0]?.content).toContain(workingDirectory);
+  });
+
   // Reopening a later window describes expiration while preserving explicit context changes.
   // 重新打开较晚的窗口时，说明失效状态并保留显式上下文变更。
   it("shows expiration without loading the older source event", () => {

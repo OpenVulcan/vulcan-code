@@ -896,6 +896,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   } : projectHome.page ?? {
     content: (
       <ChatArea
+        projectDirectoryRecovery={props.projectDirectoryRecovery}
         startup={props.startup}
         workbench={props.workbench}
         selectedDraftConversation={props.selectedDraftConversation}

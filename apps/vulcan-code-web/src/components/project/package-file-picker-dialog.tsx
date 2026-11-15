@@ -8,7 +8,7 @@ import { Spinner } from "@/ui-kit/primitives/spinner";
 import { useI18n } from "@/i18n";
 import type { PackageFileListing } from "@/types";
 import { formatBytes } from "@/lib/display-format";
-import { FolderPickerSidebar } from "./folder-picker-dialog";
+import { FolderPickerSidebar, projectFolderPickerActiveRoot } from "./folder-picker-dialog";
 import { projectPathKey } from "./project-path-key";
 import "@/ui-kit/styles/features/project-folder-picker.css";
 
@@ -77,21 +77,10 @@ export function PackageFilePickerDialog(props: PackageFilePickerDialogProps) {
   const roots = React.useMemo(() => listing?.directory.roots ?? [], [listing?.directory.roots]);
   // activeRootPath resolves the longest root prefix owning the current directory.
   // activeRootPath 解析包含当前目录的最长根路径前缀。
-  const activeRootPath = React.useMemo(() => {
-    if (!listing) return null;
-    const currentKey = projectPathKey(listing.directory.path);
-    let matchedPath: string | null = null;
-    let matchedLength = -1;
-    roots.forEach((root) => {
-      const rootKey = projectPathKey(root.path);
-      const matches = rootKey === "/" ? currentKey.startsWith("/") : currentKey === rootKey || currentKey.startsWith(`${rootKey}/`);
-      if (matches && rootKey.length > matchedLength) {
-        matchedPath = root.path;
-        matchedLength = rootKey.length;
-      }
-    });
-    return matchedPath;
-  }, [listing, roots]);
+  const activeRootPath = React.useMemo(
+    () => projectFolderPickerActiveRoot(listing?.directory.path, roots),
+    [listing?.directory.path, roots],
+  );
 
   // loadDirectory requests one directory and discards stale browser responses.
   // loadDirectory 请求一个目录并丢弃过期浏览响应。

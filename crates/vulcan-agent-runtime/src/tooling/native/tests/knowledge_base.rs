@@ -173,6 +173,7 @@ fn request(
         provider_tool_call_id: Some("provider-call".into()),
     };
     NativeToolExecutionRequest {
+        project_shell_guard: None,
         invocation_context: Some(invocation),
         session_id: Some(session),
         host_project_id: Some("project".into()),

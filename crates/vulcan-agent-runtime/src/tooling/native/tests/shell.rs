@@ -301,6 +301,7 @@ async fn shell_command_tool_executes_simple_command() {
     );
     let result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "command": "echo hello",
@@ -362,6 +363,7 @@ async fn shell_command_tool_returns_a_bounded_tail_and_keeps_raw_streams() {
     };
     let result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments,
             session_id: None,

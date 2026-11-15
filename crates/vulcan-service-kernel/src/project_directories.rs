@@ -7,6 +7,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use vulcan_host_tools::project_directory::{
+    project_volume_identity, require_bound_project_directory, require_project_directory,
+    validate_project_volume,
+};
 use vulcan_service_api::{
     PackageFileListing, PackageFileSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, WorkbenchSnapshot,
@@ -14,12 +18,16 @@ use vulcan_service_api::{
 use vulcan_workbench_model::TaskProjectSummary;
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
-use crate::project_conversation_services::begin_project_lifecycle_transition;
+use crate::project_conversation_services::{
+    begin_project_directory_change, begin_project_lifecycle_transition,
+};
 use crate::{
     SharedServiceBridgeState, controller_runtime_from_state, current_unix_millis_value,
     normalized_workspace_path_text_from_path, refresh_workbench_snapshot,
     service_add_project_initial_directory, webui_workspace_persist_lock,
+    workspace_task_project_for_project_id,
     workspace_task_project_for_project_id_including_archived,
+    workspace_task_project_for_project_id_mut,
 };
 
 /// Returns the current Unix millisecond timestamp within the signed V1 lifecycle contract.
@@ -60,7 +68,13 @@ pub(super) fn service_browse_project_directories(
         Some(value) => PathBuf::from(value),
         None => PathBuf::from(service_add_project_initial_directory(&state)?),
     };
-    let directory_path = normalize_task_project_path(&requested_path);
+    browse_project_directory_at(&requested_path)
+}
+
+/// Lists a directory at an explicit path, returning a browse error if it is unavailable.
+/// 列出显式路径的目录，不可用时返回浏览错误。
+fn browse_project_directory_at(requested_path: &Path) -> Result<ProjectDirectoryListing, String> {
+    let directory_path = normalize_task_project_path(requested_path);
     if !directory_path.exists() {
         return Err(format!(
             "Directory does not exist: {}",
@@ -74,6 +88,10 @@ pub(super) fn service_browse_project_directories(
         ));
     }
 
+    // Capture the browsed volume before enumerating children so a later remount cannot turn
+    // a stale listing into authority to select a directory on the underlying filesystem.
+    // 浏览前捕获卷，避免随后重新挂载时用过时列表授权选择底层文件系统的目录。
+    let volume_id = project_volume_identity(&directory_path)?;
     let mut entries = fs::read_dir(&directory_path)
         .map_err(|error| {
             format!(
@@ -90,6 +108,7 @@ pub(super) fn service_browse_project_directories(
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(ProjectDirectoryListing {
+        volume_id,
         roots: service_project_directory_roots(&directory_path),
         path: normalized_workspace_path_text_from_path(&directory_path),
         parent_path: directory_path
@@ -99,6 +118,15 @@ pub(super) fn service_browse_project_directories(
         entries,
         notice: None,
     })
+}
+
+/// Starts the replacement picker at the service's current directory and presents all mounted roots.
+/// 从服务当前目录打开更换选择器，并提供所有已挂载根目录。
+pub(crate) fn service_browse_project_replacement_start() -> Result<ProjectDirectoryListing, String>
+{
+    let current_dir = std::env::current_dir()
+        .map_err(|error| format!("Cannot locate the service directory for browsing: {error}"))?;
+    browse_project_directory_at(&current_dir)
 }
 
 /// Browses one host directory and lists its ordinary files with `extension` for a package picker.
@@ -166,9 +194,10 @@ pub(crate) fn browse_package_files(
 /// 返回值
 /// A sorted list of service-host filesystem roots.
 /// 已排序的服务宿主文件系统根列表。
-fn service_project_directory_roots(current_path: &Path) -> Vec<ProjectDirectoryRootSummary> {
+fn service_project_directory_roots(_current_path: &Path) -> Vec<ProjectDirectoryRootSummary> {
     let mut roots = platform_project_directory_roots();
-    if let Some(current_root) = project_directory_root_from_path(current_path) {
+    #[cfg(windows)]
+    if let Some(current_root) = project_directory_root_from_path(_current_path) {
         let current_root_key = current_root.path.to_ascii_lowercase();
         if !roots
             .iter()
@@ -212,19 +241,57 @@ fn platform_project_directory_roots() -> Vec<ProjectDirectoryRootSummary> {
         .collect()
 }
 
-/// Returns platform filesystem roots visible to the service host.
-/// 返回服务宿主当前平台可见的文件系统根。
-///
-/// # Returns
-/// 返回值
-/// A platform-specific list of root directories.
-/// 平台相关的根目录列表。
+#[cfg(target_os = "linux")]
+mod linux_mounts;
+
+/// Returns a root shortcut and the currently mounted user-facing volumes.
+/// 返回根目录入口和当前挂载的面向用户的卷。
 #[cfg(not(windows))]
 fn platform_project_directory_roots() -> Vec<ProjectDirectoryRootSummary> {
-    vec![ProjectDirectoryRootSummary {
-        label: String::from("/"),
-        path: String::from("/"),
-    }]
+    let mut mounts = mounted_project_volume_paths();
+    mounts.push(PathBuf::from("/"));
+    mounts.sort_unstable();
+    mounts.dedup();
+    mounts
+        .into_iter()
+        .filter_map(|mount| {
+            // The RPC carries UTF-8 paths; a lossy path could open a different directory.
+            // RPC 使用 UTF-8 路径，有损转换可能打开另一个目录。
+            let path = mount.to_str()?.to_owned();
+            let label = mount
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&path)
+                .to_owned();
+            Some(ProjectDirectoryRootSummary { path, label })
+        })
+        .collect()
+}
+
+/// Reads mount targets in the Linux service namespace.
+/// 读取 Linux 服务命名空间里的挂载目标。
+#[cfg(target_os = "linux")]
+fn mounted_project_volume_paths() -> Vec<PathBuf> {
+    linux_mounts::mounted_volume_paths().unwrap_or_default()
+}
+
+/// Reads mount targets visible to the macOS volume browser.
+/// 读取 macOS 卷浏览器可见的挂载目标。
+#[cfg(target_os = "macos")]
+fn mounted_project_volume_paths() -> Vec<PathBuf> {
+    vulcan_mount_table::mounted_filesystems()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|mount| !mount.hidden && mount.path.is_absolute())
+        .map(|mount| mount.path)
+        .collect()
+}
+
+/// Keeps root browsing available on platforms without a mount provider.
+/// 未提供挂载查询的平台仍可浏览根目录。
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn mounted_project_volume_paths() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// Resolves the filesystem root that owns one path.
@@ -261,30 +328,6 @@ fn project_directory_root_from_path(path: &Path) -> Option<ProjectDirectoryRootS
     None
 }
 
-/// Resolves the filesystem root that owns one path.
-/// 解析拥有指定路径的文件系统根。
-///
-/// # Parameters
-/// 参数
-/// `path` is the directory path whose root should be resolved.
-/// `path` 是需要解析根目录的目录路径。
-///
-/// # Returns
-/// 返回值
-/// The owning root when it can be represented by the picker.
-/// 当选择器可表示该根目录时返回所属根。
-#[cfg(not(windows))]
-fn project_directory_root_from_path(path: &Path) -> Option<ProjectDirectoryRootSummary> {
-    if path.is_absolute() {
-        Some(ProjectDirectoryRootSummary {
-            label: String::from("/"),
-            path: String::from("/"),
-        })
-    } else {
-        None
-    }
-}
-
 /// Converts one filesystem directory entry into a WebUI directory row.
 /// 将单个文件系统目录项转换为 WebUI 目录行。
 ///
@@ -313,6 +356,256 @@ fn project_directory_entry_from_read_dir_entry(
     })
 }
 
+/// Checks the saved path of the exact active project selected by project_id.
+/// 检查 project_id 指定的活动项目保存的路径。
+/// Returns the original path and present availability without mutating execution or storage.
+/// 返回原路径和当前可用状态，读取期间不变更执行或存储。
+pub(crate) fn service_check_project_directory(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+) -> Result<vulcan_service_api::ProjectDirectoryStatus, String> {
+    let project = active_project_directory_owner(state, project_id)?;
+    let path = project.path;
+    let available =
+        require_bound_project_directory(Path::new(&path), project.root_volume_id.as_deref())
+            .is_ok();
+    Ok(vulcan_service_api::ProjectDirectoryStatus { path, available })
+}
+
+/// Returns the exact active project identified by project_id, releasing the service lock before I/O.
+/// 返回 project_id 标识的活动项目，文件系统 I/O 前释放服务锁。
+pub(crate) fn active_project_directory_owner(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+) -> Result<TaskProjectSummary, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|snapshot| workspace_task_project_for_project_id(snapshot, project_id))
+        .cloned()
+        .ok_or_else(|| format!("Project not found: {project_id}"))
+}
+
+/// Coordinates each project's binding publication with its admitted physical requests.
+/// 协调各项目的绑定发布和已准入物理请求。
+static PROJECT_DIRECTORY_CUTOVERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::BTreeMap<String, std::sync::Weak<tokio::sync::RwLock<()>>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Returns the single live publication lock for a project.
+/// 返回每个项目唯一的实时发布锁。
+pub(crate) fn project_directory_cutover(
+    project_id: &str,
+) -> Result<std::sync::Arc<tokio::sync::RwLock<()>>, String> {
+    let mut locks = PROJECT_DIRECTORY_CUTOVERS
+        .lock()
+        .map_err(|_| String::from("The project directory publication lock is unavailable."))?;
+    if let Some(lock) = locks.get(project_id).and_then(std::sync::Weak::upgrade) {
+        return Ok(lock);
+    }
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let lock = std::sync::Arc::new(tokio::sync::RwLock::new(()));
+    locks.insert(project_id.to_owned(), std::sync::Arc::downgrade(&lock));
+    Ok(lock)
+}
+
+/// Admits a prepared binding and keeps publication ordered through dispatch handoff.
+/// 准入已准备绑定，并确保发布与派发交接有序。
+pub(crate) async fn commit_current_project_directory(
+    state: &SharedServiceBridgeState,
+    prepared: &TaskProjectSummary,
+) -> Result<Option<vulcan_provider_adapters::ProviderDispatchLease>, String> {
+    // No session lock is held while reading the live project owner.
+    // 读取实时项目所有者时不持有会话锁。
+    let cutover = project_directory_cutover(&prepared.id)?.read_owned().await;
+    let current = active_project_directory_owner(state, &prepared.id)?;
+    Ok(same_project_directory_binding(prepared, &current).then(|| std::sync::Arc::new(cutover)))
+}
+
+/// Tests whether two reads refer to the same project directory binding.
+/// 判断两次读取是否指向同一个项目目录绑定。
+pub(crate) fn same_project_directory_binding(
+    prepared: &TaskProjectSummary,
+    current: &TaskProjectSummary,
+) -> bool {
+    prepared.path == current.path
+        && prepared.root_volume_id == current.root_volume_id
+        && prepared.root_directory_change == current.root_directory_change
+}
+
+/// Builds a guard for the directory frozen into a tool manager. It never substitutes a new root.
+/// 为冻结到工具管理器的目录构建守卫，绝不替换为新根目录。
+pub(crate) fn project_shell_guard(
+    state: &SharedServiceBridgeState,
+    prepared: TaskProjectSummary,
+) -> vulcan_agent_runtime::vulcan_tools_bridge::ProjectShellGuard {
+    // Tool managers may outlive their stream; do not retain service ownership through them.
+    // 工具管理器可能比流存活更久，避免它们持有服务所有权。
+    let state = std::sync::Arc::downgrade(state);
+    let refresh_state = state.clone();
+    let original = prepared.clone();
+    let refresh_from = prepared.clone();
+    // Command launch and directory publication must use the same project lock.
+    // 命令启动与目录发布必须使用同一把项目锁。
+    let launch_project_id = prepared.id.clone();
+    // Older projects may not have a saved identity. Retain the mounted volume observed at launch when available.
+    // 旧项目可能没有已保存卷标识。启动时能识别已挂载卷的话，保留此次观测。
+    let volume_at_launch = match &prepared.root_volume_id {
+        Some(volume) => Some(volume.clone()),
+        None => project_volume_identity(Path::new(&prepared.path))
+            .ok()
+            .flatten(),
+    };
+    vulcan_agent_runtime::vulcan_tools_bridge::ProjectShellGuard::new(move || {
+        let state = state
+            .upgrade()
+            .ok_or_else(|| String::from("The project directory owner is unavailable."))?;
+        let current = active_project_directory_owner(&state, &prepared.id)?;
+        if !same_project_directory_binding(&prepared, &current) {
+            return Err(format!(
+                "This command was prepared for project directory {:?}, but the user changed the project directory to {:?}. The command was not run. Re-evaluate the command against the new project directory on the next model request.",
+                prepared.path, current.path,
+            ));
+        }
+        require_bound_project_directory(Path::new(&prepared.path), volume_at_launch.as_deref())
+            .map_err(|error| format!(
+                "{error}. Ask the user whether to restore the unavailable directory or choose another directory. Wait for the user's answer before retrying this command."
+            ))
+    }).with_launch_lock(move || project_directory_cutover(&launch_project_id))
+    .with_project(original, move || {
+        let state = refresh_state.upgrade().ok_or_else(|| String::from("The project directory owner is unavailable."))?;
+        let current = active_project_directory_owner(&state, &refresh_from.id)?;
+        Ok((!same_project_directory_binding(&refresh_from, &current))
+            .then(|| project_shell_guard(&state, current)))
+    })
+}
+
+/// Rebinds project_id from expected_path to the absolute selected_path; returns the refreshed snapshot.
+/// 将 project_id 从 expected_path 重新绑定到绝对路径 selected_path，返回刷新后的快照。
+pub(crate) async fn service_change_project_directory(
+    state: SharedServiceBridgeState,
+    project_id: String,
+    expected_path: String,
+    selected_path: PathBuf,
+    expected_volume: Option<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    if !selected_path.is_absolute() {
+        return Err(format!(
+            "The project directory must be absolute: {}",
+            selected_path.display()
+        ));
+    }
+    // Finish the database write and its live publication even if the caller stops awaiting the RPC.
+    // 即使调用方不再等待 RPC，也完成数据库写入及其实时发布。
+    crate::spawn_service_task(persist_project_directory_change(
+        state,
+        project_id,
+        expected_path,
+        selected_path,
+        expected_volume,
+    ))
+    .await
+    .map_err(|error| format!("Project directory change task failed: {error}"))?
+}
+
+/// Serializes and publishes an explicit rebind, retaining the exact project and its active sessions.
+/// 串行执行并发布显式目录更换，保留精确项目和活动会话。
+async fn persist_project_directory_change(
+    state: SharedServiceBridgeState,
+    project_id: String,
+    expected_path: String,
+    selected_path: PathBuf,
+    expected_volume: Option<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    // The workspace writer orders persistent mutations; the project reservation excludes new admissions.
+    // 工作区写锁为持久化变更排序；项目预留使新准入互斥。
+    let controller = controller_runtime_from_state(&state)?;
+    // Wait for admitted requests before reserving the shared workspace writer.
+    // 在占用共享工作区写锁前，先等待已经准入的请求完成交接。
+    let cutover = project_directory_cutover(&project_id)?.write_owned().await;
+    let persist_lock = webui_workspace_persist_lock();
+    let _persist_guard = persist_lock.lock().await;
+    let snapshot =
+        vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(controller.clone())
+            .await?;
+    let project = workspace_task_project_for_project_id(&snapshot, &project_id)
+        .ok_or_else(|| format!("Project not found: {project_id}"))?;
+    let _project_guard = begin_project_directory_change(&state, &project_id)?;
+    if project.path != expected_path {
+        return Err(format!(
+            "Project `{project_id}` has a different saved directory. Refresh and try again."
+        ));
+    }
+    let canonical_path = fs::canonicalize(&selected_path).map_err(|error| {
+        format!(
+            "Cannot open project directory `{}`: {error}",
+            selected_path.display()
+        )
+    })?;
+    require_project_directory(&canonical_path)?;
+    let volume_id = project_volume_identity(&canonical_path)?;
+    validate_project_volume(
+        &canonical_path,
+        expected_volume.as_deref(),
+        volume_id.as_deref(),
+    )?;
+    let new_path = normalized_workspace_path_text_from_path(&canonical_path);
+    if snapshot
+        .task_projects
+        .iter()
+        .chain(&snapshot.archived_task_projects)
+        .any(|other| other.id != project_id && task_project_matches_path(other, &new_path))
+    {
+        return Err(format!(
+            "The directory is already bound to another project: {new_path}"
+        ));
+    }
+    if project.path == new_path && project.root_volume_id == volume_id {
+        drop(cutover);
+        return refresh_workbench_snapshot(state).await;
+    }
+    // Persist the exact previous binding together with the replacement.
+    // 将精确的旧绑定与新绑定一同持久化。
+    let changed_at_ms = i64::try_from(current_unix_millis_value()).map_err(|_| {
+        String::from("Project directory change exceeds the signed timestamp range.")
+    })?;
+    vulcan_workspace_store::workspace_store::replace_project_root_path(
+        &controller,
+        &project_id,
+        &expected_path,
+        &new_path,
+        volume_id.clone(),
+        changed_at_ms,
+    )
+    .await?;
+    {
+        // Share the committed binding immediately with model request and shell admission.
+        // 立即向模型请求和 Shell 准入发布已提交的绑定。
+        let mut guard = state.lock().map_err(|error| error.to_string())?;
+        let live_project = guard
+            .workspace_snapshot
+            .as_mut()
+            .and_then(|workspace| workspace_task_project_for_project_id_mut(workspace, &project_id))
+            .ok_or_else(|| format!("Project not found: {project_id}"))?;
+        live_project.path = new_path;
+        live_project.root_volume_id = volume_id;
+        live_project.root_directory_change =
+            Some(vulcan_workbench_model::ProjectRootDirectoryChange {
+                previous_path: expected_path,
+                changed_at_ms,
+            });
+        // Discard any workspace refresh that captured the preceding index before publication.
+        // 丢弃发布前捕获旧索引的工作区刷新。
+        let epoch = &mut guard.service_lifecycle_state.recovery_publication_epoch;
+        *epoch = epoch.wrapping_add(1);
+    }
+    drop(cutover);
+    refresh_workbench_snapshot(state).await
+}
+
 /// Adds or restores one project from a concrete local directory path.
 /// 根据一个具体本地目录路径新增或恢复项目。
 ///
@@ -330,6 +623,16 @@ fn project_directory_entry_from_read_dir_entry(
 pub async fn service_add_project_from_path(
     state: SharedServiceBridgeState,
     selected_path: PathBuf,
+) -> Result<Option<WorkbenchSnapshot>, String> {
+    service_add_project_from_selected_volume(state, selected_path, None).await
+}
+
+/// Adds or restores a directory selected from a picker listing; validates its optional volume receipt.
+/// 添加或恢复选择器列表选出的目录，并校验其可选卷回执。
+pub(crate) async fn service_add_project_from_selected_volume(
+    state: SharedServiceBridgeState,
+    selected_path: PathBuf,
+    expected_volume: Option<String>,
 ) -> Result<Option<WorkbenchSnapshot>, String> {
     let normalized_path = normalize_task_project_path(&selected_path);
     if !normalized_path.exists() {
@@ -370,6 +673,27 @@ pub async fn service_add_project_from_path(
         )
         .await?;
 
+    // Revalidate after waiting for the write lock and loading the current index.
+    // 等待写锁并加载当前索引之后再次校验。
+    require_project_directory(&normalized_path)?;
+    let volume_id = project_volume_identity(&normalized_path)?;
+    validate_project_volume(
+        &normalized_path,
+        expected_volume.as_deref(),
+        volume_id.as_deref(),
+    )?;
+    if let Some(existing) = workspace_snapshot
+        .task_projects
+        .iter()
+        .chain(&workspace_snapshot.archived_task_projects)
+        .find(|project| task_project_matches_path(project, &normalized_path_text))
+    {
+        validate_project_volume(
+            &normalized_path,
+            existing.root_volume_id.as_deref(),
+            volume_id.as_deref(),
+        )?;
+    }
     if workspace_snapshot
         .task_projects
         .iter()
@@ -454,7 +778,8 @@ pub async fn service_add_project_from_path(
         None,
         None,
         Vec::new(),
-    );
+    )
+    .with_root_volume_id(volume_id);
     vulcan_workspace_store::workspace_store::persist_new_project(controller_runtime, &project)
         .await?;
     // The project row and its workbench membership must publish before releasing the workspace
@@ -782,6 +1107,31 @@ mod tests {
     };
     use vulcan_workbench_model::SessionId;
 
+    /// Opening the picker without an explicit path starts at the saved project directory.
+    /// 未指定路径时，选择器从已保存的项目目录打开。
+    #[test]
+    fn picker_keeps_the_saved_project_as_its_initial_directory() {
+        let fixture = tempfile::tempdir().expect("project picker fixture");
+        let project = fixture.path().join("parent").join("project");
+        fs::create_dir_all(&project).expect("create saved project directory");
+        let expected =
+            normalized_workspace_path_text_from_path(&normalize_task_project_path(&project));
+        let mut state = test_service_state_with_parent_session(SessionId::new_v4());
+        state.workbench.projects = vec![crate::ProjectSummary {
+            id: "picker-project".to_owned(),
+            name: "Picker project".to_owned(),
+            path: expected.clone(),
+            pinned: false,
+            icon_pack: None,
+            icon_key: None,
+            session_sort_mode: Default::default(),
+        }];
+
+        let listing = service_browse_project_directories(Arc::new(Mutex::new(state)), None)
+            .expect("browse the saved project");
+        assert_eq!(listing.path, expected);
+    }
+
     /// Only checkouts with a remote of the repository count, in https, ssh and scp forms.
     /// 只有远端包含该仓库的检出才算数，覆盖 https、ssh 与 scp 写法。
     #[test]
@@ -925,6 +1275,219 @@ mod tests {
             &workspace_snapshot,
             "missing-project"
         ));
+    }
+
+    /// Rebinding preserves the indexed session and rejects stale and already-owned destinations.
+    /// 更换目录保留索引中的会话，并拒绝过时或已被占用的目标。
+    #[tokio::test]
+    async fn project_directory_rebind_keeps_active_run_and_invalidates_old_shell_guard() {
+        // Use the production service and SQLite index with a test-owned project and session.
+        // 使用生产服务及 SQLite 索引，项目与会话由测试隔离持有。
+        let session_id = SessionId::new_v4();
+        let root = TestHostRuntimeRoot::new(session_id);
+        let controller = root.attached_host_runtime_handle().await;
+        vulcan_workspace_store::data_plane::prepare_application_schema_for_test(&controller)
+            .await
+            .unwrap();
+        let old = root.data_root().join("missing");
+        let new = root.data_root().join("restored");
+        let occupied = root.data_root().join("occupied");
+        fs::create_dir_all(&new).unwrap();
+        fs::create_dir_all(&occupied).unwrap();
+        let old_text = normalized_workspace_path_text_from_path(&old);
+        for (id, path) in [("v1-test-project", &old), ("other-project", &occupied)] {
+            let project = TaskProjectSummary::new(
+                id,
+                id,
+                normalized_workspace_path_text_from_path(path),
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            );
+            vulcan_workspace_store::workspace_store::persist_new_project(
+                controller.clone(),
+                &project,
+            )
+            .await
+            .unwrap();
+        }
+        let workspace = vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+            controller.clone(),
+        )
+        .await
+        .unwrap();
+        let mut service = test_service_state_with_parent_session(session_id);
+        service.agent_runtime = Some(test_agent_runtime_bridge());
+        service.controller_runtime = Some(controller.clone());
+        service.workspace_snapshot = Some(workspace);
+        let state = Arc::new(Mutex::new(service));
+        let project_id = "v1-test-project";
+        let missing = service_check_project_directory(&state, project_id).unwrap();
+        assert_eq!(missing.path, old_text);
+        assert!(!missing.available);
+        // Check both new and existing sends through the real submission admission. For the
+        // existing session, a different requested project must never replace its indexed owner.
+        // 通过真实提交准入检查新旧会话。已有会话请求中传入其他项目不能改变索引所有者。
+        for (requested_project, session) in [
+            (project_id, None),
+            ("other-project", Some(session_id.to_string())),
+        ] {
+            let failure = crate::conversation_submission::service_submit_conversation_prompt(
+                vulcan_service_api::ServiceEventEmitter::new(Vec::new()),
+                state.clone(),
+                uuid::Uuid::new_v4().to_string(),
+                Some(requested_project.into()),
+                session,
+                None,
+                String::from("Continue work"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::conversation_submission::ExistingSessionHydrationPolicy::HydrateIfEmpty,
+                crate::conversation_submission::ConversationSubmissionMode::UserPrompt,
+                crate::SubmissionActivation::Foreground,
+            )
+            .await
+            .err()
+            .expect("directory must be checked before accepting input");
+            assert!(
+                failure.starts_with(
+                    vulcan_host_tools::project_directory::PROJECT_DIRECTORY_UNAVAILABLE
+                ),
+                "{failure}"
+            );
+            assert!(failure.contains(&old_text));
+        }
+        fs::create_dir(&old).unwrap();
+        assert!(
+            service_check_project_directory(&state, project_id)
+                .unwrap()
+                .available
+        );
+        // Capture the same launch guard used after tool approval, so even a previously valid cwd cannot follow a rebind.
+        // 捕获权限批准后使用的同一启动守卫，确保已有效的 cwd 也不会随绑定更换。
+        let previous = active_project_directory_owner(&state, project_id).unwrap();
+        let old_shell_guard = project_shell_guard(&state, previous);
+        assert!(old_shell_guard.validate().is_ok());
+        fs::remove_dir(&old).unwrap();
+        let missing_error = old_shell_guard.validate().unwrap_err();
+        assert!(missing_error.contains(&old_text));
+        assert!(missing_error.contains("Ask the user"));
+        // Restoring the same binding permits a new invocation without scheduling the failed one.
+        // 恢复同一绑定后允许新调用，不调度已失败的调用。
+        fs::create_dir(&old).unwrap();
+        assert!(old_shell_guard.validate().is_ok());
+        fs::remove_dir(&old).unwrap();
+        assert!(
+            service_change_project_directory(
+                state.clone(),
+                project_id.into(),
+                old_text.clone(),
+                occupied,
+                None,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            service_change_project_directory(
+                state.clone(),
+                project_id.into(),
+                "stale".into(),
+                new.clone(),
+                None,
+            )
+            .await
+            .is_err()
+        );
+        let replaced_volume = service_change_project_directory(
+            state.clone(),
+            project_id.into(),
+            old_text.clone(),
+            new.clone(),
+            Some(String::from("disconnected-original-volume")),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            replaced_volume
+                .starts_with(vulcan_host_tools::project_directory::PROJECT_DIRECTORY_UNAVAILABLE)
+        );
+        assert_eq!(
+            service_check_project_directory(&state, project_id)
+                .unwrap()
+                .path,
+            old_text
+        );
+        // Retain a live session owner while the user rebinds the project.
+        // 用户更换项目目录时保留一个活动会话所有者。
+        let task_id = uuid::Uuid::new_v4();
+        {
+            let mut guard = state.lock().unwrap();
+            guard.session_terminal_persistence_owners.insert(
+                session_id,
+                crate::state::SessionTerminalPersistenceOwner::StreamTask(task_id),
+            );
+            guard.active_stream_tasks.insert(
+                session_id,
+                crate::state::ActiveStreamTask::new(
+                    task_id,
+                    tokio::spawn(std::future::pending()),
+                    None,
+                ),
+            );
+        }
+        service_change_project_directory(
+            state.clone(),
+            project_id.into(),
+            old_text.clone(),
+            new.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        let status = service_check_project_directory(&state, project_id).unwrap();
+        assert!(status.available);
+        assert_eq!(
+            status.path,
+            normalized_workspace_path_text_from_path(&normalize_task_project_path(&new))
+        );
+        let snapshot =
+            vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(controller)
+                .await
+                .unwrap();
+        let project = workspace_task_project_for_project_id(&snapshot, project_id).unwrap();
+        assert_eq!(project.path, status.path);
+        assert!(project.session_ids.contains(&session_id));
+        assert_eq!(
+            project
+                .root_directory_change
+                .as_ref()
+                .unwrap()
+                .previous_path,
+            old_text
+        );
+        // The old manager refuses a launch and only a new manager accepts the new binding.
+        // 旧工具管理器拒绝启动，只有新工具管理器接受新绑定。
+        let stale_error = old_shell_guard.validate().unwrap_err();
+        assert!(stale_error.contains(&format!("{old_text:?}")));
+        assert!(stale_error.contains(&format!("{:?}", status.path)));
+        assert!(
+            project_shell_guard(&state, project.clone())
+                .validate()
+                .is_ok()
+        );
+        let guard = state.lock().unwrap();
+        let active = guard.active_stream_tasks.get(&session_id).unwrap();
+        assert_eq!(active.task_id(), task_id);
+        assert!(active.is_running());
+        active.abort();
     }
 
     /// Verifies a slow VMM binding cannot block a second real project create or hide its result.

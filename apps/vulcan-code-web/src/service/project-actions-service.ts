@@ -43,13 +43,33 @@ export async function browseProjectDirectories(path: string | null): Promise<Pro
   return serviceClient.request<ProjectDirectoryListing>("service_browse_project_directories", { path });
 }
 
+// browseProjectReplacement starts at the service directory when the saved project is missing.
+// browseProjectReplacement 在保存项目不可用时从服务目录开始浏览。
+export async function browseProjectReplacement(path: string | null): Promise<ProjectDirectoryListing> {
+  return path === null
+    ? serviceClient.request("service_browse_project_replacement_start", {})
+    : browseProjectDirectories(path);
+}
+
+// checkProjectDirectory reads current availability for the exact saved project.
+// checkProjectDirectory 读取指定项目保存目录的当前可用性。
+export async function checkProjectDirectory(projectId: string): Promise<{ path: string; available: boolean }> {
+  return serviceClient.request("service_check_project_directory", { projectId });
+}
+
+// changeProjectDirectory rebinds the existing project from the expected path to the chosen path.
+// changeProjectDirectory 将现有项目从预期路径重新绑定到所选路径。
+export async function changeProjectDirectory(projectId: string, expectedPath: string, path: string, expectedVolume?: string): Promise<WorkbenchSnapshot> {
+  return serviceClient.request("service_change_project_directory", { projectId, expectedPath, path, expectedVolume });
+}
+
 // addProjectFromPath registers one service-host directory as a project.
 // addProjectFromPath 将单个服务宿主目录注册为项目。
-export async function addProjectFromPath(path: string): Promise<WorkbenchSnapshot | null> {
+export async function addProjectFromPath(path: string, expectedVolume?: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     throw new Error("Browser service is unavailable, so the project cannot be added.");
   }
-  return serviceClient.request<WorkbenchSnapshot | null>("service_add_project_from_path", { path });
+  return serviceClient.request<WorkbenchSnapshot | null>("service_add_project_from_path", { path, expectedVolume });
 }
 
 // SelfFixWorkspace is the source directory prepared for an on-device fix, already added as a project.
@@ -203,11 +223,11 @@ export async function setProjectTreePinsOrder(pins: ProjectTreePin[]): Promise<W
 
 // addProjectToGroup adds a directory as a project in one group; an existing project only moves into the group.
 // addProjectToGroup 将目录作为项目添加到某分组；已存在的项目只会移入该分组。
-export async function addProjectToGroup(path: string, groupId: string): Promise<WorkbenchSnapshot> {
+export async function addProjectToGroup(path: string, groupId: string, expectedVolume?: string): Promise<WorkbenchSnapshot> {
   if (!hasServiceRuntime()) {
     throw new Error("Service runtime is unavailable; the project was not added.");
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_add_project_to_group", { path, groupId });
+  return serviceClient.request<WorkbenchSnapshot>("service_add_project_to_group", { path, groupId, expectedVolume });
 }
 
 // archiveProjectConversations asks the desktop shell to archive all conversations under one project.

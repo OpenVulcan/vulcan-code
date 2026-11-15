@@ -48,8 +48,10 @@ workspace-members = ["vulcan-code-service", "vulcan-lancedb-native", "vulcan-cod
 # runs in release jobs that should not compile it either.
 # 安装核心、语言目录与 LuaSkills 设置链接进静态安装器，安装器不得编译整个工作区的特性集合；它只保留自己的少量依赖。
 # 发布工具运行在同样不应编译该集合的发布作业中。
+# Volume identity stays in a leaf with only its platform system bindings.
+# 卷标识保留在仅依赖平台系统绑定的叶子模块。
 [final-excludes]
-workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core", "vulcan-i18n", "vulcan-luaskills-config", "vulcan-release-tool", "vulcan-code-launcher", "vulcan-code-setup"]
+workspace-members = ["vulcan-mount-table", "vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core", "vulcan-i18n", "vulcan-luaskills-config", "vulcan-release-tool", "vulcan-code-launcher", "vulcan-code-setup"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true

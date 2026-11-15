@@ -642,6 +642,7 @@ export function ChatArea(props: ChatAreaProps) {
         data-loading={showConversationLoadingOnly ? "" : undefined}
         style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
       >
+        {props.projectDirectoryRecovery}
         {showConversationLoadingOnly ? (
           <ConversationLoadingCenter />
         ) : (

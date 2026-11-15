@@ -357,6 +357,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
             false,
             None,
             None,
+            None,
         );
 
         let resolved: ResolvedToolSet = manager.resolve_for_execution_mode("Build");
@@ -466,6 +467,7 @@ fn feedback_tool_is_registered_only_with_a_host() {
             false,
             None,
             None,
+            None,
         )
         .resolve_for_execution_mode("Build")
         .descriptors
@@ -545,6 +547,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         true,
+        None,
         None,
         None,
     );
@@ -627,6 +630,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         true,
         None,
         None,
+        None,
     );
     let disabled_ids = disabled_manager
         .resolve_for_execution_mode("Build")
@@ -661,6 +665,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
+        None,
         None,
         None,
     );
@@ -722,6 +727,7 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
         false,
         None,
         Some(Arc::new(FakeCollaborationRuntime)),
+        None,
     );
 
     let build_ids = manager
@@ -1011,6 +1017,7 @@ fn frozen_bridge_tools(
         false,
         None,
         None,
+        None,
     )
 }
 
@@ -1030,6 +1037,193 @@ fn frozen_bridge_context() -> VulcanToolInvocationContext {
         controller_tool_call_id: String::from("frozen-call"),
         provider_tool_call_id: None,
     }
+}
+
+/// Connects the production tool permission pipeline to its normal question runtime.
+/// 将生产工具权限管线连接到常规提问运行时。
+struct DirectoryApprovalHost(Arc<crate::agent_runtime::question_runtime::QuestionRuntime>);
+
+#[async_trait::async_trait]
+impl crate::agent_runtime::tool_permission::ToolPermissionHost for DirectoryApprovalHost {
+    /// Selects workspace-write mode so an opaque shell call needs user approval.
+    /// 选择工作区写入模式，让不透明 Shell 调用需要用户批准。
+    fn access(
+        &self,
+        _: uuid::Uuid,
+    ) -> Result<vulcan_session_core::v1::config::AccessConfig, String> {
+        Ok(vulcan_session_core::v1::config::AccessConfig {
+            permission: vulcan_session_core::v1::config::PermissionMode::WorkspaceWrite,
+            unattended: None,
+        })
+    }
+
+    /// Waits on the same approval request resolved by the user's Allow once reply.
+    /// 等待由用户「仅允许一次」回复解决的同一审批请求。
+    async fn request_approval(
+        &self,
+        session_id: uuid::Uuid,
+        context: VulcanToolInvocationContext,
+        tool_name: String,
+        arguments: Value,
+        prompt: crate::agent_runtime::question_runtime::ToolApprovalPrompt,
+    ) -> Result<crate::agent_runtime::question_runtime::ApprovalAnswer, String> {
+        self.0
+            .request_approval(session_id, context, tool_name, arguments, prompt, None)
+            .await
+    }
+}
+
+/// Exercises a directory writer racing with the final start of a manually approved command.
+/// 测试目录写入方与人工审批通过的命令最后启动时发生的并发竞争。
+#[tokio::test]
+async fn project_shell_command_orders_allow_once_launch_with_directory_change() {
+    use crate::agent_runtime::question_runtime::{APPROVAL_ALLOW_LABEL, QuestionRuntime};
+    use crate::agent_runtime::tool_permission::PermissionTexts;
+    use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
+
+    // Keep both directories available so a mistaken launch would leave a marker.
+    // 保持两个目录均可访问，误启动会留下标记。
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old");
+    let new = temp.path().join("new");
+    fs::create_dir(&old).unwrap();
+    fs::create_dir(&new).unwrap();
+    // The binding stays unchanged until the approved call reaches process admission.
+    // 审批放行的调用到达进程准入前，绑定保持不变。
+    let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let changed_for_guard = changed.clone();
+    // The simulated publisher and real tool launch use the same lock.
+    // 模拟发布方与真实工具启动使用同一把锁。
+    let cutover = Arc::new(tokio::sync::RwLock::new(()));
+    let cutover_for_guard = cutover.clone();
+    // The resolver signals precisely when the launch starts waiting on the directory writer.
+    // 解析器在启动开始等待目录写入方时发出信号。
+    let launch_requested = Arc::new(tokio::sync::Notify::new());
+    let launch_for_guard = launch_requested.clone();
+    let guard = super::ProjectShellGuard::new(move || {
+        if changed_for_guard.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(String::from("stale directory after approval"))
+        } else {
+            Ok(())
+        }
+    })
+    .with_launch_lock(move || {
+        launch_for_guard.notify_one();
+        Ok(cutover_for_guard.clone())
+    });
+    let questions = Arc::new(QuestionRuntime::new());
+    questions
+        .set_durability_callback(Some(Arc::new(|_| Ok(()))))
+        .unwrap();
+    let config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("agent-a"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    let catalog = build_native_tool_catalog(
+        &config,
+        None,
+        &Default::default(),
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+    let manager = Arc::new(build_vulcan_tools_manager(
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        true,
+        questions.clone(),
+        catalog,
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        Some(old.clone()),
+        Some("project".into()),
+        None,
+        None,
+        None,
+        vec!["shell_command".into()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        VmmConfigLayer::default(),
+        VmmConfigLayer::default(),
+        false,
+        None,
+        None,
+        Some(guard),
+    ));
+    let resolved = manager.resolve_for_execution_mode("Build");
+    let bridge = VulcanManagedToolRuntimeBridge::new(
+        manager,
+        &resolved.definitions,
+        uuid::Uuid::nil(),
+        "Build",
+    )
+    .with_tool_permission_host(Some(Arc::new(DirectoryApprovalHost(questions.clone()))));
+    let mut context = frozen_bridge_context();
+    context.session_id = uuid::Uuid::nil().to_string();
+    let call = tokio::spawn(async move {
+        // Opaque command syntax keeps the permission pipeline on the explicit approval path.
+        // 不透明命令语法使权限管线进入显式审批。
+        let args = json!({"command": "echo approved > approval-marker; echo done", "cwd": new, "title": "Write one marker"});
+        let shell = resolved
+            .definitions
+            .iter()
+            .find(|entry| entry.descriptor.id == "shell_command")
+            .unwrap();
+        bridge
+            .invoke_definition(shell, args, PermissionTexts::default(), context)
+            .await
+    });
+    let pending = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Some(approval) = questions.list_pending().unwrap().into_iter().next() {
+                break approval;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shell must reach production approval");
+    assert_eq!(pending.tool_name, "shell_command");
+    // Reserve publication before allowing the call, while leaving the old binding visible.
+    // 放行前预留发布锁，同时保持旧绑定可见。
+    let writer = cutover
+        .try_write()
+        .expect("approval must not hold the launch lease");
+    assert!(
+        questions
+            .reply(&pending.id, vec![vec![APPROVAL_ALLOW_LABEL.into()]])
+            .unwrap()
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        launch_requested.notified(),
+    )
+    .await
+    .expect("approved shell must reach final process admission");
+    assert!(
+        !call.is_finished(),
+        "the writer still owns process admission"
+    );
+    changed.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(writer);
+    assert_eq!(
+        call.await.unwrap().unwrap_err(),
+        "stale directory after approval"
+    );
+    assert!(!old.join("approval-marker").exists());
+    assert!(!temp.path().join("new/approval-marker").exists());
 }
 
 /// Rejects the old frozen closure after a real refresh while preserving fresh and ordinary calls.

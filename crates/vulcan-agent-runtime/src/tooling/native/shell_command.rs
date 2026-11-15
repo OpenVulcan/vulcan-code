@@ -900,6 +900,7 @@ pub(crate) async fn execute_shell_command_process(
     shell_support: &HostCommandShellSupport,
     process_options: &ShellCommandProcessOptions,
     job_context: &ShellCommandJobContext,
+    launch_lease: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
 ) -> ShellCommandExecutionReport {
     let not_started = |shell_label: String, reason: String| ShellCommandExecutionReport {
         end: ShellCommandCallEnd::NotStarted { reason },
@@ -937,7 +938,7 @@ pub(crate) async fn execute_shell_command_process(
     let runtime = ShellJobRuntime::global();
     let owner = &job_context.owner_session_id;
     let background = parsed_args.background;
-    let job = match runtime.spawn(
+    let spawn = runtime.spawn(
         ShellJobSpawn {
             owner_session_id: owner.clone(),
             origin: job_context.origin,
@@ -952,7 +953,11 @@ pub(crate) async fn execute_shell_command_process(
             capture_streams: !background,
         },
         command,
-    ) {
+    );
+    // The OS has accepted or rejected the launch. Running jobs do not hold the project lock.
+    // 操作系统已接受或拒绝启动。运行中的任务不持有项目锁。
+    drop(launch_lease);
+    let job = match spawn {
         Ok(job) => job,
         Err(error) => return not_started(shell_label, error.to_string()),
     };
@@ -1152,21 +1157,120 @@ pub(crate) fn build_shell_command_host_payload(
     })
 }
 
+/// Converts a directory diagnostic into an actionable model-facing tool error.
+/// 将目录诊断转为模型可处理的工具错误。
+pub(crate) fn shell_directory_error(error: String) -> String {
+    format!(
+        "{error}. Ask the user whether to restore the unavailable directory or choose another directory. Wait for the user's answer before retrying this command."
+    )
+}
+
+/// Validates the same frozen project root at admission and just before launching a command.
+/// 在准入及命令即将启动时校验同一冻结项目根目录。
+pub(crate) fn require_shell_project(
+    request: &NativeToolExecutionRequest,
+) -> Result<(), NativeToolError> {
+    if let Some(guard) = &request.project_shell_guard {
+        return guard.validate().map_err(NativeToolError::new);
+    }
+    if let Some(root) = request.workspace_root.as_deref() {
+        vulcan_host_tools::project_directory::require_project_directory(root)
+            .map_err(|error| NativeToolError::new(shell_directory_error(error)))?;
+    }
+    Ok(())
+}
+
+/// Checks the actual process directory resolved from the original arguments.
+/// 检查按原始参数解析出的实际进程目录。
+pub(crate) fn require_shell_cwd(cwd: &Path) -> Result<(), NativeToolError> {
+    vulcan_host_tools::project_directory::require_project_directory(cwd)
+        .map_err(|error| NativeToolError::new(shell_directory_error(error)))
+}
+
+/// Orders a command launch against directory publication and validates its frozen root and actual cwd.
+/// 将命令启动与目录发布排序，并检查冻结根目录及实际 cwd。
+pub(crate) async fn admit_shell_launch(
+    request: &NativeToolExecutionRequest,
+    cwd: &Path,
+) -> Result<Option<tokio::sync::OwnedRwLockReadGuard<()>>, NativeToolError> {
+    // Read the binding only after obtaining the lease so a waiting writer can publish first.
+    // 取得租约后才读取绑定，确保已排队的写入方可以先发布目录变更。
+    let lease = match &request.project_shell_guard {
+        Some(guard) => guard
+            .acquire_launch_lease()
+            .await
+            .map_err(NativeToolError::new)?,
+        None => None,
+    };
+    require_shell_project(request)?;
+    require_shell_cwd(cwd)?;
+    Ok(lease)
+}
+
+/// Pages shell text under an existing project, or returns the completed job and a log pointer.
+/// 在已有项目下分页 Shell 文本；无法分页时返回已完成的任务和日志定位。
+fn render_shell_overflow(
+    request: &NativeToolExecutionRequest,
+    input: &HostTextRenderInput,
+    budget: &ToolResultBudgetSnapshot,
+    mut options: HostRenderOptions,
+    job_id: Option<&str>,
+    status: &str,
+) -> Result<(String, bool), String> {
+    let Some(project_root) = request
+        .workspace_root
+        .as_deref()
+        .filter(|_| request.spill_root.is_none())
+    else {
+        return render_tool_result_text(input, None, budget, &options).map(|text| (text, true));
+    };
+    // The generic writer must never recreate the project if it disappears during pagination.
+    // 项目在分页期间消失时，共用写入器不得重建项目。
+    let page = (|| {
+        require_shell_project(request).map_err(|error| error.to_string())?;
+        options.spill_root = Some(project_temp_maintenance::prepare_existing_project_temp_dir(
+            project_root,
+        )?);
+        require_shell_project(request).map_err(|error| error.to_string())?;
+        crate::tool_result_format::render_tool_result_text_in_existing_spill(
+            input, budget, &options,
+        )
+    })();
+    match page {
+        Ok(text) => Ok((text, true)),
+        Err(error) => {
+            let mut text = format!("Status: {status}\nProject output page unavailable: {error}");
+            if let Some(job_id) = job_id {
+                text.push_str(&format!(
+                    "\nRead the retained output with shell_job (job_id `{job_id}`)."
+                ));
+            }
+            Ok((text, false))
+        }
+    }
+}
+
 /// Executes one `shell_command` invocation after applying the generic plugin transform chain.
 /// 在应用通用插件转换链后执行一次 `shell_command` 调用。
 pub(crate) async fn execute_shell_command_tool(
-    request: NativeToolExecutionRequest,
+    mut request: NativeToolExecutionRequest,
     shell_support: &HostCommandShellSupport,
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
     rtk: &PersistedRtkConfiguration,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
-    let vulcan_environment = child_process_environment(&request).await?;
+    // Validate the bound project before resolving an optional command-specific cwd.
+    // 在解析命令可选 cwd 前先校验绑定项目。
+    require_shell_project(&request)?;
     let job_context = ShellCommandJobContext::of_request(&request);
-    let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
+    let parsed_args = parse_shell_command_tool_arguments(std::mem::take(&mut request.arguments))?;
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
         parsed_args.cwd.as_deref(),
     )?;
+    // Validate the resolved cwd before any shell hook, child environment lookup, or process launch.
+    // 在 Shell Hook、子进程环境查询或进程启动前校验解析后的 cwd。
+    require_shell_cwd(&effective_cwd)?;
+    let vulcan_environment = child_process_environment(&request).await?;
     let spill_root = resolve_shell_command_spill_root(
         request.spill_root.as_deref(),
         request.workspace_root.as_deref(),
@@ -1186,25 +1290,22 @@ pub(crate) async fn execute_shell_command_tool(
     process_options.host_environment = rtk_host_environment(rtk.telemetry_disabled);
     process_options.vulcan_environment = vulcan_environment;
 
+    // Hooks may suspend. Acquire the lease only after preparation and hold it through process creation.
+    // Hook 可能挂起。仅在准备完成后取得租约，并保持到进程创建完成。
+    let launch_lease = admit_shell_launch(&request, &effective_cwd).await?;
     let execution_report = execute_shell_command_process(
         &effective_args,
         &effective_cwd,
         shell_support,
         &process_options,
         &job_context,
+        launch_lease,
     )
     .await;
     let render_input =
         build_shell_command_text_render_input(&effective_args, &execution_report, &hook_report);
     let budget = default_shell_command_budget_snapshot();
     let exceeds_inline_budget = shell_command_output_exceeds_inline_budget(&render_input, &budget);
-    let host_payload = build_shell_command_host_payload(
-        session_id,
-        &effective_args,
-        &execution_report,
-        exceeds_inline_budget,
-        &hook_report,
-    );
     let render_options = HostRenderOptions {
         spill_root,
         template_skill_roots: Vec::new(),
@@ -1212,9 +1313,20 @@ pub(crate) async fn execute_shell_command_tool(
     };
     // Only overflowing output writes a spill page; keep that filesystem work off the async worker.
     // 只有超限输出会写入分页文件；该文件系统操作不占用异步工作线程。
-    let model_output = if exceeds_inline_budget {
+    let (model_output, output_paged) = if exceeds_inline_budget {
+        // Preserve the real job receipt even if the workspace disappears after the process starts.
+        // 进程启动后工作区消失时，仍保留真实的任务回执。
+        let job_id = execution_report.job_id.clone();
+        let status = execution_report.status_label();
         tokio::task::spawn_blocking(move || {
-            render_tool_result_text(&render_input, None, &budget, &render_options)
+            render_shell_overflow(
+                &request,
+                &render_input,
+                &budget,
+                render_options,
+                job_id.as_deref(),
+                status,
+            )
         })
         .await
         .map_err(|error| {
@@ -1222,8 +1334,16 @@ pub(crate) async fn execute_shell_command_tool(
         })?
     } else {
         render_tool_result_text(&render_input, None, &budget, &render_options)
+            .map(|text| (text, false))
     }
     .map_err(NativeToolError::new)?;
+    let host_payload = build_shell_command_host_payload(
+        session_id,
+        &effective_args,
+        &execution_report,
+        output_paged,
+        &hook_report,
+    );
 
     // The raw streams stay in memory so a chain step can read them even when the text spilled.
     // 原始流仅保留在内存中，使链条步骤在文本已溢出时仍可读取。
@@ -1243,7 +1363,233 @@ pub(crate) async fn execute_shell_command_tool(
 
 #[cfg(test)]
 mod process_option_tests {
+    /// An absolute override cannot start a shell after the owning project disappears.
+    /// 所属项目消失后，绝对路径覆盖也不能启动 Shell。
+    #[tokio::test]
+    async fn shell_cwd_cannot_bypass_a_removed_project() {
+        use super::*;
+        use crate::tooling::native::tests::test_native_request;
+
+        // The override remains usable on disk while the bound root has been removed.
+        // 绑定根目录已移除，但覆盖路径仍可在磁盘上访问。
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        let mut request = test_native_request(json!({
+            "command": "echo unexpected",
+            "title": "Check cwd admission",
+            "cwd": temp.path(),
+        }));
+        request.workspace_root = Some(root.clone());
+        let shell_support = HostCommandShellSupport::from_test_parts(Vec::new(), None);
+        let error = execute_shell_command_tool(
+            request,
+            &shell_support,
+            None,
+            &PersistedRtkConfiguration::default(),
+        )
+        .await
+        .err()
+        .expect("missing project must reject the tool");
+        assert!(
+            error
+                .message
+                .starts_with(vulcan_host_tools::project_directory::PROJECT_DIRECTORY_UNAVAILABLE)
+        );
+        assert!(error.message.contains(&root.display().to_string()));
+        assert!(error.message.contains("Ask the user"));
+    }
+
+    /// A valid project cannot launch a command whose explicit cwd was removed.
+    /// 项目有效时，仍不能启动显式 cwd 已被移除的命令。
+    #[tokio::test]
+    async fn shell_rejects_a_removed_explicit_cwd() {
+        use crate::tooling::native::tests::test_native_request;
+
+        // Keep the project available while the requested relative directory is missing.
+        // 保持项目可用，同时让请求的相对目录缺失。
+        let project = tempfile::tempdir().unwrap();
+        let cwd = project.path().join("removed");
+        let mut request = test_native_request(json!({
+            "command": "echo unexpected",
+            "title": "Check cwd admission",
+            "cwd": "removed",
+        }));
+        request.workspace_root = Some(project.path().to_path_buf());
+        let shell_support = HostCommandShellSupport::from_test_parts(Vec::new(), None);
+        let error = execute_shell_command_tool(
+            request,
+            &shell_support,
+            None,
+            &PersistedRtkConfiguration::default(),
+        )
+        .await
+        .err()
+        .expect("missing cwd must reject the tool");
+        assert!(error.message.contains(&cwd.display().to_string()));
+        assert!(error.message.contains("Ask the user"));
+    }
+
     use super::*;
+
+    /// Removes the workspace during production environment loading, after initial directory admission.
+    /// 在生产环境变量加载中移除工作区，此时首次目录准入已经完成。
+    #[derive(Debug)]
+    struct RemoveProjectWhileLoadingEnvironment(PathBuf);
+
+    #[async_trait::async_trait]
+    impl crate::tooling::native::NativeEnvironmentHost for RemoveProjectWhileLoadingEnvironment {
+        /// Removes the empty fixture and returns no child variables.
+        /// 移除空目录夹具并返回空的子进程变量。
+        async fn effective_environment(
+            &self,
+            _: uuid::Uuid,
+        ) -> Result<Vec<crate::tooling::native::EffectiveEnvironmentVariable>, String> {
+            std::fs::remove_dir(&self.0).map_err(|error| error.to_string())?;
+            Ok(Vec::new())
+        }
+
+        /// This fixture has no saved secrets.
+        /// 此夹具没有保存的密钥。
+        async fn historical_job_secrets(
+            &self,
+            _: uuid::Uuid,
+        ) -> Result<Vec<(String, String)>, String> {
+            Ok(Vec::new())
+        }
+
+        /// Other environment operations are outside this fixture's launch path.
+        /// 其他环境操作不在此夹具启动路径内。
+        async fn set_session_variable(
+            &self,
+            _: uuid::Uuid,
+            _: String,
+            _: Option<String>,
+            _: String,
+        ) -> Result<(), String> {
+            unreachable!("unexpected environment write")
+        }
+
+        /// This fixture never asks for environment values.
+        /// 此夹具不请求环境变量值。
+        async fn request_values(
+            &self,
+            _: uuid::Uuid,
+            _: vulcan_tools_manager::VulcanToolInvocationContext,
+            _: String,
+            _: serde_json::Value,
+            _: crate::tooling::native::EnvironmentValuesPrompt,
+        ) -> Result<crate::tooling::native::EnvironmentValuesAnswer, String> {
+            unreachable!("unexpected environment question")
+        }
+    }
+
+    /// Neither Shell entry may start in an available absolute cwd if the project disappears during environment loading.
+    /// 环境变量加载期间如果项目消失，两个 Shell 入口都不能在仍可用的绝对 cwd 启动。
+    #[tokio::test]
+    async fn project_shell_and_terminal_recheck_after_environment_load() {
+        use crate::tooling::native::tests::test_native_request;
+        use crate::tooling::native::{
+            NativeEnvironmentAccess, terminal::build_terminal_session_tool,
+        };
+
+        for terminal in [false, true] {
+            // Leave the explicitly requested cwd available throughout the call.
+            // 调用期间始终保持显式指定的 cwd 可用。
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("project");
+            std::fs::create_dir(&root).unwrap();
+            let runtime = Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new());
+            let args = if terminal {
+                json!({"action": "start", "name": "fixture", "command": if cfg!(windows) {"cmd /D /Q"} else {"sh"}, "cwd": temp.path()})
+            } else {
+                json!({"command": "echo unexpected > launch-marker", "title": "Launch marker", "cwd": temp.path()})
+            };
+            let mut request = test_native_request(args);
+            request.session_id = Some(uuid::Uuid::new_v4());
+            request.workspace_root = Some(root.clone());
+            request.environment = Some(NativeEnvironmentAccess::new(
+                Arc::new(RemoveProjectWhileLoadingEnvironment(root.clone())),
+                Arc::downgrade(&runtime),
+            ));
+            let shell_support = HostCommandShellSupport::from_configured_default_id(None);
+            let error = if terminal {
+                build_terminal_session_tool(
+                    Arc::new(crate::tooling::CommandSessionRuntime::new()),
+                    shell_support,
+                    Vec::new(),
+                )
+                .invoke(request)
+                .await
+                .err()
+                .unwrap()
+            } else {
+                execute_shell_command_tool(
+                    request,
+                    &shell_support,
+                    None,
+                    &PersistedRtkConfiguration {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .err()
+                .unwrap()
+            };
+            assert!(
+                !root.exists(),
+                "the initial check must let the environment load run"
+            );
+            assert!(
+                error.message.contains(&root.display().to_string()),
+                "{}",
+                error.message
+            );
+            assert!(error.message.contains("Ask the user"));
+            assert!(!temp.path().join("launch-marker").exists());
+        }
+    }
+
+    /// Keeps the completed job's log reachable without creating a deleted workspace during pagination.
+    /// 分页时不创建已删除的工作区，同时保留已完成任务的日志入口。
+    #[test]
+    fn project_shell_output_spill_preserves_the_deleted_root() {
+        use crate::tooling::native::tests::test_native_request;
+        // Model the moment after the admitted command completed and the original directory was removed.
+        // 模拟已准入命令结束且原目录已移除的时刻。
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let mut request = test_native_request(json!({}));
+        request.workspace_root = Some(root.clone());
+        let options = HostRenderOptions {
+            spill_root: resolve_shell_command_spill_root(None, Some(&root), &root),
+            ..Default::default()
+        };
+        std::fs::remove_dir(&root).unwrap();
+        let content = "retained line\n".repeat(20);
+        let input = HostTextRenderInput {
+            content_bytes: content.len(),
+            content_lines: content.lines().count(),
+            content,
+            overflow_mode: Some(HostToolOverflowMode::Page),
+            template_hint: None,
+        };
+        let (text, paged) = render_shell_overflow(
+            &request,
+            &input,
+            &ToolResultBudgetSnapshot::uniform_bytes(100),
+            options,
+            Some("existing-job"),
+            "completed",
+        )
+        .unwrap();
+        assert!(!paged);
+        assert!(text.contains("existing-job"));
+        assert!(!root.exists());
+    }
 
     /// Arguments of one test command.
     /// 一条测试命令的参数。
@@ -1283,6 +1629,7 @@ mod process_option_tests {
                 &HostCommandShellSupport::from_configured_default_id(None),
                 &ShellCommandProcessOptions::default(),
                 context,
+                None,
             ),
         )
         .await
@@ -1648,6 +1995,7 @@ mod process_option_tests {
             &HostCommandShellSupport::from_configured_default_id(None),
             &process_options,
             &job_context(),
+            None,
         )
         .await;
         assert_eq!(report.status_label(), "completed");

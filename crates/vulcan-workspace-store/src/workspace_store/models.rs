@@ -49,6 +49,15 @@ pub(super) struct StoredProjectRow {
     /// Absolute root path stored in SQLite.
     /// 存储在 SQLite 中的绝对根目录路径。
     pub(super) root_path: String,
+    /// Filesystem identity recorded when an explicit project binding was made.
+    /// 显式绑定项目时记录的文件系统标识。
+    pub(super) root_volume_id: Option<String>,
+    /// Previous root captured in the same SQLite statement as the new binding.
+    /// 与新绑定在同一条 SQLite 语句中记录的旧根目录。
+    pub(super) previous_root_path: Option<String>,
+    /// Unix milliseconds of the same explicit rebind, absent on untouched rows.
+    /// 同一次显式重新绑定的 Unix 毫秒时间，未更换时为空。
+    pub(super) root_changed_at_ms: Option<i64>,
     /// SQLite numeric pinned flag.
     /// SQLite 数值型置顶标记。
     pub(super) pinned: i64,

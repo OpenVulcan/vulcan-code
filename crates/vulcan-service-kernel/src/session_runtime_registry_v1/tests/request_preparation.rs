@@ -81,6 +81,86 @@ fn started_count(handle: &SessionHandle) -> usize {
         .expect("read authoritative starts")
 }
 
+/// Refuses the old physical permit when a project directory is published during asynchronous preparation.
+/// 在异步准备期间发布项目目录更换时，拒绝旧的物理许可。
+#[tokio::test]
+async fn project_directory_change_invalidates_concurrent_physical_preparation() {
+    use crate::project_directories::{commit_current_project_directory, project_directory_cutover};
+    use vulcan_workbench_model::TaskProjectSummary;
+
+    // Hold a real open turn and distinguish the two project roots without querying a provider.
+    // 保留真实开放回合，在不访问供应商的情况下区分两个项目根目录。
+    let (directory, handle, request) = preparation_fixture();
+    let mut service =
+        crate::tests::test_support::test_service_state_with_parent_session(handle.session_id());
+    let from = TaskProjectSummary::new(
+        "project",
+        "Project",
+        directory.path().join("old").display().to_string(),
+        false,
+        0,
+        None,
+        None,
+        Vec::new(),
+    );
+    service
+        .workspace_snapshot
+        .as_mut()
+        .unwrap()
+        .task_projects
+        .push(from.clone());
+    let state = Arc::new(std::sync::Mutex::new(service));
+    let check_state = state.clone();
+    let (preparation_started, started) = oneshot::channel();
+    let (resume, resume_preparation) = oneshot::channel();
+    let reader = handle.clone();
+    let prepare = tokio::spawn(async move {
+        reader
+            .prepare_physical_api_durable_with_commit_check(
+                ApiPurposeKind::MainGeneration,
+                request,
+                LockedBaselineProjection::empty(),
+                None,
+                5,
+                None,
+                Some(Box::pin(async move {
+                    commit_current_project_directory(&check_state, &from)
+                        .await
+                        .map_err(SessionRuntimeError::ProviderProjectionInvariant)
+                })),
+                |snapshot, _| async move {
+                    preparation_started.send(()).unwrap();
+                    resume_preparation.await.unwrap();
+                    Ok(Some(prepared_fixture(snapshot)))
+                },
+            )
+            .await
+    });
+    started.await.unwrap();
+    {
+        // Establish the same ordering as production publication while media work is suspended.
+        // 媒体工作挂起期间，按与生产发布相同的顺序提交更换。
+        let _cutover = project_directory_cutover("project")
+            .unwrap()
+            .write_owned()
+            .await;
+        state
+            .lock()
+            .unwrap()
+            .workspace_snapshot
+            .as_mut()
+            .unwrap()
+            .task_projects
+            .iter_mut()
+            .find(|project| project.id == "project")
+            .unwrap()
+            .path = directory.path().join("new").display().to_string();
+    }
+    resume.send(()).unwrap();
+    assert!(prepare.await.unwrap().unwrap().is_none());
+    assert_eq!(started_count(&handle), 0);
+}
+
 /// Rejects a stale manual summary route when the user changes the picker during resource preparation.
 /// 用户在准备资源期间改选模型时，拒绝已过期的手动摘要路由。
 #[tokio::test]

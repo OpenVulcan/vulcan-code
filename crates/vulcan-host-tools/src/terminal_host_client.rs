@@ -248,6 +248,17 @@ pub async fn spawn_terminal_host(
     path_prefixes: &[PathBuf],
     environment: &[(String, String)],
 ) -> Result<TerminalHostConnection, String> {
+    spawn_terminal_host_checked(request, path_prefixes, environment, async { Ok(()) }).await
+}
+
+/// Takes the admission lease before sending Start and holds it until the PTY child has started.
+/// 发送 Start 前取得准入租约，并保持至 PTY 子进程启动。
+pub(crate) async fn spawn_terminal_host_checked<Lease>(
+    request: TerminalHostStartRequest,
+    path_prefixes: &[PathBuf],
+    environment: &[(String, String)],
+    admission: impl Future<Output = Result<Lease, String>>,
+) -> Result<TerminalHostConnection, String> {
     let host_path = resolve_terminal_host_path()?;
     let mut command =
         new_background_tokio_command(crate::runtime_assets::native_host_path(&host_path));
@@ -272,6 +283,9 @@ pub async fn spawn_terminal_host(
         command.env(name, value);
     }
     apply_child_path_prefixes(&mut command, path_prefixes)?;
+    // Declare the lease first so failure or cancellation drops the kill-on-drop helper before it.
+    // 先声明租约，使失败或取消时先释放并终止辅助进程，再释放租约。
+    let launch_lease;
     let mut child = command.spawn().map_err(|error| {
         format!(
             "Failed to start terminal host `{}`: {error}",
@@ -289,6 +303,7 @@ pub async fn spawn_terminal_host(
     })?;
     let start_payload = encode_terminal_host_json(&request)
         .map_err(|error| format!("Failed to encode terminal-host start request: {error}"))?;
+    launch_lease = admission.await?;
     timeout(
         TERMINAL_HOST_CONTROL_WRITE_TIMEOUT,
         write_terminal_host_frame_async(
@@ -333,6 +348,9 @@ pub async fn spawn_terminal_host(
             ));
         }
     };
+    // A confirmed terminal continues independently of later project changes.
+    // 已确认启动的终端在后续项目更换时继续独立运行。
+    drop(launch_lease);
     Ok(TerminalHostConnection {
         child,
         request_writer: TerminalHostRequestWriter::after_start(stdin),

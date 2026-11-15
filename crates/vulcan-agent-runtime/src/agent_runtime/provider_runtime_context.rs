@@ -689,10 +689,12 @@ fn build_runtime_prompt_assembly_input(
             })
             .or_else(|| active_agent.and_then(build_agent_prompt_snapshot)),
     };
-    let environment_context = EnvironmentContextSnapshot::new(format!(
-        "Current workspace: {}\nCurrent execution mode: {}",
-        preparation.workspace_path, preparation.execution_mode
-    ));
+    let environment_context = EnvironmentContextSnapshot::new(
+        crate::agent_runtime::execution_models::render_workspace_environment_context(
+            &preparation.workspace_path,
+            &preparation.execution_mode,
+        ),
+    );
     // Dedicated sessions do not describe the general product; only their own tool contracts remain.
     // 专职会话不介绍通用产品能力，只保留其自身工具契约。
     let mut custom_developer_segments = if preparation.dedicated_session.is_some() {

@@ -16,6 +16,7 @@ members = [
     "crates/vulcan-change-set",
     "crates/vulcan-apply-patch",
     "crates/vulcan-host-tools",
+    "crates/vulcan-mount-table",
     "crates/vulcan-i18n",
     "crates/vulcan-process-lifecycle",
     "crates/vulcan-terminal-host-protocol",
@@ -108,6 +109,7 @@ vulcan-product-info = { path = "crates/vulcan-product-info" }
 vulcan-service-api = { path = "crates/vulcan-service-api" }
 vulcan-service-host = { path = "crates/vulcan-service-host" }
 vulcan-service-kernel = { path = "crates/vulcan-service-kernel" }
+vulcan-mount-table = { path = "crates/vulcan-mount-table" }
 vulcan-service-runtime = { path = "crates/vulcan-service-runtime" }
 vulcan-provider-config = { path = "crates/vulcan-provider-config" }
 vulcan-provider-manifest-cli = { path = "crates/vulcan-provider-manifest-cli" }

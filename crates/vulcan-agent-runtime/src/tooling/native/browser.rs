@@ -427,6 +427,7 @@ mod tests {
         native_browser_runtime: Option<Arc<dyn NativeBrowserRuntime>>,
     ) -> NativeToolExecutionRequest {
         NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments,
             session_id,

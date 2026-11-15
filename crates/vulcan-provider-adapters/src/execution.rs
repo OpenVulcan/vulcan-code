@@ -101,6 +101,10 @@ impl ProtocolRuntimeSource for Arc<LlmProtocolRuntime> {
 /// 无上下文模型扩展视频上传的进程级最大复用生命周期；持久普通会话不使用此限制。
 pub(crate) const PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS: u64 = 86_400_000;
 
+/// Keeps the project binding stable until the physical transport takes ownership.
+/// 保持项目绑定稳定，直到物理传输接管。
+pub type ProviderDispatchLease = std::sync::Arc<tokio::sync::OwnedRwLockReadGuard<()>>;
+
 /// Stream of normalized public execution events.
 /// 归一化公共执行事件流。
 pub type ProviderExecutionStream =
@@ -269,6 +273,7 @@ impl ProviderExecutionClient {
             secret,
             execution_id,
             ProviderWireCaptureTargets {
+                dispatch_lease: None,
                 request: None,
                 response: None,
             },
@@ -304,6 +309,7 @@ impl ProviderExecutionClient {
             secret,
             execution_id,
             ProviderWireCaptureTargets {
+                dispatch_lease: None,
                 request: Some(ProviderWireRequestCaptureTarget::Observe(
                     wire_request_capture,
                 )),
@@ -341,10 +347,45 @@ impl ProviderExecutionClient {
             secret,
             execution_id,
             ProviderWireCaptureTargets {
+                dispatch_lease: None,
                 request: Some(ProviderWireRequestCaptureTarget::Trace(
                     wire_request_capture,
                 )),
                 response: Some(wire_response_capture),
+            },
+        )
+    }
+
+    /// Executes a request with a project binding leased until transport starts sending.
+    /// 执行请求，直到传输开始发送前持有项目绑定租约。
+    pub fn execute_with_dispatch_lease(
+        &self,
+        route: ProviderExecutionRoute,
+        request_body: AiExecutionRequest,
+        secret: CredentialExecutionSecret,
+        execution_id: String,
+        trace: Option<(
+            oneshot::Sender<ProviderWireRequestTraceDispatch>,
+            oneshot::Sender<ProviderWireResponseCapture>,
+        )>,
+        dispatch_lease: Option<ProviderDispatchLease>,
+    ) -> ProviderExecutionStream {
+        let (request, response) = match trace {
+            Some((capture, response)) => (
+                Some(ProviderWireRequestCaptureTarget::Trace(capture)),
+                Some(response),
+            ),
+            None => (None, None),
+        };
+        self.execute_with_optional_wire_captures(
+            route,
+            request_body,
+            secret,
+            execution_id,
+            ProviderWireCaptureTargets {
+                request,
+                response,
+                dispatch_lease,
             },
         )
     }

@@ -31,6 +31,7 @@ async fn upsert_active_project(
         SqliteValue::Text(project.id.clone()),
         SqliteValue::Text(project.title.clone()),
         SqliteValue::Text(project.path.clone()),
+        optional_sqlite_string(&project.root_volume_id),
         SqliteValue::Integer(i64::from(project.pinned)),
         SqliteValue::Integer(0),
         SqliteValue::Integer(sort_order),
@@ -50,6 +51,7 @@ INSERT INTO projects (
     id,
     name,
     root_path,
+    root_volume_id,
     pinned,
     archived,
     sort_order,
@@ -61,6 +63,7 @@ INSERT INTO projects (
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     root_path = excluded.root_path,
+    root_volume_id = excluded.root_volume_id,
     pinned = excluded.pinned,
     archived = excluded.archived,
     sort_order = excluded.sort_order,
@@ -816,6 +819,47 @@ RETURNING id;
     // rows 必须包含 SQLite 重命名的精确活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
     validate_project_mutation_identity_rows(project_id, &rows, "rename the project")
+}
+
+/// Updates the existing project row identified by project_id and expected_path to the canonical new_path.
+/// 将 project_id 与 expected_path 指定的现有项目行更新到规范化 new_path。
+/// Returns a conflict if the original row changed or the destination belongs to another project.
+/// 原记录变更或目标属于另一项目时返回冲突。
+pub async fn replace_project_root_path(
+    host_runtime: &HostRuntimeHandle,
+    project_id: &str,
+    expected_path: &str,
+    new_path: &str,
+    new_volume_id: Option<String>,
+    changed_at_ms: i64,
+) -> Result<(), String> {
+    validate_project_mutation_id(project_id, "change the project directory")?;
+    // Update only the path; stable IDs keep session storage and other project records attached.
+    // 仅更新目录；稳定标识保持会话存储及其他数据仍归属于原项目。
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
+UPDATE projects
+SET previous_root_path = CASE WHEN root_path <> ?1 OR root_volume_id IS NOT ?5 THEN root_path ELSE previous_root_path END,
+    root_changed_at_ms = CASE WHEN root_path <> ?1 OR root_volume_id IS NOT ?5 THEN ?6 ELSE root_changed_at_ms END,
+    root_path = ?1, root_volume_id = ?5, updated_at = ?2
+WHERE id = ?3 AND archived = 0 AND root_path = ?4
+RETURNING id;
+"#,
+        vec![
+            SqliteValue::Text(new_path.to_string()),
+            SqliteValue::Text(current_unix_millis_text()),
+            SqliteValue::Text(project_id.to_string()),
+            SqliteValue::Text(expected_path.to_string()),
+            optional_sqlite_string(&new_volume_id),
+            SqliteValue::Integer(changed_at_ms),
+        ],
+    )
+    .await
+    .map_err(|error| format!("Failed to change the project directory: {error}"))?;
+    let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
+    validate_project_mutation_identity_rows(project_id, &rows, "change the project directory")
 }
 
 /// Persists one active project's complete icon override pair.

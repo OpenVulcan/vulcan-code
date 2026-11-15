@@ -269,14 +269,114 @@ fn tool_chain_input(
     )
 }
 
-/// Publishes business producer changes; compaction has no authority to withdraw or replace them.
-/// 发布业务生产者变化；压缩没有撤下或替换这些生产者的权限。
-/// Uses the exact handle and request facts; returns only after the durable mutation succeeds.
-/// 使用精确句柄及请求事实；仅在可靠修改成功后返回。
+/// Identifies the temporary working directory change in the request and session timeline.
+/// 标识请求和会话时间线中的临时工作目录变更。
+pub(super) const PROJECT_DIRECTORY_CONTEXT_KEY: &str = "dynamic.project_directory";
+
+/// Returns the workspace context carried by the last dispatched business request.
+/// 返回最近一次实际派发的业务请求所携带的工作区上下文。
+fn last_dispatched_workspace(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+) -> Option<(&str, i64)> {
+    use vulcan_agent_runtime::agent_runtime::execution_models::workspace_from_runtime_context;
+    use vulcan_session_core::v1::event::{
+        ApiPurposeKind, EventBody, ExecutionControlKind, SystemContextOperation,
+    };
+
+    // A prepared but abandoned request can publish context without ever sending it to the model.
+    // 已准备但废弃的请求可能发布上下文，模型却从未收到它。
+    let mut observed_apis = std::collections::BTreeSet::new();
+    let mut timeline = document.events().iter().rev();
+    // Use the admitted request's start time because its response may arrive after a later rebind.
+    // 使用已准入请求的起始时间，因为响应可能在后续目录更换后才到达。
+    let dispatched = timeline.find(|event| match &event.event {
+        EventBody::ExecutionControl(control)
+            if control.control_kind == ExecutionControlKind::ApiTransportObserved =>
+        {
+            if let Some(api_call_id) = control.api_call_id {
+                observed_apis.insert(api_call_id);
+            }
+            false
+        }
+        EventBody::ApiStarted(api) => {
+            api.purpose != ApiPurposeKind::Compaction && observed_apis.contains(&api.api_call_id)
+        }
+        _ => false,
+    })?;
+    let event = timeline.find_map(|event| match &event.event {
+        EventBody::SystemContext(context) if context.context_key == DYNAMIC_CONTEXT_RUNTIME_KEY => {
+            Some(context)
+        }
+        _ => None,
+    })?;
+    if event.operation != SystemContextOperation::Upsert {
+        return None;
+    }
+    Some((
+        workspace_from_runtime_context(&event.content)?,
+        dispatched.created_at_ms,
+    ))
+}
+
+/// Produces a single physical request's old and new directory notice for an existing session.
+/// 为已有会话的一次物理请求生成新旧目录通知。
+fn project_directory_input(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+    project: &vulcan_workbench_model::TaskProjectSummary,
+) -> Option<DynamicContextInput> {
+    // An existing session needs the latest user-authored change; a newly created session starts at the current path.
+    // 已有会话需要最近一次用户发起的变更，新会话直接使用当前路径。
+    let change = project.root_directory_change.as_ref()?;
+    if change.changed_at_ms <= document.metadata.created_at_ms {
+        return None;
+    }
+    // Without a dispatched workspace, the first model request simply starts at the current path.
+    // 没有实际发出的工作区时，第一次模型请求直接使用当前路径。
+    let (previous_directory, previous_started_at_ms) = last_dispatched_workspace(document)?;
+    // A same-path volume replacement still deserves one notice if it followed the last dispatch.
+    // 如果同路径的卷更换发生在上次派发之后，仍需通知一次。
+    if previous_directory == project.path
+        && (change.previous_path != project.path || previous_started_at_ms >= change.changed_at_ms)
+    {
+        return None;
+    }
+    // Quote both paths as data so an unusual filesystem name cannot introduce instructions into the envelope.
+    // 将两个路径按数据引用，避免特殊的文件系统路径在信封中引入指令。
+    let paths = serde_json::json!({
+        "previousDirectory": previous_directory,
+        "workingDirectory": project.path,
+    });
+    let content = format!(
+        "{paths}\nThe user changed the project working directory. Use workingDirectory for new work and reconsider paths or commands prepared for previousDirectory."
+    );
+    Some(DynamicContextInput::new(
+        PROJECT_DIRECTORY_CONTEXT_KEY,
+        Some(content),
+        SystemContextScope::Turn,
+        Some(1),
+    ))
+}
+
+/// Test adapter for business producers without a project binding.
+/// 测试适配器，用于不绑定项目的业务生产者。
+#[cfg(test)]
 pub(super) fn synchronize_request_dynamic_context(
     handle: &SessionHandle,
     facts: &ProviderV1RequestFacts,
     candidate: &ProviderRequestPreparationCandidate,
+) -> Result<(), SessionRuntimeError> {
+    synchronize_project_request_dynamic_context(handle, facts, candidate, None)
+}
+
+/// Publishes business producer changes; compaction has no authority to withdraw or replace them.
+/// 发布业务生产者变化；压缩没有撤下或替换这些生产者的权限。
+/// Uses the exact handle and request facts; returns only after the durable mutation succeeds.
+/// 使用精确句柄及请求事实；仅在可靠修改成功后返回。
+pub(super) fn synchronize_project_request_dynamic_context(
+    handle: &SessionHandle,
+    facts: &ProviderV1RequestFacts,
+    candidate: &ProviderRequestPreparationCandidate,
+    project: Option<&vulcan_workbench_model::TaskProjectSummary>,
 ) -> Result<(), SessionRuntimeError> {
     if facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction {
         return Ok(());
@@ -301,6 +401,11 @@ pub(super) fn synchronize_request_dynamic_context(
             inputs.push(permission_mode_input(document));
             inputs.push(provider_tools_input(document));
             inputs.push(tool_chain_input(document));
+            if let Some(directory) =
+                project.and_then(|project| project_directory_input(document, project))
+            {
+                inputs.push(directory);
+            }
             // Freeze the answer mode under the same lock as its request-context publication.
             // 在请求上下文发布的同一把锁内冻结回答模式。
             document

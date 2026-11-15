@@ -5,7 +5,7 @@ import type { ShellJobNoticeFacts } from "./shell-job-notice";
 // ContextInjectionCategory names the user-facing family of one injected prompt.
 // ContextInjectionCategory 表示一条注入提示词面向用户的类别。
 export type ContextInjectionCategory =
-  | "goal" | "shellJob" | "plan" | "tools" | "permission" | "model" | "answer" | "guidance" | "base" | "injection" | "memoryExpiration" | "other";
+  | "goal" | "shellJob" | "plan" | "tools" | "permission" | "model" | "projectDirectory" | "answer" | "guidance" | "base" | "injection" | "memoryExpiration" | "other";
 
 // ContextInjectionEntry is one injected prompt shown inside a context-injection card.
 // ContextInjectionEntry 是上下文注入卡片中显示的一条注入提示词。

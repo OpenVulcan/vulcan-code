@@ -325,6 +325,36 @@ pub(super) fn begin_project_recovery_publication(
     state: &SharedServiceBridgeState,
     project_id: &str,
 ) -> Result<SessionTurnAdmissionGuard, String> {
+    reserve_project_publication(
+        state,
+        project_id,
+        ProjectAdmissionReservationKind::RecoveryPublication,
+        "publish a recovery session",
+    )
+}
+
+/// Reserves a directory mutation against project and submission writers, leaving active runs admitted.
+/// 将目录更换与项目和提交写入互斥，保留活动会话的运行准入。
+pub(super) fn begin_project_directory_change(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+) -> Result<SessionTurnAdmissionGuard, String> {
+    reserve_project_publication(
+        state,
+        project_id,
+        ProjectAdmissionReservationKind::DirectoryChange,
+        "change the project directory",
+    )
+}
+
+/// Reserves the identified project during a publication that does not own the sessions themselves.
+/// 在无需持有各个会话的发布过程中预留指定项目。
+fn reserve_project_publication(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+    kind: ProjectAdmissionReservationKind,
+    action_label: &str,
+) -> Result<SessionTurnAdmissionGuard, String> {
     // Use the same exact project scope as archive and removal.
     // 使用归档和移除共用的精确项目作用域。
     let project_scopes = BTreeSet::from([ProjectAdmissionScope::Exact(project_id.to_owned())]);
@@ -337,12 +367,12 @@ pub(super) fn begin_project_recovery_publication(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        check_project_admission_conflicts(&guard, &project_scopes, "publish a recovery session")?;
+        check_project_admission_conflicts(&guard, &project_scopes, action_label)?;
         guard.project_admission_reservations.insert(
             ProjectAdmissionScope::Exact(project_id.to_owned()),
             ProjectAdmissionReservation {
                 reservation_id,
-                kind: ProjectAdmissionReservationKind::RecoveryPublication,
+                kind,
             },
         );
     }

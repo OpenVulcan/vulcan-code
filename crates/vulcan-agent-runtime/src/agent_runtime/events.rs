@@ -67,6 +67,9 @@ impl std::fmt::Debug for ProviderRequestMediaContext {
 /// V1会话所有者重建请求前产生的不可变传输候选。
 #[derive(Debug, Clone)]
 pub struct ProviderRequestPreparationCandidate {
+    /// Exact project directory captured by a detached execution's tool manager.
+    /// 分离执行的工具管理器捕获的精确项目目录。
+    pub project_directory: Option<vulcan_workbench_model::TaskProjectSummary>,
     /// Frozen media execution for real session requests; state-only and excluded fixtures may omit it.
     /// 真实会话请求的冻结媒体执行；仅状态和排除夹具可以省略。
     pub media_context: Option<ProviderRequestMediaContext>,
@@ -175,6 +178,10 @@ fn non_session_resource_requires_prompt_owner(
         || resource.local_path.is_some()
 }
 
+/// Consecutive request re-preparations allowed before an undispatched execution reports instability.
+/// 尚未分派的执行报告不稳定前，允许连续重新准备请求的次数。
+pub const MAX_REQUEST_REPREPARATIONS: u8 = 3;
+
 /// Exact physical Provider request released by the unique preparation owner.
 /// 由唯一准备所有者放行的精确物理 Provider 请求。
 #[derive(Debug, Clone)]
@@ -192,6 +199,9 @@ pub enum PreparedPhysicalApi {
     /// A V1 session request rebuilt from the durable event ledger and committed before dispatch.
     /// 从可靠事件账本重建并在分派前完成提交的 V1 会话请求。
     SessionV1 {
+        /// Orders publication of a changed project binding against this physical dispatch.
+        /// 将项目绑定更改的发布与本次物理派发排序。
+        dispatch_lease: Option<vulcan_provider_adapters::ProviderDispatchLease>,
         /// Exact request that is allowed to reach the transport.
         /// 允许进入传输层的精确请求。
         exact_request: AiExecutionRequest,

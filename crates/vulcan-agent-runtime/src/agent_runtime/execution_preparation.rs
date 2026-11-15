@@ -423,6 +423,7 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         request.vmm_runtime_ready,
         request.native_browser_runtime.clone(),
         request.native_agent_collaboration_runtime.clone(),
+        request.project_shell_guard.clone(),
     );
     after_precheck_trace(
         "after_precheck_25a9_tools_manager_ready",

@@ -62,7 +62,7 @@ describe("project editor operation lifetimes", () => {
     })
   })
   it("requires the edited path to be browsed before it can use directory selection authority", async () => {
-    const browse = vi.fn(async () => ({ path: "D:/synthetic", canSelect: true, entries: [], roots: [] }))
+    const browse = vi.fn(async (path: string | null) => ({ path: path ?? "D:/synthetic", canSelect: true, entries: [], roots: [] }))
     const confirm = vi.fn(async () => undefined)
     await withEditor(<ProjectFolderPickerDialog open onBrowse={browse} onConfirm={confirm} onOpenChange={vi.fn()} />, async container => {
       await act(async () => container.querySelector<HTMLButtonElement>("[data-folder-picker-edit]")!.click())
@@ -73,9 +73,16 @@ describe("project editor operation lifetimes", () => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "D:/unbrowsed")
         input.dispatchEvent(new Event("input", { bubbles: true }))
       })
-      expect(container.querySelector<HTMLButtonElement>("[data-folder-picker-confirm]")?.disabled).toBe(true)
+      // The primary button opens the draft first and can confirm only the resulting listing.
+      // 主按钮先打开草稿路径，只有服务返回目录列表后才可确认。
+      const button = container.querySelector<HTMLButtonElement>("[data-folder-picker-confirm]")!
+      expect(button.disabled).toBe(false)
       expect(container.querySelector("[data-folder-picker-unbrowsed]")).not.toBeNull()
+      await act(async () => button.click())
+      expect(browse).toHaveBeenLastCalledWith("D:/unbrowsed")
       expect(confirm).not.toHaveBeenCalled()
+      await act(async () => button.click())
+      expect(confirm).toHaveBeenCalledExactlyOnceWith("D:/unbrowsed")
     })
   })
 })

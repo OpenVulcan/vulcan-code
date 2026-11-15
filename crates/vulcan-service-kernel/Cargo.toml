@@ -80,6 +80,9 @@ vulcan-workbench-model.workspace = true
 vulcan-workspace-store.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+vulcan-mount-table.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 vulcan-process-lifecycle.workspace = true
 

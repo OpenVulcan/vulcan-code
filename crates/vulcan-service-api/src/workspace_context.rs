@@ -371,6 +371,10 @@ pub struct ProjectDirectoryRootSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDirectoryListing {
+    /// Observed filesystem identifier for the displayed directory, when supported by the host.
+    /// 宿主支持时返回所显示目录的已观测文件系统标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_id: Option<String>,
     /// Selectable filesystem roots available on the service host.
     /// 服务宿主上可选择的文件系统根列表。
     #[serde(default)]
@@ -626,4 +630,17 @@ pub enum WorkspaceOfficePdf {
     /// No LibreOffice installation was found on the service host.
     /// 服务宿主上未找到 LibreOffice 安装。
     ConverterMissing,
+}
+
+/// Current availability of the project's saved root directory.
+/// 项目保存根目录的当前可用性。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDirectoryStatus {
+    /// Original saved path, even when unavailable.
+    /// 原保存路径，即使当前不可用也返回。
+    pub path: String,
+    /// Whether the directory is currently available for execution.
+    /// 目录当前是否可用于执行。
+    pub available: bool,
 }

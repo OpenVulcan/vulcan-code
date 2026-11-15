@@ -938,6 +938,7 @@ pub(crate) fn test_request_prepared_delta(
         crate::agent_runtime::events::provider_request_preparation_barrier();
     ProviderStreamDelta::RequestPrepared {
         candidate: crate::agent_runtime::events::ProviderRequestPreparationCandidate {
+            project_directory: None,
             media_context: None,
             exact_request: serde_json::from_value(serde_json::json!({
                 "operation": "conversation_respond",

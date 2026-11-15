@@ -2164,12 +2164,38 @@ impl ProviderV1StreamSink {
         &mut self,
         state: &SharedServiceBridgeState,
         facts: ProviderV1RequestFacts,
+        mut candidate: ProviderRequestPreparationCandidate,
+    ) -> Result<PreparedPhysicalApi, ProviderV1SinkError> {
+        // Detached execution carries the exact directory used to build the candidate's tools.
+        // 分离执行携带构建候选请求工具时所用的精确目录。
+        let project = candidate.project_directory.take();
+        self.prepare_project_request(state, facts, candidate, project.as_ref())
+            .await
+    }
+
+    /// Prepares a request with the exact directory also used to construct its shell tools.
+    /// 使用构建其 Shell 工具时采用的精确目录准备请求。
+    pub(super) async fn prepare_project_request(
+        &mut self,
+        state: &SharedServiceBridgeState,
+        facts: ProviderV1RequestFacts,
         candidate: ProviderRequestPreparationCandidate,
+        project: Option<&vulcan_workbench_model::TaskProjectSummary>,
     ) -> Result<PreparedPhysicalApi, ProviderV1SinkError> {
         if self.active.is_some() {
             return Err(ProviderV1SinkError::RequestAlreadyActive);
         }
         validate_provider_transport_candidate(&facts, &candidate)?;
+        // Reject a stale child or root snapshot before publishing a directory notice.
+        // 发布目录通知前拒绝过时的子代理或根会话快照。
+        if let Some(project) = project {
+            let current =
+                crate::project_directories::active_project_directory_owner(state, &project.id)
+                    .map_err(provider_projection_runtime_error)?;
+            if !crate::project_directories::same_project_directory_binding(project, &current) {
+                return Ok(PreparedPhysicalApi::RequestConfigurationChanged);
+            }
+        }
         // Compaction summarizes history and must not consume messages addressed to the task execution.
         // 压缩只总结历史，不消费发给任务执行的消息。
         if facts.purpose != vulcan_session_core::v1::event::ApiPurposeKind::Compaction {
@@ -2181,7 +2207,12 @@ impl ProviderV1StreamSink {
             .await
             .map_err(provider_projection_runtime_error)?;
         }
-        context_injection::synchronize_request_dynamic_context(&self.handle, &facts, &candidate)?;
+        context_injection::synchronize_project_request_dynamic_context(
+            &self.handle,
+            &facts,
+            &candidate,
+            project,
+        )?;
         // Include active shell jobs in the single summary instruction so they survive compaction.
         // 将正在运行的 Shell 任务放入唯一的摘要指令，使其在压缩后仍被记住。
         let mut candidate = candidate;
@@ -2233,15 +2264,27 @@ impl ProviderV1StreamSink {
         // 私有上传回执使用既有项目所有者；提示词身份仍归会话所有者。
         let resource_registry = Arc::clone(&self.project_resource_catalog_registry);
         let project_directory = self.handle.storage_locator()?.project_directory();
+        // The frozen tools and directory notice must still match after media preparation.
+        // 媒体准备后仍须核对冻结工具和目录通知对应同一当前绑定。
+        let commit_check = project.map(
+            |project| -> crate::session_runtime_registry_v1::PhysicalApiCommitCheck<'_> {
+                Box::pin(async move {
+                    crate::project_directories::commit_current_project_directory(state, project)
+                        .await
+                        .map_err(provider_projection_runtime_error)
+                })
+            },
+        );
         let receipt = self
             .handle
-            .prepare_physical_api_durable_with_manual_request(
+            .prepare_physical_api_durable_with_commit_check(
                 purpose,
                 request,
                 locked_baseline,
                 continuation_action_id,
                 prepared_at_ms,
                 self.manual_compaction_request.as_ref(),
+                commit_check,
                 move |snapshot, preparation| async move {
                     // Plan and materialize all resources before the durable API permit, outside both session locks.
                     // 在可靠API许可之前、两把会话锁之外规划和物化全部资源。
@@ -2344,6 +2387,7 @@ impl ProviderV1StreamSink {
             tool_batch_prepared: false,
         });
         Ok(PreparedPhysicalApi::SessionV1 {
+            dispatch_lease: prepared.dispatch_lease,
             exact_request: transport.exact_request,
             controller_config: transport.controller_config,
             controller_snapshot: transport.controller_snapshot,

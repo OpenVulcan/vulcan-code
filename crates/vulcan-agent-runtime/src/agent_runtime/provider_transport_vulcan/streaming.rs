@@ -131,6 +131,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestPrepared {
                 candidate: ProviderRequestPreparationCandidate {
+                    project_directory: None,
                     media_context: Some(
                         crate::agent_runtime::events::ProviderRequestMediaContext {
                             execution: std::sync::Arc::clone(&self.media_execution),
@@ -162,6 +163,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             request_snapshot,
             context_budget,
             provider_api_trace_context,
+            dispatch_lease,
         ) = match prepared_receiver
             .await
             .map_err(|_| {
@@ -187,6 +189,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 });
             }
             PreparedPhysicalApi::SessionV1 {
+                dispatch_lease,
                 exact_request,
                 controller_config,
                 controller_snapshot,
@@ -202,6 +205,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     request_snapshot,
                     context_budget,
                     provider_api_trace_store.map(|store| (core_start.api_call_id, store)),
+                    dispatch_lease,
                 )
             }
             PreparedPhysicalApi::ExcludedNonSession {
@@ -217,6 +221,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     controller_snapshot,
                     request_snapshot,
                     context_budget,
+                    None,
                     None,
                 )
             }
@@ -336,28 +341,20 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         } else {
             None
         };
-        let (mut stream, processing_failure_sender) =
-            if let Some((request_sender, response_sender, processing_failure_sender)) =
-                wire_captures
-            {
-                (
-                    self.client.execute_with_wire_api_trace_capture(
-                        self.route.clone(),
-                        public.clone(),
-                        secret.clone(),
-                        execution_id,
-                        request_sender,
-                        response_sender,
-                    ),
-                    Some(processing_failure_sender),
-                )
-            } else {
-                (
-                    self.client
-                        .execute(self.route.clone(), public.clone(), secret, execution_id),
-                    None,
-                )
-            };
+        // Keep the directory stable through credential resolution, tracing and protocol encoding.
+        // 在凭据解析、追踪和协议编码期间保持目录稳定。
+        let (trace, processing_failure_sender) = match wire_captures {
+            Some((request, response, failure)) => (Some((request, response)), Some(failure)),
+            None => (None, None),
+        };
+        let mut stream = self.client.execute_with_dispatch_lease(
+            self.route.clone(),
+            public.clone(),
+            secret,
+            execution_id,
+            trace,
+            dispatch_lease,
+        );
         let mut trace_processing_failure =
             ProviderApiTraceProcessingFailureSender::new(processing_failure_sender);
         // routeFingerprint binds replay signatures to the exact resolved endpoint used by this request.

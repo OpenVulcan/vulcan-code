@@ -386,6 +386,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     let owner_session_id = Uuid::from_u128(0x7001);
     let start_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "start",
@@ -425,6 +426,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     // immediateSend 验证普通 LF 文本提交会作为调用方编写的输入被接受。
     let immediate_send = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "send",
@@ -467,6 +469,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     // immediateRead 验证相同逻辑换行已提交命令，而不是进入续行模式。
     let immediate_read = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "read",
@@ -511,6 +514,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     // literalResult 等待真实输出，且不要求宿主生成或隐藏 shell 语法。
     let literal_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "send",
@@ -578,6 +582,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
 
     let followup_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "send",
@@ -629,6 +634,7 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
 
     let _ = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             arguments: json!({
                 "action": "stop",
@@ -656,6 +662,77 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
         .await;
 }
 
+/// Defers the real PTY start frame until the concurrent directory publication resolves.
+/// 等待并发目录发布完成，再决定是否发送真实 PTY 启动帧。
+#[tokio::test]
+async fn project_terminal_start_waits_for_directory_publication() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::{Notify, RwLock};
+
+    // Keep the old root present so an incorrect launch would reach the PTY.
+    // 保持旧根目录存在，让错误放行确实可以启动 PTY。
+    let root = tempfile::tempdir().unwrap();
+    // Hold the writer through the launch boundary, as the project owner would.
+    // 像项目所有者一样，在终端到达启动边界时持有写锁。
+    let cutover = Arc::new(RwLock::new(()));
+    let writer = cutover.clone().write_owned().await;
+    // Signal that the terminal has finished its initial checks and reached the start frame.
+    // 终端完成初步检查并到达启动帧后发出信号。
+    let launch_requested = Arc::new(Notify::new());
+    let launch_for_guard = launch_requested.clone();
+    // Change the exact binding only after the terminal asks for admission.
+    // 仅在终端请求准入后改变绑定。
+    let changed = Arc::new(AtomicBool::new(false));
+    let changed_for_guard = changed.clone();
+    let guard = crate::tooling::bridge::ProjectShellGuard::new(move || {
+        if changed_for_guard.load(Ordering::SeqCst) {
+            Err("stale terminal directory".into())
+        } else {
+            Ok(())
+        }
+    })
+    .with_launch_lock(move || {
+        launch_for_guard.notify_one();
+        Ok(cutover.clone())
+    });
+    // Use the ordinary native start entry, including its real terminal-host process.
+    // 使用常规原生启动入口，包括实际终端宿主进程。
+    let tool = build_terminal_session_tool(
+        Arc::new(CommandSessionRuntime::new()),
+        test_shell_support(),
+        Vec::new(),
+    );
+    // Keep the root alive in this fixture while the start runs independently.
+    // 启动独立运行时，由此夹具保持根目录存在。
+    let request = NativeToolExecutionRequest {
+        project_shell_guard: Some(guard),
+        session_id: Some(Uuid::new_v4()),
+        workspace_root: Some(root.path().to_path_buf()),
+        ..test_native_request(json!({
+            "action": "start",
+            "name": "directory cutover",
+            "command": long_lived_terminal_test_command(),
+        }))
+    };
+    let call = tokio::spawn(async move { tool.invoke(request).await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        launch_requested.notified(),
+    )
+    .await
+    .expect("terminal should reach its final start-frame admission");
+    assert!(
+        !call.is_finished(),
+        "the writer still owns process admission"
+    );
+    changed.store(true, Ordering::SeqCst);
+    drop(writer);
+    assert_eq!(
+        call.await.unwrap().unwrap_err().message,
+        "stale terminal directory"
+    );
+}
+
 /// The terminal-session tool should reject cross-session control and let the owner stop its own session.
 /// 终端会话工具应拒绝跨会话控制，并允许拥有者停止自己的会话。
 #[tokio::test]
@@ -669,6 +746,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
     let foreign_session_id = Uuid::from_u128(0x7102);
     let start_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(owner_session_id),
             ..test_native_request(json!({
@@ -688,6 +766,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
 
     for action in ["read", "snapshot", "stop"] {
         tool.invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(foreign_session_id),
             ..test_native_request(json!({
@@ -703,6 +782,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
     // ownerSnapshot 证明被拒绝的外部停止没有影响拥有者会话的运行状态。
     let owner_snapshot = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(owner_session_id),
             ..test_native_request(json!({
@@ -722,6 +802,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
 
     let stop_result = tool
         .invoke(NativeToolExecutionRequest {
+            project_shell_guard: None,
             invocation_context: None,
             session_id: Some(owner_session_id),
             ..test_native_request(json!({

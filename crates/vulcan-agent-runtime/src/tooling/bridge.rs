@@ -62,6 +62,106 @@ use luaskills_dispatch::{
 #[cfg(test)]
 mod tests;
 
+/// Resolves the shared project lock used to order command launches and directory changes.
+/// 解析用于排序命令启动与目录更换的项目共享锁。
+type ProjectShellLaunchLock =
+    Arc<dyn Fn() -> Result<Arc<tokio::sync::RwLock<()>>, String> + Send + Sync>;
+
+/// A host check for the directory frozen into a project execution.
+/// 针对项目执行中冻结目录的宿主检查。
+#[derive(Clone)]
+pub struct ProjectShellGuard {
+    /// Frozen validation used by the tools from this binding.
+    /// 此绑定工具使用的冻结校验。
+    check: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+    /// Optional project lock supplied by the binding owner; standalone tool callers have no rebind.
+    /// 绑定所有者提供的可选项目锁，独立工具调用方没有目录更换操作。
+    launch_lock: Option<ProjectShellLaunchLock>,
+    /// Exact project bound to a service-owned execution, absent for direct host utility calls.
+    /// 服务执行绑定的精确项目，直接宿主实用调用时缺省。
+    project: Option<Arc<vulcan_workbench_model::TaskProjectSummary>>,
+    /// Advances only to the current binding of this same project, never to another project.
+    /// 仅推进到同一项目的当前绑定，绝不切换到其他项目。
+    refresh: Option<Arc<dyn Fn() -> Result<Option<Self>, String> + Send + Sync>>,
+}
+
+impl ProjectShellGuard {
+    /// Builds a guard for the supplied synchronous launch validation.
+    /// 为指定同步启动校验构建守卫。
+    pub fn new(check: impl Fn() -> Result<(), String> + Send + Sync + 'static) -> Self {
+        Self {
+            check: Arc::new(check),
+            launch_lock: None,
+            project: None,
+            refresh: None,
+        }
+    }
+
+    /// Attaches a resolver for the binding owner's launch lock, evaluated only at process start.
+    /// 附加绑定所有者的启动锁解析器，仅在启动进程时求值。
+    pub fn with_launch_lock(
+        mut self,
+        resolve_lock: impl Fn() -> Result<Arc<tokio::sync::RwLock<()>>, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.launch_lock = Some(Arc::new(resolve_lock));
+        self
+    }
+
+    /// Acquires the launch lease or returns the owner's lock error.
+    /// 获取启动租约，或返回所有者的锁错误。
+    pub(crate) async fn acquire_launch_lease(
+        &self,
+    ) -> Result<Option<tokio::sync::OwnedRwLockReadGuard<()>>, String> {
+        match &self.launch_lock {
+            Some(resolve_lock) => Ok(Some(resolve_lock()?.read_owned().await)),
+            None => Ok(None),
+        }
+    }
+
+    /// Attaches the service's exact captured project and its same-owner refresh.
+    /// 附加服务捕获的精确项目及其同所有者刷新。
+    pub fn with_project(
+        mut self,
+        project: vulcan_workbench_model::TaskProjectSummary,
+        refresh: impl Fn() -> Result<Option<Self>, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.project = Some(Arc::new(project));
+        self.refresh = Some(Arc::new(refresh));
+        self
+    }
+
+    /// Returns the captured project for an exact model request candidate.
+    /// 返回精确模型请求候选捕获的项目。
+    pub fn project(&self) -> Option<&vulcan_workbench_model::TaskProjectSummary> {
+        self.project.as_deref()
+    }
+
+    /// Rejects a stale or unavailable binding without substituting the new root.
+    /// 拒绝过时或不可用的绑定，绝不代换为新根目录。
+    pub fn validate(&self) -> Result<(), String> {
+        (self.check)()
+    }
+
+    /// Returns a fresh guard only when the service has committed a changed project binding.
+    /// 仅当服务已提交变更的项目绑定时返回新守卫。
+    pub(crate) fn refreshed(&self) -> Result<Option<Self>, String> {
+        match &self.refresh {
+            Some(refresh) => refresh(),
+            None => Ok(None),
+        }
+    }
+}
+
+impl std::fmt::Debug for ProjectShellGuard {
+    /// Describes the guard without evaluating or exposing the captured host state.
+    /// 描述守卫，无需执行检查或暴露捕获的宿主状态。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProjectShellGuard")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Builds one standalone host-owned tools manager from the current host runtime surfaces.
 /// 根据当前宿主运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
@@ -91,7 +191,30 @@ pub fn build_vulcan_tools_manager(
     vmm_runtime_ready: bool,
     native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
     native_agent_collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
+    project_shell_guard: Option<ProjectShellGuard>,
 ) -> VulcanToolsManager {
+    // Physical native commands retain the filesystem backing their execution workspace before tools
+    // are exposed. Do not allow a subsequent cwd override to escape a detached volume.
+    // 在暴露工具前固定其执行工作区对应的文件系统，避免随后以 cwd 覆盖绕过被卸载的卷。
+    let project_shell_guard = project_shell_guard.or_else(|| {
+        // Direct host paths still retain the volume observed when the tool manager was built.
+        // 直接宿主路径仍保留创建工具管理器时观测到的卷标识。
+        let root = workspace_root
+            .clone()
+            .filter(|_| host_project_id.is_some())?;
+        let volume = vulcan_host_tools::project_directory::project_volume_identity(&root);
+        Some(ProjectShellGuard::new(move || {
+            use crate::tooling::native::shell_command::shell_directory_error;
+            let expected_volume = volume
+                .as_ref()
+                .map_err(|error| shell_directory_error(error.clone()))?;
+            vulcan_host_tools::project_directory::require_bound_project_directory(
+                &root,
+                expected_volume.as_deref(),
+            )
+            .map_err(shell_directory_error)
+        }))
+    });
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
     let vmm_effective = vulcan_vmm::VmmEffectiveConfig::resolve(
@@ -167,6 +290,9 @@ pub fn build_vulcan_tools_manager(
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
+        // Retain the exact stream's live guard until the invocation runs after permission handling.
+        // 将精确流的实时守卫留到权限处理后的实际调用。
+        let project_shell_guard_for_context = project_shell_guard.clone();
         let host_project_id_for_context = host_project_id.clone();
         let controller_runtime_for_context = controller_runtime.clone();
         let native_goal_runtime_for_context = native_goal_runtime.clone();
@@ -192,6 +318,9 @@ pub fn build_vulcan_tools_manager(
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
+                // This guard owns the binding captured by the manager that produced the invocation.
+                // 此守卫持有产生该调用的工具管理器所捕获的绑定。
+                let project_shell_guard = project_shell_guard_for_context.clone();
                 let host_project_id = host_project_id_for_context.clone();
                 let controller_runtime = controller_runtime_for_context.clone();
                 let goal_runtime = native_goal_runtime_for_context.clone();
@@ -218,6 +347,7 @@ pub fn build_vulcan_tools_manager(
                                 host_project_id,
                                 spill_root: None,
                                 workspace_root,
+                                project_shell_guard,
                                 controller_runtime,
                                 goal_runtime,
                                 environment,

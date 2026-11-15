@@ -14,6 +14,7 @@ use vulcan_session_core::v1::{ApiCallId, ProviderProjectionProof, Seq};
 /// 返回一份强类型成功许可夹具，仅用于测试流守卫的精确枚举判别。
 fn successful_permit_fixture() -> PreparedPhysicalApi {
     PreparedPhysicalApi::SessionV1 {
+        dispatch_lease: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
             model_id: "model".into(),
@@ -80,7 +81,7 @@ fn configuration_restarts_stop_after_three_before_next_permit() {
     for _ in 0..256 {
         assert!(!state.try_configuration_restart());
     }
-    assert_eq!(state.configuration_restarts, MAX_CONFIGURATION_RESTARTS);
+    assert_eq!(state.configuration_restarts, MAX_REQUEST_REPREPARATIONS);
 }
 
 /// Stale and failed preparation results do not impersonate a durable API permit.

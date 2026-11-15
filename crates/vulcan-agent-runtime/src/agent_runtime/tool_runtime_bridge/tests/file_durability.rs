@@ -56,6 +56,7 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
             invocation_calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 file.invoke(NativeToolExecutionRequest {
+                    project_shell_guard: None,
                     invocation_context: None,
                     arguments,
                     session_id: None,

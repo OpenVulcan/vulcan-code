@@ -1,0 +1,18 @@
+[package]
+name = "vulcan-mount-table"
+description = "Narrow safe access to operating system volume identity and mount information."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }

@@ -318,7 +318,7 @@ pub async fn load_workspace_index_report(
         let row = &validated_row.stored;
         // project is built only from validated boolean and non-negative order fields.
         // project 只从已验证布尔值与非负顺序字段构建。
-        let project = TaskProjectSummary::new(
+        let mut project = TaskProjectSummary::new(
             row.id.clone(),
             row.name.clone(),
             row.root_path.clone(),
@@ -328,7 +328,25 @@ pub async fn load_workspace_index_report(
             row.icon_key.clone(),
             Vec::new(),
         )
-        .with_session_sort_mode(validated_row.session_sort_mode);
+        .with_session_sort_mode(validated_row.session_sort_mode)
+        .with_root_volume_id(row.root_volume_id.clone());
+        // The SQLite rebind publishes both fields together; incomplete rows cannot describe a change.
+        // SQLite 重新绑定同时发布两个字段，缺一的记录无法描述变更。
+        project.root_directory_change = match (&row.previous_root_path, row.root_changed_at_ms) {
+            (Some(path), Some(changed_at_ms)) => {
+                Some(vulcan_workbench_model::ProjectRootDirectoryChange {
+                    previous_path: path.clone(),
+                    changed_at_ms,
+                })
+            }
+            (None, None) => None,
+            _ => {
+                return Err(format!(
+                    "Project `{}` has an incomplete directory change.",
+                    row.id
+                ));
+            }
+        };
 
         if validated_row.archived {
             archived_task_projects.push(project);
@@ -759,6 +777,9 @@ mod tests {
         StoredProjectRow {
             id: String::from("project-load"),
             name: String::from("严格项目加载"),
+            root_volume_id: None,
+            previous_root_path: None,
+            root_changed_at_ms: None,
             root_path: std::env::temp_dir()
                 .join("vulcan-project-load")
                 .to_string_lossy()

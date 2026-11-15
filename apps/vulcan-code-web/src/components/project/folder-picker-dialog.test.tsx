@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client"
 import { describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
 import type { ProjectDirectoryListing } from "@/types"
-import { ProjectFolderPickerDialog, projectFolderPickerCrumbs, projectFolderPickerPlaces } from "./folder-picker-dialog"
+import { ProjectFolderPickerDialog, projectFolderPickerActiveRoot, projectFolderPickerCrumbs, projectFolderPickerPlaces } from "./folder-picker-dialog"
 
 vi.mock("@/ui-kit/primitives/dialog", () => ({
   Dialog: (props: { open: boolean; children: ReactNode }) => props.open ? <div>{props.children}</div> : null,
@@ -44,13 +44,16 @@ function listingOf(path: string): ProjectDirectoryListing {
 
 // openPicker renders the picker at the projects folder and returns its spies and helpers.
 // openPicker 在 projects 目录渲染选择器，并返回监听函数与辅助方法。
-async function openPicker(projectPaths: string[] = []) {
+async function openPicker(
+  projectPaths: string[] = [],
+  browseDirectory = (path: string | null) => listingOf(path ?? "C:\\Users\\dev\\projects"),
+) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const container = document.createElement("div")
   const root = createRoot(container)
   document.body.append(container)
-  const browse = vi.fn(async (path: string | null) => listingOf(path ?? "C:\\Users\\dev\\projects"))
-  const confirm = vi.fn(async () => undefined)
+  const browse = vi.fn(async (path: string | null) => browseDirectory(path))
+  const confirm = vi.fn<(path: string, expectedVolume?: string) => Promise<void>>(async () => undefined)
   await act(async () => root.render(<I18nProvider initialLocale="en-US">
     <ProjectFolderPickerDialog open projectPaths={projectPaths} onBrowse={browse} onConfirm={confirm} onOpenChange={vi.fn()} />
   </I18nProvider>))
@@ -62,11 +65,32 @@ async function openPicker(projectPaths: string[] = []) {
   const key = async (target: HTMLElement, value: string) => act(async () => {
     target.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true }))
   })
+  // enterPath emulates a user input with the browser's value setter.
+  // enterPath 使用浏览器原生值设置器模拟用户输入路径。
+  const enterPath = async (value: string) => {
+    await act(async () => query<HTMLButtonElement>("[data-folder-picker-edit]")!.click())
+    const input = query<HTMLInputElement>(".project-folder-picker-path-input")!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value)
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }))
+    })
+    return input
+  }
   const cleanup = async () => { await act(async () => root.unmount()); container.remove() }
-  return { browse, confirm, query, entry, entries, crumbPaths, selection, key, cleanup }
+  return { browse, confirm, query, entry, entries, crumbPaths, selection, key, enterPath, cleanup }
 }
 
 describe("folder picker paths", () => {
+  // Unix mount paths stay distinct while Windows drive matching stays case-insensitive.
+  // Unix 挂载路径保持区分，Windows 盘符匹配仍忽略大小写。
+  it("highlights the deepest case-sensitive Unix mount and still matches Windows drives", () => {
+    const roots = ["/", "/mnt/USB", "/mnt/usb", "/mnt/usb/team", "C:\\"].map((path) => ({ label: path, path }))
+    expect(projectFolderPickerActiveRoot("/mnt/usb/team/src", roots)).toBe("/mnt/usb/team")
+    expect(projectFolderPickerActiveRoot("/mnt/usb/team-old", roots)).toBe("/mnt/usb")
+    expect(projectFolderPickerActiveRoot("/mnt/USB/work", roots)).toBe("/mnt/USB")
+    expect(projectFolderPickerActiveRoot("c:\\Users", roots)).toBe("C:\\")
+  })
+
   // Verifies every crumb opens an absolute path in the path's own separator style.
   // 验证每个路径段都以路径自身的分隔符风格打开绝对路径。
   it.each<[string, string[]]>([
@@ -97,6 +121,28 @@ describe("folder picker paths", () => {
 })
 
 describe("folder picker browsing", () => {
+  // A disconnected volume must not silently confirm an identically named folder.
+  // 卷断开后不得静默确认同名目录。
+  it("keeps a failed confirmation on the mounted volume selected by the user", async () => {
+    // The browsed volume survives in the UI while the service detects its removal.
+    // 浏览卷仍显示于界面，服务则检测到该卷已被移除。
+    const projectPath = "C:\\Users\\dev\\projects"
+    const picker = await openPicker([], (path) => ({ ...listingOf(path ?? projectPath), volumeId: "usb-a" }))
+    picker.confirm.mockRejectedValueOnce(new Error("ERR_PROJECT_DIRECTORY_UNAVAILABLE"))
+    try {
+      await act(async () => picker.entry("alpha")!.click())
+      await act(async () => picker.query<HTMLButtonElement>("[data-folder-picker-confirm]")!.click())
+      expect(picker.confirm).toHaveBeenCalledExactlyOnceWith(
+        projectPath + "\\alpha",
+        "usb-a",
+      )
+      expect(picker.selection()).toBe(projectPath + "\\alpha")
+      expect(picker.query("[role=alert]")).toBeTruthy()
+    } finally {
+      await picker.cleanup()
+    }
+  })
+
   // Verifies one click selects a child for confirmation while the browsed folder stays put.
   // 验证单击选中子目录用于确认，而当前浏览目录保持不变。
   it("selects a child on click and confirms it without entering", async () => {
@@ -168,6 +214,95 @@ describe("folder picker browsing", () => {
       expect(picker.entries()).toEqual(["alpha", "beta"])
       await act(async () => picker.query<HTMLButtonElement>("[data-folder-picker-hidden-toggle]")!.click())
       expect(picker.entries()).toHaveLength(3)
+    } finally { await picker.cleanup() }
+  })
+
+  // Verifies the footer button opens the typed path first so confirmation follows the listing.
+  // 验证底部按钮会先打开输入的路径，确认动作随后再以目录列表为准。
+  it("opens the typed path from the footer button before confirming", async () => {
+    const picker = await openPicker()
+    try {
+      await picker.enterPath("C:\\Users")
+      const confirmButton = picker.query<HTMLButtonElement>("[data-folder-picker-confirm]")!
+      expect(confirmButton.disabled).toBe(false)
+      expect(picker.query("[data-folder-picker-unbrowsed]")).not.toBeNull()
+      await act(async () => confirmButton.click())
+      expect(picker.browse).toHaveBeenLastCalledWith("C:\\Users")
+      expect(picker.selection()).toBe("C:\\Users")
+      expect(picker.confirm).not.toHaveBeenCalled()
+      await act(async () => confirmButton.click())
+      expect(picker.confirm).toHaveBeenCalledExactlyOnceWith("C:\\Users")
+    } finally { await picker.cleanup() }
+  })
+
+  // Clicking a row without a focus change must still prompt the user to open the draft.
+  // 即使点击目录行没有触发焦点变化，也应提示用户先打开草稿路径。
+  it("keeps a pasted path and the old listing when clicking or entering a directory row", async () => {
+    const picker = await openPicker()
+    try {
+      const input = await picker.enterPath("C:\\Users")
+      const arrow = picker.query<HTMLButtonElement>("[data-folder-picker-open-path]")!
+      expect(arrow.hasAttribute("data-attention")).toBe(false)
+      await act(async () => picker.entry("alpha")!.click())
+      await act(async () => picker.entry("alpha")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })))
+      expect(arrow.hasAttribute("data-attention")).toBe(true)
+      expect(input.value).toBe("C:\\Users")
+      expect(picker.entry("alpha")?.getAttribute("aria-selected")).toBe("false")
+      expect(picker.selection()).toBe("")
+      expect(picker.browse).toHaveBeenCalledTimes(1)
+      await act(async () => input.form!.requestSubmit(arrow))
+      expect(picker.selection()).toBe("C:\\Users")
+      expect(picker.confirm).not.toHaveBeenCalled()
+    } finally { await picker.cleanup() }
+  })
+
+  // Changing focus and failing to open a path both leave the text available for correction.
+  // 切换焦点或路径打开失败后，保留输入供用户更正。
+  it("highlights the opener on focus change and preserves an unavailable path", async () => {
+    const picker = await openPicker()
+    try {
+      const invalidPath = "C:\\Unavailable"
+      const input = await picker.enterPath(invalidPath)
+      const filter = picker.query<HTMLInputElement>("[data-folder-picker-filter]")!
+      const arrow = picker.query<HTMLButtonElement>("[data-folder-picker-open-path]")!
+      await act(async () => { input.focus(); filter.focus() })
+      expect(document.activeElement).toBe(filter)
+      expect(arrow.hasAttribute("data-attention")).toBe(true)
+      expect(input.getAttribute("aria-describedby")).toBe(picker.query("[data-folder-picker-unbrowsed]")?.id)
+      await act(async () => arrow.click())
+      expect(picker.browse).toHaveBeenLastCalledWith(invalidPath)
+      expect(picker.query('[role="alert"]')).not.toBeNull()
+      expect(input.value).toBe(invalidPath)
+      expect(picker.entry("alpha")).not.toBeNull()
+      expect(picker.confirm).not.toHaveBeenCalled()
+      await picker.key(input, "Escape")
+      await act(async () => picker.entry("alpha")!.click())
+      expect(picker.selection()).toBe("C:\\Users\\dev\\projects\\alpha")
+    } finally { await picker.cleanup() }
+  })
+
+  // A removable mount goes directly to its root and an unavailable mount preserves the current listing.
+  // 可移动挂载入口直接打开卷根，挂载失效时保留当前目录列表。
+  it("opens the exact side-bar volume and keeps the listing if a drive was removed", async () => {
+    const usb = "/run/media/dev/WORK"
+    const removed = "/mnt/WORK"
+    const home = "/home/dev"
+    const roots = [{ label: "/", path: "/" }, { label: "WORK", path: usb }, { label: "WORK", path: removed }]
+    const picker = await openPicker([], (path) => {
+      if (path === removed) throw new Error("fixture mount disappeared")
+      return { path: path ?? home, canSelect: true, entries: [], roots }
+    })
+    try {
+      const volume = picker.query<HTMLButtonElement>(`button[title="${usb}"]`)!
+      expect(volume.textContent).toContain(usb)
+      await act(async () => volume.click())
+      expect(picker.browse).toHaveBeenLastCalledWith(usb)
+      expect(volume.hasAttribute("data-active")).toBe(true)
+      expect(picker.selection()).toBe(usb)
+      await act(async () => picker.query<HTMLButtonElement>(`button[title="${removed}"]`)!.click())
+      expect(picker.query('[role="alert"]')).not.toBeNull()
+      expect(picker.selection()).toBe(usb)
+      expect(picker.confirm).not.toHaveBeenCalled()
     } finally { await picker.cleanup() }
   })
 

@@ -45,6 +45,7 @@ use restart_state::{StreamRestartState, commit_configuration_reprepare_limit};
 use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_execution_scope};
 pub(crate) use stream_exit::StreamTaskExitOutcome;
 pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
+use vulcan_agent_runtime::agent_runtime::events::PreparedPhysicalApi;
 use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
 use vulcan_session_core::v1::{
     DomainError, TerminalSettlementRecord, TerminalSettlementScope, TerminalSettlementState, TurnId,
@@ -640,6 +641,23 @@ pub(crate) fn spawn_agent_stream_task(
     );
 }
 
+/// Compares the prepared directory with the live binding at the next physical request.
+/// 在下一次物理请求时比较已准备目录和实时绑定。
+fn validate_execution_project(
+    state: &SharedServiceBridgeState,
+    prepared: Result<&Option<vulcan_workbench_model::TaskProjectSummary>, &String>,
+) -> Result<bool, String> {
+    // An unavailable disk is handled by individual tools; only a changed binding rebuilds the request.
+    // 磁盘不可用由各个工具处理；只有绑定更换才重新准备请求。
+    let Some(prepared) = prepared.map_err(Clone::clone)? else {
+        return Ok(true);
+    };
+    let current = crate::project_directories::active_project_directory_owner(state, &prepared.id)?;
+    Ok(crate::project_directories::same_project_directory_binding(
+        prepared, &current,
+    ))
+}
+
 /// Spawns one background task with bounded configuration-restart and independent auto-compaction state.
 /// 启动一个携带有界配置重启及独立自动压缩状态的后台任务。
 ///
@@ -756,6 +774,22 @@ fn spawn_agent_stream_task_with_restart_state(
         // request is enriched exactly once with the authorized session selection before tool resolution.
         // request 在工具解析前仅使用已授权会话选择增强一次。
         let mut request = request;
+        // Capture one directory for both tool resolution and model preparation before the physical request.
+        // 在物理请求前为工具解析和模型准备捕获同一个目录绑定。
+        let execution_project = request
+            .project_id
+            .as_deref()
+            .map(|project_id| {
+                crate::project_directories::active_project_directory_owner(&task_state, project_id)
+            })
+            .transpose();
+        if let Ok(Some(project)) = &execution_project {
+            request.workspace_path = project.path.clone();
+            request.project_shell_guard = Some(crate::project_directories::project_shell_guard(
+                &task_state,
+                project.clone(),
+            ));
+        }
         if request.knowledge_access.is_none() {
             request.knowledge_access = match resolve_turn_knowledge_access(&task_state, session_id)
                 .await
@@ -868,8 +902,6 @@ fn spawn_agent_stream_task_with_restart_state(
         // stream_exit_reason makes every polling-loop terminal path explicit without a shadow completion boolean.
         // stream_exit_reason 显式表达每条轮询循环终止路径，不再使用影子完成布尔值。
         let stream_exit_reason = loop {
-            // event is the next ordered runtime item owned by this exact stream generation.
-            // event 是当前精确流代际拥有的下一条有序运行时事件。
             let Some(event) = stream.next().await else {
                 break StreamTaskExitReason::StreamExhausted;
             };
@@ -935,16 +967,37 @@ fn spawn_agent_stream_task_with_restart_state(
                                 Some(sink),
                                 Some(ProviderV1LifecycleFacts::RequestPrepared(facts)),
                             ) => {
-                                // Finished background jobs reach the model before this request.
-                                // 已结束的后台任务在本次请求之前告知模型。
-                                if let Err(error) = sink.consume_shell_job_notices() {
-                                    tracing::warn!(
-                                        "[shell-job] completion notices stay pending: {error}"
-                                    );
+                                // Reuse replay-safe request preparation when tools were built for an older binding.
+                                // 工具按旧绑定构建时，复用现有可安全重放的请求准备流程。
+                                match validate_execution_project(
+                                    &task_state,
+                                    execution_project.as_ref(),
+                                ) {
+                                    Ok(true) => {
+                                        // Finished background jobs reach the model before this request.
+                                        // 已结束的后台任务在本次请求之前告知模型。
+                                        if let Err(error) = sink.consume_shell_job_notices() {
+                                            tracing::warn!(
+                                                "[shell-job] completion notices stay pending: {error}"
+                                            );
+                                        }
+                                        sink.prepare_project_request(
+                                            &task_state,
+                                            facts,
+                                            candidate,
+                                            execution_project
+                                                .as_ref()
+                                                .ok()
+                                                .and_then(Option::as_ref),
+                                        )
+                                        .await
+                                        .map_err(|error| error.to_string())
+                                    }
+                                    Ok(false) => {
+                                        Ok(PreparedPhysicalApi::RequestConfigurationChanged)
+                                    }
+                                    Err(error) => Err(error),
                                 }
-                                sink.prepare_request(&task_state, facts, candidate)
-                                    .await
-                                    .map_err(|error| error.to_string())
                             }
                             (Some(_), Some(ProviderV1LifecycleFacts::ExcludedNonSession))
                             | (None, Some(ProviderV1LifecycleFacts::ExcludedNonSession)) => {

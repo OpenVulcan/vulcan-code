@@ -32,6 +32,7 @@ use vulcan_workspace_store::workspace_store::{WorkspaceSnapshot, locate_session_
 use crate::conversation_resources_v1::{
     composer_attachment_from_project_resource_v1, validate_project_resource_attachment_reference,
 };
+use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
 use crate::session_runtime_registry_v1::{
     ContinuationDispatchGuard, SessionHandle, SessionRuntimeError,
 };
@@ -2163,6 +2164,17 @@ async fn recover_accepted_queued_turn(
             "The selected queued input cannot dispatch while the session is stopped.",
         ));
     }
+    // Explicit queued recovery must report the same directory error as other Continue actions.
+    // 显式恢复排队输入时，返回与其他继续操作相同的目录错误。
+    let locator = handle
+        .storage_locator()
+        .map_err(|error| error.to_string())?;
+    let project =
+        crate::project_directories::active_project_directory_owner(state, locator.project_id())?;
+    vulcan_host_tools::project_directory::require_bound_project_directory(
+        std::path::Path::new(&project.path),
+        project.root_volume_id.as_deref(),
+    )?;
     // Read a valid receipt before the attempt so a projection issue does not repeat admitted work.
     // 尝试前读取有效回执，避免投影问题使已接收工作被重复派发。
     let (revision, phase) = queue::current_queued_submission_ack_state(state, session_id)?;
@@ -2890,6 +2902,16 @@ async fn service_start_conversation_execution(
             "disk",
         )
     };
+    // Check the authoritative project before attachments, queuing, or durable turn creation.
+    // 在附件处理、排队或持久化回合之前检查权威项目目录。
+    if let Some(project_id) = project_admission.exact_project_id() {
+        let project = workspace_task_project_for_project_id(&workspace_snapshot, project_id)
+            .ok_or_else(|| format!("Project not found: {project_id}"))?;
+        vulcan_host_tools::project_directory::require_bound_project_directory(
+            std::path::Path::new(&project.path),
+            project.root_volume_id.as_deref(),
+        )?;
+    }
     if existing_submission_requires_hydration(
         submission_session_id,
         existing_session_hydration_policy,
@@ -3273,6 +3295,16 @@ async fn service_start_conversation_execution(
     )?;
     materialized_session.activation = activation;
     project_admission.validate_materialized_session(&materialized_session)?;
+    // Unresolved admission can select a project during materialization. Recheck before publication.
+    // 未解析的准入可以在物化时确定项目。在发布前再次检查。
+    if let Some(project_id) = materialized_session.project_id.as_deref() {
+        let project = workspace_task_project_for_project_id(&workspace_snapshot, project_id)
+            .ok_or_else(|| format!("Project not found: {project_id}"))?;
+        vulcan_host_tools::project_directory::require_bound_project_directory(
+            std::path::Path::new(&materialized_session.workspace_path),
+            project.root_volume_id.as_deref(),
+        )?;
+    }
     // Dedicated choices are validated before the root publication that installs them.
     // 专职选择在安装它们的根发布之前完成校验。
     let dedicated_creation =

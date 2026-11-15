@@ -1,4 +1,5 @@
 import type { TranslationKey } from "@/i18n-messages";
+import { formatMessage } from "@/i18n";
 import { splitComposerFileReferences } from "@/lib/composer-file-references";
 import { averageTurnOutputSpeed } from "./conversation-usage-display";
 import type {
@@ -1104,6 +1105,8 @@ function contextInjectionCategory(contextKey: string): ContextInjectionCategory 
       return "permission";
     case "dynamic.model_selection":
       return "model";
+    case "dynamic.project_directory":
+      return "projectDirectory";
     case "dynamic.html_answers":
       return "answer";
     case "dynamic.host_message_guidance":
@@ -1154,6 +1157,27 @@ function contextExpirationCategory(
   return memoryBaselineSeqs.has(Number(marker[1])) ? "memoryExpiration" : "injection";
 }
 
+// Renders the exact paths from the directory producer's first JSON line, keeping platform path separators.
+// 读取目录生产者首行 JSON 中的精确路径，保留平台路径分隔符。
+function projectDirectoryNoticeContent(content: string, t: Translation): string {
+  try {
+    // Only the data line carries paths. The later instruction is model-facing.
+    // 只有数据行携带路径，后面的指令面向模型。
+    const paths: unknown = JSON.parse(content.split("\n", 1)[0] ?? "");
+    if (typeof paths === "object" && paths !== null &&
+      "previousDirectory" in paths && typeof paths.previousDirectory === "string" &&
+      "workingDirectory" in paths && typeof paths.workingDirectory === "string") {
+      return formatMessage(t("conversation.contextInjection.projectDirectoryPaths"), {
+        previousDirectory: paths.previousDirectory, workingDirectory: paths.workingDirectory,
+      });
+    }
+  } catch {
+    // Keep the event inspectable if its data line cannot be decoded.
+    // 数据行无法解码时仍保留原始事件供查看。
+  }
+  return content;
+}
+
 // contextInjectionMessage turns a context event into a categorized notice with instruction text or a compact expiration state.
 // contextInjectionMessage 将上下文事件转换成分类提示，显示指令正文或简短的失效状态。
 function contextInjectionMessage(
@@ -1164,11 +1188,14 @@ function contextInjectionMessage(
   expiration: ContextExpirationCategory | null,
   t: Translation,
 ): ConversationMessage {
+  // Keep the directory notice within the common transcript card, with readable filesystem paths.
+  // 目录变更沿用共用会话卡片，并显示可读的文件系统路径。
+  const category = expiration ?? contextInjectionCategory(event.context_key);
   return contextInjectionNotice({ ...base, metadata: presentationMetadata(summary, rootInput) }, [{
     context_key: event.context_key,
-    category: expiration ?? contextInjectionCategory(event.context_key),
+    category,
     operation: expiration ? "expire" : event.operation,
-    content: expiration ? "" : event.content,
+    content: expiration ? "" : category === "projectDirectory" ? projectDirectoryNoticeContent(event.content, t) : event.content,
   }], t);
 }
 

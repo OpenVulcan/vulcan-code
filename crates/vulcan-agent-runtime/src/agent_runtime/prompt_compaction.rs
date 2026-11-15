@@ -1151,6 +1151,7 @@ fn build_prompt_compaction_launch_request(
         session_title: session_title.to_string(),
         workspace_path: workspace_path.to_string(),
         project_id: launch_context.project_id.clone(),
+        project_shell_guard: None,
         prompt: build_compaction_request_prompt_for_mode(
             ContextCompactionRequestPromptMode::FullFidelityMerge,
         ),
