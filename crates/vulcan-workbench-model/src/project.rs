@@ -54,6 +54,9 @@ pub struct TaskProjectSummary {
     /// Filesystem identity saved when linking this root directory.
     /// 链接此根目录时保存的文件系统标识。
     pub root_volume_id: Option<String>,
+    /// Last explicit path rebind, if one was recorded for this project.
+    /// 此项目最近一次显式路径更换，若有记录。
+    pub root_directory_change: Option<ProjectRootDirectoryChange>,
     /// Whether the project is currently pinned in the tree.
     /// 当前项目是否已在树中置顶。
     pub pinned: bool,
@@ -72,6 +75,18 @@ pub struct TaskProjectSummary {
     /// How the project's sessions are ordered in the sidebar.
     /// 项目会话在侧栏中的排列方式。
     pub session_sort_mode: ProjectSessionSortMode,
+}
+
+/// The previous root and time of an explicit project path change.
+/// 显式项目路径更换的旧根目录和时间。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRootDirectoryChange {
+    /// Absolute directory used before the last explicit change.
+    /// 最近一次显式变更前使用的绝对目录。
+    pub previous_path: String,
+    /// Time of the explicit change in the same Unix milliseconds as session creation.
+    /// 显式更换时间，与会话创建时间采用相同的 Unix 毫秒单位。
+    pub changed_at_ms: i64,
 }
 
 impl TaskProjectSummary {
@@ -96,6 +111,7 @@ impl TaskProjectSummary {
             title: title.into(),
             path: path.into(),
             root_volume_id: None,
+            root_directory_change: None,
             pinned,
             order,
             icon_pack,

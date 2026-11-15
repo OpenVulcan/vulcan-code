@@ -699,6 +699,7 @@ fn build_git_commit_summary_execution_request(
         session_title: String::from("Git commit summary"),
         workspace_path: workspace_path.to_string(),
         project_id: None,
+        project_shell_guard: None,
         prompt,
         output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),

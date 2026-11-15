@@ -122,6 +122,10 @@ async fn prepare_child_execution_request(
         std::path::Path::new(&project.path),
         project.root_volume_id.as_deref(),
     )?;
+    request.project_shell_guard = Some(crate::project_directories::project_shell_guard(
+        &invocation.state,
+        project.clone(),
+    ));
     request.workspace_path = project.path;
     // Restored children spawn under the root session's allowlist, never a wider one.
     // 恢复的子代理按根会话白名单派生，绝不放宽。
@@ -245,6 +249,7 @@ fn build_child_base_request(
             .ok_or_else(|| String::from("Child workspace path is not valid UTF-8."))?
             .to_owned(),
         project_id: Some(locator.project_id().to_owned()),
+        project_shell_guard: None,
         prompt: String::new(),
         output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),

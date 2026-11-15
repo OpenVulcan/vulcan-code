@@ -7,6 +7,7 @@ mod insertion_continuation;
 mod model_selection;
 mod native_media;
 mod permission_mode;
+mod project_directory;
 mod provider_tools;
 mod queued_child_returns;
 mod terminal_return_owner;

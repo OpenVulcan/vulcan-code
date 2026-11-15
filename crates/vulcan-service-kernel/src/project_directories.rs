@@ -18,13 +18,16 @@ use vulcan_service_api::{
 use vulcan_workbench_model::TaskProjectSummary;
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
-use crate::project_conversation_services::begin_project_lifecycle_transition;
+use crate::project_conversation_services::{
+    begin_project_directory_change, begin_project_lifecycle_transition,
+};
 use crate::{
     SharedServiceBridgeState, controller_runtime_from_state, current_unix_millis_value,
     normalized_workspace_path_text_from_path, refresh_workbench_snapshot,
     service_add_project_initial_directory, webui_workspace_persist_lock,
     workspace_task_project_for_project_id,
     workspace_task_project_for_project_id_including_archived,
+    workspace_task_project_for_project_id_mut,
 };
 
 /// Returns the current Unix millisecond timestamp within the signed V1 lifecycle contract.
@@ -386,6 +389,52 @@ pub(crate) fn active_project_directory_owner(
         .ok_or_else(|| format!("Project not found: {project_id}"))
 }
 
+/// Tests whether two reads refer to the same project directory binding.
+/// 判断两次读取是否指向同一个项目目录绑定。
+pub(crate) fn same_project_directory_binding(
+    prepared: &TaskProjectSummary,
+    current: &TaskProjectSummary,
+) -> bool {
+    prepared.path == current.path
+        && prepared.root_volume_id == current.root_volume_id
+        && prepared.root_directory_change == current.root_directory_change
+}
+
+/// Builds a guard for the directory frozen into a tool manager. It never substitutes a new root.
+/// 为冻结到工具管理器的目录构建守卫，绝不替换为新根目录。
+pub(crate) fn project_shell_guard(
+    state: &SharedServiceBridgeState,
+    prepared: TaskProjectSummary,
+) -> vulcan_agent_runtime::vulcan_tools_bridge::ProjectShellGuard {
+    // Tool managers may outlive their stream; do not retain service ownership through them.
+    // 工具管理器可能比流存活更久，避免它们持有服务所有权。
+    let state = std::sync::Arc::downgrade(state);
+    // Older projects may not have a saved identity. Retain the mounted volume observed at launch when available.
+    // 旧项目可能没有已保存卷标识。启动时能识别已挂载卷的话，保留此次观测。
+    let volume_at_launch = match &prepared.root_volume_id {
+        Some(volume) => Some(volume.clone()),
+        None => project_volume_identity(Path::new(&prepared.path))
+            .ok()
+            .flatten(),
+    };
+    vulcan_agent_runtime::vulcan_tools_bridge::ProjectShellGuard(std::sync::Arc::new(move || {
+        let state = state
+            .upgrade()
+            .ok_or_else(|| String::from("The project directory owner is unavailable."))?;
+        let current = active_project_directory_owner(&state, &prepared.id)?;
+        if !same_project_directory_binding(&prepared, &current) {
+            return Err(format!(
+                "This command was prepared for project directory {:?}, but the user changed the project directory to {:?}. The command was not run. Re-evaluate the command against the new project directory on the next model request.",
+                prepared.path, current.path,
+            ));
+        }
+        require_bound_project_directory(Path::new(&prepared.path), volume_at_launch.as_deref())
+            .map_err(|error| format!(
+                "{error}. Ask the user whether to restore the unavailable directory or choose another directory. Wait for the user's answer before retrying this command."
+            ))
+    }))
+}
+
 /// Rebinds project_id from expected_path to the absolute selected_path; returns the refreshed snapshot.
 /// 将 project_id 从 expected_path 重新绑定到绝对路径 selected_path，返回刷新后的快照。
 pub(crate) async fn service_change_project_directory(
@@ -401,8 +450,30 @@ pub(crate) async fn service_change_project_directory(
             selected_path.display()
         ));
     }
-    // Use the workspace writer and lifecycle gate to serialize project changes and turn admission.
-    // 使用工作区写锁和生命周期闸门串行化项目变更与回合准入。
+    // Finish the database write and its live publication even if the caller stops awaiting the RPC.
+    // 即使调用方不再等待 RPC，也完成数据库写入及其实时发布。
+    crate::spawn_service_task(persist_project_directory_change(
+        state,
+        project_id,
+        expected_path,
+        selected_path,
+        expected_volume,
+    ))
+    .await
+    .map_err(|error| format!("Project directory change task failed: {error}"))?
+}
+
+/// Serializes and publishes an explicit rebind, retaining the exact project and its active sessions.
+/// 串行执行并发布显式目录更换，保留精确项目和活动会话。
+async fn persist_project_directory_change(
+    state: SharedServiceBridgeState,
+    project_id: String,
+    expected_path: String,
+    selected_path: PathBuf,
+    expected_volume: Option<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    // The workspace writer orders persistent mutations; the project reservation excludes new admissions.
+    // 工作区写锁为持久化变更排序；项目预留使新准入互斥。
     let controller = controller_runtime_from_state(&state)?;
     let persist_lock = webui_workspace_persist_lock();
     let _persist_guard = persist_lock.lock().await;
@@ -411,12 +482,7 @@ pub(crate) async fn service_change_project_directory(
             .await?;
     let project = workspace_task_project_for_project_id(&snapshot, &project_id)
         .ok_or_else(|| format!("Project not found: {project_id}"))?;
-    let _lifecycle_guard = begin_project_lifecycle_transition(
-        &state,
-        &project_id,
-        project.session_ids.iter().copied(),
-        "change the project directory",
-    )?;
+    let _project_guard = begin_project_directory_change(&state, &project_id)?;
     if project.path != expected_path {
         return Err(format!(
             "Project `{project_id}` has a different saved directory. Refresh and try again."
@@ -446,14 +512,44 @@ pub(crate) async fn service_change_project_directory(
             "The directory is already bound to another project: {new_path}"
         ));
     }
+    if project.path == new_path && project.root_volume_id == volume_id {
+        return refresh_workbench_snapshot(state).await;
+    }
+    // Persist the exact previous binding together with the replacement.
+    // 将精确的旧绑定与新绑定一同持久化。
+    let changed_at_ms = i64::try_from(current_unix_millis_value()).map_err(|_| {
+        String::from("Project directory change exceeds the signed timestamp range.")
+    })?;
     vulcan_workspace_store::workspace_store::replace_project_root_path(
         &controller,
         &project_id,
         &expected_path,
         &new_path,
-        volume_id,
+        volume_id.clone(),
+        changed_at_ms,
     )
     .await?;
+    {
+        // Share the committed binding immediately with model request and shell admission.
+        // 立即向模型请求和 Shell 准入发布已提交的绑定。
+        let mut guard = state.lock().map_err(|error| error.to_string())?;
+        let live_project = guard
+            .workspace_snapshot
+            .as_mut()
+            .and_then(|workspace| workspace_task_project_for_project_id_mut(workspace, &project_id))
+            .ok_or_else(|| format!("Project not found: {project_id}"))?;
+        live_project.path = new_path;
+        live_project.root_volume_id = volume_id;
+        live_project.root_directory_change =
+            Some(vulcan_workbench_model::ProjectRootDirectoryChange {
+                previous_path: expected_path,
+                changed_at_ms,
+            });
+        // Discard any workspace refresh that captured the preceding index before publication.
+        // 丢弃发布前捕获旧索引的工作区刷新。
+        let epoch = &mut guard.service_lifecycle_state.recovery_publication_epoch;
+        *epoch = epoch.wrapping_add(1);
+    }
     refresh_workbench_snapshot(state).await
 }
 
@@ -1131,7 +1227,7 @@ mod tests {
     /// Rebinding preserves the indexed session and rejects stale and already-owned destinations.
     /// 更换目录保留索引中的会话，并拒绝过时或已被占用的目标。
     #[tokio::test]
-    async fn rebind_keeps_project_identity_and_indexed_session() {
+    async fn project_directory_rebind_keeps_active_run_and_invalidates_old_shell_guard() {
         // Use the production service and SQLite index with a test-owned project and session.
         // 使用生产服务及 SQLite 索引，项目与会话由测试隔离持有。
         let session_id = SessionId::new_v4();
@@ -1221,6 +1317,19 @@ mod tests {
                 .unwrap()
                 .available
         );
+        // Capture the same launch guard used after tool approval, so even a previously valid cwd cannot follow a rebind.
+        // 捕获权限批准后使用的同一启动守卫，确保已有效的 cwd 也不会随绑定更换。
+        let previous = active_project_directory_owner(&state, project_id).unwrap();
+        let old_shell_guard = project_shell_guard(&state, previous);
+        assert!((old_shell_guard.0)().is_ok());
+        fs::remove_dir(&old).unwrap();
+        let missing_error = (old_shell_guard.0)().unwrap_err();
+        assert!(missing_error.contains(&old_text));
+        assert!(missing_error.contains("Ask the user"));
+        // Restoring the same binding permits a new invocation without scheduling the failed one.
+        // 恢复同一绑定后允许新调用，不调度已失败的调用。
+        fs::create_dir(&old).unwrap();
+        assert!((old_shell_guard.0)().is_ok());
         fs::remove_dir(&old).unwrap();
         assert!(
             service_change_project_directory(
@@ -1263,10 +1372,28 @@ mod tests {
                 .path,
             old_text
         );
+        // Retain a live session owner while the user rebinds the project.
+        // 用户更换项目目录时保留一个活动会话所有者。
+        let task_id = uuid::Uuid::new_v4();
+        {
+            let mut guard = state.lock().unwrap();
+            guard.session_terminal_persistence_owners.insert(
+                session_id,
+                crate::state::SessionTerminalPersistenceOwner::StreamTask(task_id),
+            );
+            guard.active_stream_tasks.insert(
+                session_id,
+                crate::state::ActiveStreamTask::new(
+                    task_id,
+                    tokio::spawn(std::future::pending()),
+                    None,
+                ),
+            );
+        }
         service_change_project_directory(
             state.clone(),
             project_id.into(),
-            old_text,
+            old_text.clone(),
             new.clone(),
             None,
         )
@@ -1285,6 +1412,25 @@ mod tests {
         let project = workspace_task_project_for_project_id(&snapshot, project_id).unwrap();
         assert_eq!(project.path, status.path);
         assert!(project.session_ids.contains(&session_id));
+        assert_eq!(
+            project
+                .root_directory_change
+                .as_ref()
+                .unwrap()
+                .previous_path,
+            old_text
+        );
+        // The old manager refuses a launch and only a new manager accepts the new binding.
+        // 旧工具管理器拒绝启动，只有新工具管理器接受新绑定。
+        let stale_error = (old_shell_guard.0)().unwrap_err();
+        assert!(stale_error.contains(&format!("{old_text:?}")));
+        assert!(stale_error.contains(&format!("{:?}", status.path)));
+        assert!((project_shell_guard(&state, project.clone()).0)().is_ok());
+        let guard = state.lock().unwrap();
+        let active = guard.active_stream_tasks.get(&session_id).unwrap();
+        assert_eq!(active.task_id(), task_id);
+        assert!(active.is_running());
+        active.abort();
     }
 
     /// Verifies a slow VMM binding cannot block a second real project create or hide its result.

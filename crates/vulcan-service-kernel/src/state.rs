@@ -704,6 +704,9 @@ pub(crate) enum ProjectAdmissionReservationKind {
     /// A recovery draft is publishing its project membership.
     /// 恢复草稿正在发布其项目成员关系。
     RecoveryPublication,
+    /// A user is replacing the project directory while keeping its sessions.
+    /// 用户正在更换项目目录并保留其会话。
+    DirectoryChange,
 }
 
 impl ProjectAdmissionReservationKind {
@@ -714,6 +717,7 @@ impl ProjectAdmissionReservationKind {
             Self::PromptSubmission => "user prompt submission",
             Self::LifecycleTransition => "archive or removal lifecycle transition",
             Self::RecoveryPublication => "recovery session publication",
+            Self::DirectoryChange => "project directory change",
         }
     }
 }

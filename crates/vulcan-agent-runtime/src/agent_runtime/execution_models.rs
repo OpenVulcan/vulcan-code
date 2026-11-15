@@ -313,6 +313,9 @@ pub struct ExecutionPreparationRequest {
     /// Current workspace path.
     /// 当前工作区路径。
     pub workspace_path: String,
+    /// Service-owned launch check for the exact directory captured by this execution.
+    /// 服务持有的启动检查，绑定此执行捕获的精确目录。
+    pub project_shell_guard: Option<crate::vulcan_tools_bridge::ProjectShellGuard>,
     /// Stable VulcanCode project identity owning the current execution when one exists.
     /// 当前执行存在所属项目时对应的稳定 VulcanCode 项目身份。
     pub project_id: Option<String>,

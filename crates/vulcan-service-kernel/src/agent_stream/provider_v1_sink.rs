@@ -2166,6 +2166,19 @@ impl ProviderV1StreamSink {
         facts: ProviderV1RequestFacts,
         candidate: ProviderRequestPreparationCandidate,
     ) -> Result<PreparedPhysicalApi, ProviderV1SinkError> {
+        self.prepare_project_request(state, facts, candidate, None)
+            .await
+    }
+
+    /// Prepares a request with the exact directory also used to construct its shell tools.
+    /// 使用构建其 Shell 工具时采用的精确目录准备请求。
+    pub(super) async fn prepare_project_request(
+        &mut self,
+        state: &SharedServiceBridgeState,
+        facts: ProviderV1RequestFacts,
+        candidate: ProviderRequestPreparationCandidate,
+        project: Option<&vulcan_workbench_model::TaskProjectSummary>,
+    ) -> Result<PreparedPhysicalApi, ProviderV1SinkError> {
         if self.active.is_some() {
             return Err(ProviderV1SinkError::RequestAlreadyActive);
         }
@@ -2181,7 +2194,12 @@ impl ProviderV1StreamSink {
             .await
             .map_err(provider_projection_runtime_error)?;
         }
-        context_injection::synchronize_request_dynamic_context(&self.handle, &facts, &candidate)?;
+        context_injection::synchronize_project_request_dynamic_context(
+            &self.handle,
+            &facts,
+            &candidate,
+            project,
+        )?;
         // Include active shell jobs in the single summary instruction so they survive compaction.
         // 将正在运行的 Shell 任务放入唯一的摘要指令，使其在压缩后仍被记住。
         let mut candidate = candidate;

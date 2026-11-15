@@ -831,6 +831,7 @@ pub async fn replace_project_root_path(
     expected_path: &str,
     new_path: &str,
     new_volume_id: Option<String>,
+    changed_at_ms: i64,
 ) -> Result<(), String> {
     validate_project_mutation_id(project_id, "change the project directory")?;
     // Update only the path; stable IDs keep session storage and other project records attached.
@@ -840,7 +841,9 @@ pub async fn replace_project_root_path(
         LogicalDatabase::AppState,
         r#"
 UPDATE projects
-SET root_path = ?1, root_volume_id = ?5, updated_at = ?2
+SET previous_root_path = CASE WHEN root_path <> ?1 OR root_volume_id IS NOT ?5 THEN root_path ELSE previous_root_path END,
+    root_changed_at_ms = CASE WHEN root_path <> ?1 OR root_volume_id IS NOT ?5 THEN ?6 ELSE root_changed_at_ms END,
+    root_path = ?1, root_volume_id = ?5, updated_at = ?2
 WHERE id = ?3 AND archived = 0 AND root_path = ?4
 RETURNING id;
 "#,
@@ -850,6 +853,7 @@ RETURNING id;
             SqliteValue::Text(project_id.to_string()),
             SqliteValue::Text(expected_path.to_string()),
             optional_sqlite_string(&new_volume_id),
+            SqliteValue::Integer(changed_at_ms),
         ],
     )
     .await

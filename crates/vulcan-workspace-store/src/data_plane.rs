@@ -462,7 +462,7 @@ CREATE TABLE IF NOT EXISTS projects (
     icon_key TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-, root_volume_id TEXT);
+, root_volume_id TEXT, previous_root_path TEXT, root_changed_at_ms INTEGER);
 
 CREATE INDEX IF NOT EXISTS idx_projects_sort
 ON projects(pinned DESC, sort_order ASC, updated_at DESC);

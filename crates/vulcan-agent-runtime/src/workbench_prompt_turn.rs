@@ -1385,6 +1385,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         session_title: input.start.session_title,
         workspace_path: input.start.workspace_path,
         project_id: input.start.project_id,
+        project_shell_guard: None,
         prompt: request_prompt,
         output_style_snapshot: applied_output_style_snapshot(runtime_state),
         provider_visible_agent_messages: input.start.provider_visible_agent_messages,

@@ -449,6 +449,7 @@ mod tests {
             session_title: String::from("测试会话"),
             workspace_path: String::from(r"D:\workspace"),
             project_id: None,
+            project_shell_guard: None,
             prompt: String::from("  请分析主入口文件  "),
             output_style_snapshot: None,
             provider_visible_agent_messages: Vec::new(),

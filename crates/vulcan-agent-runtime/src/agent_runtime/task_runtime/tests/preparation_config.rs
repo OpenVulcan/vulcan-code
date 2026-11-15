@@ -56,6 +56,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         session_title: String::from("Parent session"),
         workspace_path: String::from("D:\\openvulcan\\test-project"),
         project_id: None,
+        project_shell_guard: None,
         prompt: String::from("parent prompt"),
         output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),

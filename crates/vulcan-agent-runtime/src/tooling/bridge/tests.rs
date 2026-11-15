@@ -357,6 +357,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
             false,
             None,
             None,
+            None,
         );
 
         let resolved: ResolvedToolSet = manager.resolve_for_execution_mode("Build");
@@ -466,6 +467,7 @@ fn feedback_tool_is_registered_only_with_a_host() {
             false,
             None,
             None,
+            None,
         )
         .resolve_for_execution_mode("Build")
         .descriptors
@@ -545,6 +547,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         true,
+        None,
         None,
         None,
     );
@@ -627,6 +630,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         true,
         None,
         None,
+        None,
     );
     let disabled_ids = disabled_manager
         .resolve_for_execution_mode("Build")
@@ -661,6 +665,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
+        None,
         None,
         None,
     );
@@ -722,6 +727,7 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
         false,
         None,
         Some(Arc::new(FakeCollaborationRuntime)),
+        None,
     );
 
     let build_ids = manager
@@ -1009,6 +1015,7 @@ fn frozen_bridge_tools(
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
+        None,
         None,
         None,
     )

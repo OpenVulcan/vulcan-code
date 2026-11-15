@@ -62,6 +62,25 @@ use luaskills_dispatch::{
 #[cfg(test)]
 mod tests;
 
+/// A host check for the directory frozen into a project execution.
+/// 针对项目执行中冻结目录的宿主检查。
+#[derive(Clone)]
+pub struct ProjectShellGuard(
+    /// Checks that the captured binding is current and accessible, returning a model-facing error.
+    /// 检查捕获的绑定仍为当前绑定且可访问，失败时返回面向模型的错误。
+    pub Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+);
+
+impl std::fmt::Debug for ProjectShellGuard {
+    /// Describes the guard without evaluating or exposing the captured host state.
+    /// 描述守卫，无需执行检查或暴露捕获的宿主状态。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProjectShellGuard")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Builds one standalone host-owned tools manager from the current host runtime surfaces.
 /// 根据当前宿主运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
@@ -91,12 +110,14 @@ pub fn build_vulcan_tools_manager(
     vmm_runtime_ready: bool,
     native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
     native_agent_collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
+    project_shell_guard: Option<ProjectShellGuard>,
 ) -> VulcanToolsManager {
     // Physical native commands retain the filesystem backing their execution workspace before tools
     // are exposed. Do not allow a subsequent cwd override to escape a detached volume.
     // 在暴露工具前固定其执行工作区对应的文件系统，避免随后以 cwd 覆盖绕过被卸载的卷。
     let shell_workspace_volume = workspace_root
         .as_deref()
+        .filter(|_| project_shell_guard.is_none())
         .filter(|_| host_project_id.is_some())
         .map(vulcan_host_tools::project_directory::project_volume_identity);
     let mut candidates = Vec::new();
@@ -177,6 +198,9 @@ pub fn build_vulcan_tools_manager(
         // Shell commands and terminal starts can set their own cwd; retain the workspace volume.
         // Shell 命令和终端启动可设置各自 cwd，因此需保留工作区卷。
         let shell_volume_for_context = shell_workspace_volume.clone();
+        // Retain the exact stream's live guard until the invocation runs after permission handling.
+        // 将精确流的实时守卫留到权限处理后的实际调用。
+        let project_shell_guard_for_context = project_shell_guard.clone();
         let host_project_id_for_context = host_project_id.clone();
         let controller_runtime_for_context = controller_runtime.clone();
         let native_goal_runtime_for_context = native_goal_runtime.clone();
@@ -203,6 +227,9 @@ pub fn build_vulcan_tools_manager(
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
                 let shell_volume = shell_volume_for_context.clone();
+                // This guard owns the binding captured by the manager that produced the invocation.
+                // 此守卫持有产生该调用的工具管理器所捕获的绑定。
+                let project_shell_guard = project_shell_guard_for_context.clone();
                 let host_project_id = host_project_id_for_context.clone();
                 let controller_runtime = controller_runtime_for_context.clone();
                 let goal_runtime = native_goal_runtime_for_context.clone();
@@ -219,22 +246,22 @@ pub fn build_vulcan_tools_manager(
                 let session_vmm = session_vmm_for_context.clone();
                 let native_browser_runtime = native_browser_runtime_for_context.clone();
                 Box::pin(async move {
-                    if (tool_id == "shell_command"
+                    if tool_id == "shell_command"
                         || (tool_id == "terminal_session"
                             && args.get("action").and_then(serde_json::Value::as_str)
-                                == Some("start")))
-                        && let (Some(root), Some(volume)) =
-                            (workspace_root.as_deref(), shell_volume)
+                                == Some("start"))
                     {
-                        vulcan_host_tools::project_directory::require_bound_project_directory(
-                            root,
-                            volume
-                                .map_err(
-                                    crate::tooling::native::shell_command::shell_directory_error,
-                                )?
-                                .as_deref(),
-                        )
-                        .map_err(crate::tooling::native::shell_command::shell_directory_error)?;
+                        if let Some(guard) = project_shell_guard {
+                            (guard.0)()?;
+                        } else if let (Some(root), Some(volume)) =
+                            (workspace_root.as_deref(), shell_volume)
+                        {
+                            vulcan_host_tools::project_directory::require_bound_project_directory(
+                                root,
+                                volume.map_err(crate::tooling::native::shell_command::shell_directory_error)?.as_deref(),
+                            )
+                            .map_err(crate::tooling::native::shell_command::shell_directory_error)?;
+                        }
                     }
                     catalog
                         .invoke(

@@ -76,7 +76,21 @@ pub(crate) const APP_SCHEMA_MIGRATIONS: &[AppSchemaMigration] = &[
         description: "track volumes for explicitly linked project directories",
         apply: migrate_v6_to_v7,
     },
+    AppSchemaMigration {
+        from_version: 7,
+        description: "record the last explicit project directory change",
+        apply: migrate_v7_to_v8,
+    },
 ];
+
+/// Adds the previous path and time of an explicit rebind. A v7 row has no recorded change.
+/// 添加显式重新绑定的旧路径和时间。v7 行没有已记录的变更。
+fn migrate_v7_to_v8(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE projects ADD COLUMN previous_root_path TEXT;
+         ALTER TABLE projects ADD COLUMN root_changed_at_ms INTEGER;",
+    )
+}
 
 /// Adds an optional volume identity. Existing projects have no observed original identity to migrate.
 /// 增加可选卷标识。已有项目没有已观测的原卷标识可迁移。
@@ -533,6 +547,8 @@ mod tests {
                  DROP TABLE session_activity_marks_v1;
                  DROP TABLE announcement_states_v1;
                  DROP TABLE project_attached_folders;
+                 ALTER TABLE projects DROP COLUMN previous_root_path;
+                 ALTER TABLE projects DROP COLUMN root_changed_at_ms;
                  ALTER TABLE projects DROP COLUMN root_volume_id;
                  UPDATE app_metadata SET value = '1' WHERE key = 'schema_version';
                  PRAGMA user_version = 1;",
@@ -609,7 +625,9 @@ mod tests {
         create_current(&connection, false);
         connection
             .execute_batch(
-                "ALTER TABLE projects DROP COLUMN root_volume_id;
+                "ALTER TABLE projects DROP COLUMN previous_root_path;
+                 ALTER TABLE projects DROP COLUMN root_changed_at_ms;
+                 ALTER TABLE projects DROP COLUMN root_volume_id;
              UPDATE app_metadata SET value = '6' WHERE key = 'schema_version';
              PRAGMA user_version = 6;
              INSERT INTO projects (id, name, root_path, created_at, updated_at)
