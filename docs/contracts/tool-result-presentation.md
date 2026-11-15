@@ -24,6 +24,7 @@
 | 媒体理解 | `media_understanding/result_markdown.rs` | 答案、独有片段、时间戳、警告；未知时间不写零 | 无 |
 | 当前模型媒体读取 | `native_media_input/tool.rs` | `read_media` 接收单个本地路径或归属明确的资源定位符；图片、音频、视频、PDF 由当前会话模型理解；界面显示读取回执 | `$vulcan_native_media_input` 版本 1 保存原始内联内容或上传引用及其归属，供请求重放；正文不展示媒体字节 |
 | 浏览器管理 | `tooling/native/browser.rs` | 浏览器和标签身份、标题、地址、选择结果 | 无；真实控制对象不变 |
+| Playwright 浏览器操作 | `vulcan-mcp-runtime/src/rmcp_support/conversation_result.rs` | 保留 MCP 返回的 Markdown、页面快照及原始诊断；WebUI 按 Vulcan Browser 服务的公开工具名展示实际动作和目标，参数可在结果后展开 | 截图沿会话 `generated_attachments` 链路预览 |
 | 目标管理 | `tooling/native/goal.rs` | 目标、状态、有效预算、已知用量；空目标明确说明 | 无；进度仍由会话目标快照提供 |
 | 计划提交 | `tooling/native/submit_plan.rs` | 已接受的名称、文件位置、简短回执 | `plan_artifact` 保留已接受计划正文，模型不再收到全文副本 |
 | Lua 会话 | `luaskills_runtime/runlua/result_markdown.rs` | 启停和状态、会话身份、执行输出；业务 JSON 原文围栏 | 无新增正文副本 |

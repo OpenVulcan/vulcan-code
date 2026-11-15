@@ -677,6 +677,10 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-error { margin: 0; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); color: var(--vk-bad); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 .vk-tool-result { padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); min-width: 0; }
 .vk-tool-result[data-error] { color: var(--vk-bad); }
+/* Browser arguments follow the result and stay collapsed until inspected. */
+/* 浏览器参数放在结果之后，有需要时再展开。 */
+.vk-browser-tool-arguments { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); }
+:is(.vk-tool-result, .vk-tool-error) + .vk-browser-tool-arguments { border-top: var(--vk-bw) solid var(--vk-line-soft); }
 .vk-memory-page-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3) 0; font-size: var(--vk-fs-sm); }
 .vk-memory-page-id { flex: none; color: var(--vk-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .vk-memory-page-query { min-width: 0; overflow: hidden; color: var(--vk-ink-3); text-overflow: ellipsis; white-space: nowrap; }

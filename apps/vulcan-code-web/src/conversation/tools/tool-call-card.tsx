@@ -4,6 +4,7 @@ import * as React from "react";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import { AgentCard, agentToolSpec } from "./cards/agent-card";
 import { AskCard } from "./cards/ask-card";
+import { BrowserCard, browserToolAction } from "./cards/browser-card";
 import { ShellCommandCard, TerminalSessionCard, toolCallIsShellCommand } from "./cards/command-card";
 import { ShellJobCard } from "./cards/shell-job-card";
 import { FileChangeCard, FileInspectCard, FileReadCard, MediaReadCard } from "./cards/file-cards";
@@ -86,6 +87,7 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (agentToolSpec(call)) return { Card: AgentCard, family: "agent" };
   if (call.name === "knowledge_write") return { Card: KnowledgeWriteCard, family: "edit" };
   if (call.name === "vmm_memory_search") return { Card: MemorySearchCard, family: "search" };
+  if (browserToolAction(call.name)) return { Card: BrowserCard, family: "web" };
   const web = webToolKind(call);
   if (web) return { Card: web === "search" ? WebSearchCard : WebExtractCard, family: "web" };
   const provider = providerToolSpec(call);
