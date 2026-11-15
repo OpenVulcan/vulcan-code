@@ -68,6 +68,11 @@ mod tests;
 type ProjectShellLaunchLock =
     Arc<dyn Fn() -> Result<Arc<tokio::sync::RwLock<()>>, String> + Send + Sync>;
 
+/// Resolves a replacement guard for a changed binding of the same project.
+/// 同一项目的目录绑定发生变化时，解析用于替换的守卫。
+type ProjectShellGuardRefresh =
+    Arc<dyn Fn() -> Result<Option<ProjectShellGuard>, String> + Send + Sync>;
+
 /// A host check for the directory frozen into a project execution.
 /// 针对项目执行中冻结目录的宿主检查。
 #[derive(Clone)]
@@ -83,7 +88,7 @@ pub struct ProjectShellGuard {
     project: Option<Arc<vulcan_workbench_model::TaskProjectSummary>>,
     /// Advances only to the current binding of this same project, never to another project.
     /// 仅推进到同一项目的当前绑定，绝不切换到其他项目。
-    refresh: Option<Arc<dyn Fn() -> Result<Option<Self>, String> + Send + Sync>>,
+    refresh: Option<ProjectShellGuardRefresh>,
 }
 
 impl ProjectShellGuard {

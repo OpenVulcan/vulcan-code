@@ -120,14 +120,16 @@ async fn project_directory_change_invalidates_concurrent_physical_preparation() 
                 ApiPurposeKind::MainGeneration,
                 request,
                 LockedBaselineProjection::empty(),
-                None,
                 5,
-                None,
-                Some(Box::pin(async move {
-                    commit_current_project_directory(&check_state, &from)
-                        .await
-                        .map_err(SessionRuntimeError::ProviderProjectionInvariant)
-                })),
+                PhysicalApiCommitOptions {
+                    continuation_action_id: None,
+                    manual_request: None,
+                    check: Some(Box::pin(async move {
+                        commit_current_project_directory(&check_state, &from)
+                            .await
+                            .map_err(SessionRuntimeError::ProviderProjectionInvariant)
+                    })),
+                },
                 |snapshot, _| async move {
                     preparation_started.send(()).unwrap();
                     resume_preparation.await.unwrap();

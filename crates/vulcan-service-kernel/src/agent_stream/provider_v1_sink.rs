@@ -74,9 +74,9 @@ use vulcan_workspace_store::workspace_store::{
 };
 
 use crate::session_runtime_registry_v1::{
-    SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
-    SessionMutationReceipt, SessionPreparedPhysicalRequest, SessionProviderProjectionSnapshot,
-    SessionRuntimeError, SuccessfulTurnSettlement,
+    PhysicalApiCommitOptions, SessionFlushReason, SessionHandle, SessionMutationAdmission,
+    SessionMutationChange, SessionMutationReceipt, SessionPreparedPhysicalRequest,
+    SessionProviderProjectionSnapshot, SessionRuntimeError, SuccessfulTurnSettlement,
 };
 use crate::state::SharedServiceBridgeState;
 
@@ -2281,10 +2281,12 @@ impl ProviderV1StreamSink {
                 purpose,
                 request,
                 locked_baseline,
-                continuation_action_id,
                 prepared_at_ms,
-                self.manual_compaction_request.as_ref(),
-                commit_check,
+                PhysicalApiCommitOptions {
+                    continuation_action_id,
+                    manual_request: self.manual_compaction_request.as_ref(),
+                    check: commit_check,
+                },
                 move |snapshot, preparation| async move {
                     // Plan and materialize all resources before the durable API permit, outside both session locks.
                     // 在可靠API许可之前、两把会话锁之外规划和物化全部资源。

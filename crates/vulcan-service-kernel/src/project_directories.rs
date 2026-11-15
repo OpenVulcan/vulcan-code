@@ -1354,8 +1354,7 @@ mod tests {
                 crate::SubmissionActivation::Foreground,
             )
             .await
-            .err()
-            .expect("directory must be checked before accepting input");
+            .expect_err("directory must be checked before accepting input");
             assert!(
                 failure.starts_with(
                     vulcan_host_tools::project_directory::PROJECT_DIRECTORY_UNAVAILABLE

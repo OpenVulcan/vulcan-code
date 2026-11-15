@@ -288,6 +288,20 @@ pub(crate) type PhysicalApiCommitCheck<'a> = std::pin::Pin<
     >,
 >;
 
+/// Carries the optional continuation and admission controls for a durable physical API start.
+/// 携带可靠物理 API 起始所需的可选续行与准入控制。
+pub(crate) struct PhysicalApiCommitOptions<'a> {
+    /// The user action to acknowledge when a continuation becomes durable.
+    /// 续行可靠落盘时需要确认的用户操作。
+    pub(crate) continuation_action_id: Option<ClientActionId>,
+    /// The pending manual compaction request that authorizes the summary route.
+    /// 授权摘要路由的待处理手动压缩请求。
+    pub(crate) manual_request: Option<&'a ManualCompactionPendingRequest>,
+    /// The host check that grants a lease before the physical dispatch commits.
+    /// 在物理分派提交前授予租约的宿主检查。
+    pub(crate) check: Option<PhysicalApiCommitCheck<'a>>,
+}
+
 /// Transport payload and projection proof built from one immutable V1 snapshot.
 /// 从一份不可变 V1 快照构建的传输载荷与投影证明。
 #[derive(Debug)]
@@ -1880,6 +1894,7 @@ impl SessionHandle {
     /// `purpose`、`request`、基线、动作及时间绑定候选请求，`build` 编码其可靠投影。
     /// `manual_request` authorizes the exact pending summary route. Returns a receipt, no permit for stale work, or an error.
     /// `manual_request` 授权精确待生效摘要路由。返回回执，过期时无许可，失败时报错。
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn prepare_physical_api_durable_with_manual_request<T, BuildFuture>(
         self: &Arc<Self>,
@@ -1906,10 +1921,12 @@ impl SessionHandle {
             purpose,
             request,
             candidate_locked_baseline,
-            continuation_action_id,
             now_ms,
-            manual_request,
-            None,
+            PhysicalApiCommitOptions {
+                continuation_action_id,
+                manual_request,
+                check: None,
+            },
             build,
         )
         .await
@@ -1919,15 +1936,17 @@ impl SessionHandle {
     /// 可选宿主绑定发放提交守卫后，准备并持久化启动物理请求。
     /// The synchronous guard still owns the binding while the exact session permit commits.
     /// 精确会话许可提交期间，同步守卫继续持有绑定。
+    /// The purpose, request, baseline and time identify the candidate. The options supply its admission, and `build` prepares the transport.
+    /// 用途、请求、基线与时间标识候选请求。选项提供准入控制，`build` 准备传输载荷。
+    /// Returns a durable start receipt, no receipt for a stale candidate, or a preparation error.
+    /// 返回可靠起始回执，候选过期时不返回回执，准备失败时返回错误。
     pub(crate) async fn prepare_physical_api_durable_with_commit_check<T, BuildFuture>(
         self: &Arc<Self>,
         purpose: ApiPurposeKind,
         request: ApiRequestSnapshot,
         candidate_locked_baseline: LockedBaselineProjection,
-        continuation_action_id: Option<ClientActionId>,
         now_ms: i64,
-        manual_request: Option<&ManualCompactionPendingRequest>,
-        check: Option<PhysicalApiCommitCheck<'_>>,
+        commit: PhysicalApiCommitOptions<'_>,
         build: impl FnOnce(
             SessionProviderProjectionSnapshot,
             Arc<SessionPhysicalPreparation>,
@@ -1941,6 +1960,11 @@ impl SessionHandle {
                 Output = Result<Option<SessionPreparedPhysicalRequest<T>>, SessionRuntimeError>,
             >,
     {
+        let PhysicalApiCommitOptions {
+            continuation_action_id,
+            manual_request,
+            check,
+        } = commit;
         // Serialize whole preparations without holding the synchronous document or persistence locks across I/O.
         // 串行化完整准备，不跨输入输出持有同步文档或持久化锁。
         let lease = Arc::new(

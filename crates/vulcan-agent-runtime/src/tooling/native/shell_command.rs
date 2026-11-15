@@ -1390,8 +1390,7 @@ mod process_option_tests {
             &PersistedRtkConfiguration::default(),
         )
         .await
-        .err()
-        .expect("missing project must reject the tool");
+        .expect_err("missing project must reject the tool");
         assert!(
             error
                 .message
@@ -1425,8 +1424,7 @@ mod process_option_tests {
             &PersistedRtkConfiguration::default(),
         )
         .await
-        .err()
-        .expect("missing cwd must reject the tool");
+        .expect_err("missing cwd must reject the tool");
         assert!(error.message.contains(&cwd.display().to_string()));
         assert!(error.message.contains("Ask the user"));
     }
