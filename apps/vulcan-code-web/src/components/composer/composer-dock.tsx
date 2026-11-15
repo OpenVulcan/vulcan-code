@@ -295,8 +295,8 @@ export function ComposerDock(props: {
   const dedicatedWizardShown = draftOwner !== null && draftState.kind === "dedicated";
   const startShown = props.emptyMode && !dedicatedWizardShown;
   const [dedicatedCreating, setDedicatedCreating] = React.useState(false);
-  // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
-  // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
+  // dockRef includes any wrapped dedicated status row in the transcript's bottom inset.
+  // dockRef 将专职状态区换行后的实际高度计入转录底部留白。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
   const onComposerDockHeightChange = props.onComposerDockHeightChange;
   // visibleSessionTodolist hides progress when no todolist exists or every step is complete.
@@ -353,7 +353,12 @@ export function ComposerDock(props: {
           state={draftState}
         />
       ) : null}
-      {persistedDedicated ? <DedicatedMemoryLockBar memory={persistedDedicated} running={props.isConversationRunning} /> : null}
+      {persistedDedicated ? (
+        <div className="vk-dock-memory-row">
+          {props.runtimeStatus}
+          <DedicatedMemoryLockBar memory={persistedDedicated} running={props.isConversationRunning} />
+        </div>
+      ) : null}
       {props.conversationId ? <React.Suspense fallback={null}><LazyFileWindowTaskbar sessionId={props.conversationId} /></React.Suspense> : null}
       {draftOwner && dedicatedWizardShown ? (
         <React.Suspense fallback={null}>
@@ -373,7 +378,7 @@ export function ComposerDock(props: {
       <>
       {/* The runtime cue sits directly above the composer stack so its tab grows out of that stack's top edge. */}
       {/* 运行提示紧贴输入区堆叠之上，使其标签从该堆叠的上边缘伸出。 */}
-      {props.runtimeStatus ? <div className="vk-dock-status">{props.runtimeStatus}</div> : null}
+      {!persistedDedicated && props.runtimeStatus ? <div className="vk-dock-status">{props.runtimeStatus}</div> : null}
       <DedicatedComposerContext.Provider value={persistedDedicated}>
       <ComposerPanel
         answerModeState={answerModeState}

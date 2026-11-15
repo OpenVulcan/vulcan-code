@@ -51,7 +51,7 @@ export function DedicatedMemoryLockBar(props: { memory: DedicatedMemorySelection
     <div className="vk-memory" data-locked={locked ? "true" : undefined}>
       <span className="vk-memory-status" role="status">
         <Icon size={14} aria-hidden="true" />
-        {locked ? t("composer.dedicated.lockedStatus") : t("composer.dedicated.unlockedStatus")}
+        <span>{locked ? t("composer.dedicated.lockedStatus") : t("composer.dedicated.unlockedStatus")}</span>
       </span>
       {locked && dock ? (
         <Button

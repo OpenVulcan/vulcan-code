@@ -14,6 +14,7 @@ import {
   createConversationEventWindowExternalStore,
 } from "@/state/conversation-event-window-react";
 import { THINKING_OVERLAY_EXIT_MS } from "@/components/conversation/chat-area/visual-state";
+import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import type { TransientReasoningStatus } from "@/types";
 
@@ -118,6 +119,11 @@ vi.mock("@/components/conversation/chat-area/composer-dock-layer", () => ({
 }));
 vi.mock("@/components/conversation/conversation-find-bar", () => ({ ConversationFindBar: () => null }));
 vi.mock("@/components/conversation/conversation-generation-dialog-v1", () => ({ ConversationGenerationDialogV1: () => null }));
+vi.mock("@/components/composer/composer-panel", () => ({
+  ComposerPanel: () => <div className="vk-composer" />,
+  ComposerSessionProgressCapsule: () => null,
+}));
+vi.mock("@/components/file-windows/file-window-taskbar", () => ({ default: () => null }));
 
 const { ChatArea } = await import("@/components/conversation/chat-area");
 
@@ -165,7 +171,7 @@ describe("session runtime cue placement", () => {
   afterEach(async () => {
     await React.act(async () => root.unmount());
     host.remove();
-    eventWindow = { ...eventWindow, owner: initialOwner, events: initialEvents };
+    eventWindow = { ...eventWindow, owner: initialOwner, events: initialEvents, session_config: null };
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -205,6 +211,45 @@ describe("session runtime cue placement", () => {
   it("shows no cue while the phase has none", async () => {
     await render(chatAreaProps("toolRunning"));
     expect(host.querySelector("[data-runtime-cue]")).toBeNull();
+  });
+
+  // Use the real dock so the test exercises how the dedicated memory controls and cue share space.
+  // 使用真实停靠层，验证专职记忆控件与运行提示如何共用布局区域。
+  it("places the dedicated runtime cue beside the memory strip until the cue goes away", async () => {
+    // Only the selected session's hydrated dedicated profile enables this layout.
+    // 仅选中会话已加载的专职配置启用此布局。
+    eventWindow = { ...eventWindow, session_config: {
+      answer_mode: { mode: "standard", revision: 0, prepared: null },
+      permission_mode: "workspace_write",
+      current_request: { provider: null, connection_id: null, model: null, thinking_level: null, temperature: null, set_at_ms: null },
+      next_request: null,
+      context_window_selection: null,
+      dedicated: { tool_access: "none", base_prompt: "Translate", locked_spans: [{ locked_at_seq: 1, unlocked_at_seq: null }] },
+    } };
+    // The real layer supplies composer props while the editor and file windows stay outside this test.
+    // 真实输入区层提供组件参数；编辑器和文件窗口不参与此测试。
+    const { ChatAreaComposerDockLayer } = await vi.importActual<typeof import("@/components/conversation/chat-area/composer-dock-layer")>("@/components/conversation/chat-area/composer-dock-layer");
+    // Render only the dock with the selected session's event window and the given runtime cue.
+    // 使用选中会话的事件窗口和给定运行提示，仅渲染停靠层。
+    async function renderDock(runtimeStatus: React.ReactNode) {
+      await React.act(async () => root.render(
+        <ConversationEventWindowExternalStoreProvider store={eventWindowStore}>
+          <I18nProvider initialLocale="en-US">
+            <ChatAreaComposerDockLayer chatAreaProps={chatAreaProps("requesting")} projectId={null} conversationId="test-playwright"
+              isEmptyConversation={false} startProjectName="" isConversationRunning={runtimeStatus !== null} showScrollToBottom={false}
+              todolistStatusHost={null} sessionTodolist={null} thinkingDisplayMode={DEFAULT_THINKING_DISPLAY_MODE} sessionReviewSummary={null}
+              onComposerDockHeightChange={vi.fn()} runtimeStatus={runtimeStatus} onScrollToBottom={vi.fn()}
+              onThinkingDisplayModeChange={vi.fn()} onSubmitPrompt={async () => true} />
+          </I18nProvider>
+        </ConversationEventWindowExternalStoreProvider>,
+      ));
+    }
+    await renderDock(<div className="vk-runtime-cue" data-runtime-cue="" />);
+    expect(host.querySelector("[data-runtime-cue] + .vk-memory[data-locked]")).not.toBeNull();
+    expect(host.querySelector(".vk-dock-status")).toBeNull();
+    await renderDock(null);
+    expect(host.querySelector("[data-runtime-cue]")).toBeNull();
+    expect(host.querySelector<HTMLButtonElement>(".vk-memory button")?.disabled).toBe(false);
   });
 
   it("keeps a reasoning status in the transcript and suppresses the floating cue", async () => {

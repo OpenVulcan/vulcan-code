@@ -344,17 +344,20 @@
 /* 待发送提示词与会话目标贴在输入区上边缘，比输入区略窄。 */
 .vk-queue,
 .vk-goal,
-.vk-memory {
+.vk-dock-memory-row {
   width: 92%;
   align-self: center;
   margin-bottom: calc(var(--vk-u) * -2.5);
+}
+.vk-queue,
+.vk-goal,
+.vk-memory {
   border: var(--vk-bw) solid var(--vk-line);
   border-bottom: 0;
   background: var(--vk-panel);
   pointer-events: auto;
 }
-.vk-queue + .vk-goal,
-:is(.vk-queue, .vk-goal) + .vk-memory { border-top-color: var(--vk-line-soft); }
+.vk-queue + .vk-goal { border-top-color: var(--vk-line-soft); }
 .vk-queue { padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2) 0; }
 .vk-queue-list { display: grid; overflow: hidden; }
 .vk-queue-row {
@@ -409,7 +412,18 @@
 
 /* Dedicated sessions: the memory lock strip of a created assistant tints ember while memory is locked. */
 /* 专职会话：已创建助手的记忆锁定条在记忆锁定时染上余烬色。 */
+.vk-dock-memory-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  column-gap: calc(var(--vk-u) * 2);
+}
+/* Give the request cue its own width; wrap before the memory controls would overlap. */
+/* 为运行提示留出独立宽度；空间不足时换行，避免覆盖记忆控件。 */
+.vk-dock-memory-row > .vk-runtime-cue { max-width: 100%; }
 .vk-memory {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: calc(var(--vk-u) * 7.5);
   display: flex;
   align-items: center;
@@ -419,7 +433,9 @@
   font-size: var(--vk-fs-sm);
 }
 .vk-memory[data-locked] { border-color: color-mix(in srgb, var(--vk-ember) 40%, var(--vk-line)); background: color-mix(in srgb, var(--vk-ember) 6%, var(--vk-panel)); box-shadow: inset 0 2px 0 var(--vk-ember); }
-.vk-memory-status { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-memory-status { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; margin-right: auto; }
+.vk-memory-status > svg { flex: none; }
+.vk-memory-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vk-memory[data-locked] .vk-memory-status { color: var(--vk-ember-ink); font-weight: 500; }
 /* An unsent draft carries a free row of choices above the card: project, session kind, tool access. */
 /* 未发送的草稿在卡片上方带有一行独立选项：项目、会话种类、工具开放方式。 */
