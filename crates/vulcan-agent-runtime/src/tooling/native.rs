@@ -245,7 +245,7 @@ mod markdown_memory;
 mod prompt_skill;
 mod registry;
 mod session_mcp;
-mod shell_command;
+pub(crate) mod shell_command;
 mod shell_command_live;
 pub(crate) mod shell_job;
 pub(crate) use apply_patch::*;

@@ -228,8 +228,13 @@ pub fn build_vulcan_tools_manager(
                     {
                         vulcan_host_tools::project_directory::require_bound_project_directory(
                             root,
-                            volume?.as_deref(),
-                        )?;
+                            volume
+                                .map_err(
+                                    crate::tooling::native::shell_command::shell_directory_error,
+                                )?
+                                .as_deref(),
+                        )
+                        .map_err(crate::tooling::native::shell_command::shell_directory_error)?;
                     }
                     catalog
                         .invoke(

@@ -1152,10 +1152,18 @@ pub(crate) fn build_shell_command_host_payload(
     })
 }
 
+/// Converts a directory diagnostic into an actionable model-facing tool error.
+/// 将目录诊断转为模型可处理的工具错误。
+pub(crate) fn shell_directory_error(error: String) -> String {
+    format!(
+        "{error}. Ask the user whether to restore the unavailable directory or choose another directory. Wait for the user's answer before retrying this command."
+    )
+}
+
 /// Executes one `shell_command` invocation after applying the generic plugin transform chain.
 /// 在应用通用插件转换链后执行一次 `shell_command` 调用。
 pub(crate) async fn execute_shell_command_tool(
-    request: NativeToolExecutionRequest,
+    mut request: NativeToolExecutionRequest,
     shell_support: &HostCommandShellSupport,
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
     rtk: &PersistedRtkConfiguration,
@@ -1164,15 +1172,19 @@ pub(crate) async fn execute_shell_command_tool(
     // 在解析命令可选 cwd 前先校验绑定项目。
     if let Some(root) = request.workspace_root.as_deref() {
         vulcan_host_tools::project_directory::require_project_directory(root)
-            .map_err(NativeToolError::new)?;
+            .map_err(|error| NativeToolError::new(shell_directory_error(error)))?;
     }
-    let vulcan_environment = child_process_environment(&request).await?;
     let job_context = ShellCommandJobContext::of_request(&request);
-    let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
+    let parsed_args = parse_shell_command_tool_arguments(std::mem::take(&mut request.arguments))?;
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
         parsed_args.cwd.as_deref(),
     )?;
+    // Validate the resolved cwd before any shell hook, child environment lookup, or process launch.
+    // 在 Shell Hook、子进程环境查询或进程启动前校验解析后的 cwd。
+    vulcan_host_tools::project_directory::require_project_directory(&effective_cwd)
+        .map_err(|error| NativeToolError::new(shell_directory_error(error)))?;
+    let vulcan_environment = child_process_environment(&request).await?;
     let spill_root = resolve_shell_command_spill_root(
         request.spill_root.as_deref(),
         request.workspace_root.as_deref(),
@@ -1284,6 +1296,37 @@ mod process_option_tests {
                 .starts_with(vulcan_host_tools::project_directory::PROJECT_DIRECTORY_UNAVAILABLE)
         );
         assert!(error.message.contains(&root.display().to_string()));
+        assert!(error.message.contains("Ask the user"));
+    }
+
+    /// A valid project cannot launch a command whose explicit cwd was removed.
+    /// 项目有效时，仍不能启动显式 cwd 已被移除的命令。
+    #[tokio::test]
+    async fn shell_rejects_a_removed_explicit_cwd() {
+        use crate::tooling::native::tests::test_native_request;
+
+        // Keep the project available while the requested relative directory is missing.
+        // 保持项目可用，同时让请求的相对目录缺失。
+        let project = tempfile::tempdir().unwrap();
+        let cwd = project.path().join("removed");
+        let mut request = test_native_request(json!({
+            "command": "echo unexpected",
+            "title": "Check cwd admission",
+            "cwd": "removed",
+        }));
+        request.workspace_root = Some(project.path().to_path_buf());
+        let shell_support = HostCommandShellSupport::from_test_parts(Vec::new(), None);
+        let error = execute_shell_command_tool(
+            request,
+            &shell_support,
+            None,
+            &PersistedRtkConfiguration::default(),
+        )
+        .await
+        .err()
+        .expect("missing cwd must reject the tool");
+        assert!(error.message.contains(&cwd.display().to_string()));
+        assert!(error.message.contains("Ask the user"));
     }
 
     use super::*;

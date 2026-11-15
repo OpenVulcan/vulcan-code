@@ -121,12 +121,22 @@ pub(crate) async fn execute_terminal_session_start_action(
     // A terminal launch must honor the bound project even when cwd points elsewhere.
     // 即使 cwd 指向其他目录，终端启动也必须遵守绑定项目目录。
     if let Some(root) = request.workspace_root.as_deref() {
-        vulcan_host_tools::project_directory::require_project_directory(root)
-            .map_err(NativeToolError::new)?;
+        vulcan_host_tools::project_directory::require_project_directory(root).map_err(|error| {
+            NativeToolError::new(
+                crate::tooling::native::shell_command::shell_directory_error(error),
+            )
+        })?;
     }
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
         parsed_args.cwd.as_deref(),
+    )?;
+    vulcan_host_tools::project_directory::require_project_directory(&effective_cwd).map_err(
+        |error| {
+            NativeToolError::new(
+                crate::tooling::native::shell_command::shell_directory_error(error),
+            )
+        },
     )?;
     let spill_root = resolve_shell_command_spill_root(
         request.spill_root.as_deref(),

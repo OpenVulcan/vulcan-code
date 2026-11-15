@@ -678,17 +678,6 @@ fn spawn_agent_stream_task_with_restart_state(
     mut restart_state: StreamRestartState,
 ) {
     let session_id = request.session_id;
-    // Keep the exact execution path across physical requests, including requests after tools.
-    // 跨实际请求保留精确执行路径，包括工具完成后的请求。
-    let workspace_path = request.workspace_path.clone();
-    // Look up the mount by the execution's exact project id, never by the current UI selection.
-    // 按执行请求的精确项目标识查找卷，避免取到当前 UI 选中的其他项目。
-    let workspace_volume = request.project_id.as_deref().and_then(|project_id| {
-        let guard = state.lock().ok()?;
-        let snapshot = guard.workspace_snapshot.as_ref()?;
-        let project = crate::workspace_task_project_for_project_id(snapshot, project_id)?;
-        project.root_volume_id.clone()
-    });
     // expectedKernelGenerationOption retains the existing terminalization interface while registration uses the required generation directly.
     // expectedKernelGenerationOption 保留现有终态化接口，同时登记直接使用必需代际。
     let expected_kernel_generation_option = Some(expected_kernel_generation);
@@ -878,44 +867,8 @@ fn spawn_agent_stream_task_with_restart_state(
         let mut provider_retry_status_active = false;
         // stream_exit_reason makes every polling-loop terminal path explicit without a shadow completion boolean.
         // stream_exit_reason 显式表达每条轮询循环终止路径，不再使用影子完成布尔值。
-        let mut directory_error = None;
-        // Poll the saved project while a Provider stream or tool is still running. Keep the
-        // filesystem I/O off the async worker and use the same generation-owned terminal path.
-        // 在 Provider 流或工具仍运行时检查保存的项目。文件系统 I/O 在异步工作线程外执行，
-        // 并沿用相同的代际所有权终止流程。
-        let watch_directory = async {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let path = workspace_path.clone();
-                let volume = workspace_volume.clone();
-                match tokio::task::spawn_blocking(move || {
-                    vulcan_host_tools::project_directory::require_bound_project_directory(
-                        std::path::Path::new(&path),
-                        volume.as_deref(),
-                    )
-                })
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => break error,
-                    Err(error) => {
-                        break format!(
-                            "Could not check project directory `{workspace_path}`: {error}"
-                        );
-                    }
-                }
-            }
-        };
-        tokio::pin!(watch_directory);
         let stream_exit_reason = loop {
-            let event = tokio::select! {
-                error = &mut watch_directory, if request.project_id.is_some() && !workspace_path.is_empty() => {
-                    directory_error = Some(error);
-                    break StreamTaskExitReason::ProjectDirectoryUnavailable;
-                }
-                event = stream.next() => event,
-            };
-            let Some(event) = event else {
+            let Some(event) = stream.next().await else {
                 break StreamTaskExitReason::StreamExhausted;
             };
             if !webui_stream_event_matches_kernel_generation(
@@ -968,21 +921,11 @@ fn spawn_agent_stream_task_with_restart_state(
                 } => {
                     let event_kind = event.kind;
                     let lifecycle = event.v1_lifecycle.clone();
-                    // Reject locally before the next Provider call if the directory disappeared mid-turn.
-                    // 若目录在回合中消失，在下一次 Provider 调用前本地拒绝。
-                    let directory_check = if workspace_path.is_empty() {
-                        Ok(())
-                    } else {
-                        vulcan_host_tools::project_directory::require_bound_project_directory(
-                            std::path::Path::new(&workspace_path),
-                            workspace_volume.as_deref(),
-                        )
-                    };
                     // Once any prior V1 durability checkpoint fails, reject later preparation locally.
                     // 任一既有 V1 可靠性检查点失败后，在本地拒绝后续准备，绝不再次进入唯一 owner。
-                    let mut permit_result = if let Err(error) = directory_check {
-                        Err(error)
-                    } else if let Some(error) = prepared_retry_checkpoint_error.as_ref() {
+                    let mut permit_result = if let Some(error) =
+                        prepared_retry_checkpoint_error.as_ref()
+                    {
                         Err(error.clone())
                     } else {
                         match (provider_v1_sink.as_mut(), lifecycle) {
@@ -1825,9 +1768,6 @@ fn spawn_agent_stream_task_with_restart_state(
                 }
             }
         };
-        // Releasing the stream cancels further execution before terminal settlement touches storage.
-        // 在终态结算访问存储前释放流以取消后续执行。
-        drop(stream);
         if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
             provider_telemetry_guard.forward(event);
             if let Err(error) = crate::session_plan_runtime::emit_session_addons_changed_delta(
@@ -1878,9 +1818,6 @@ fn spawn_agent_stream_task_with_restart_state(
             // V1 API 终态或永久显示事实是唯一可靠重试权威。
             let reason_code = match stream_exit_reason {
                 StreamTaskExitReason::StreamExhausted => "stream_exhausted",
-                StreamTaskExitReason::ProjectDirectoryUnavailable => {
-                    "project_directory_unavailable"
-                }
                 StreamTaskExitReason::StaleKernelGeneration => "stale_kernel_generation",
                 StreamTaskExitReason::FinishedEventHandled => "finished_event_already_handled",
             };
@@ -1889,7 +1826,7 @@ fn spawn_agent_stream_task_with_restart_state(
                 session_id,
                 false,
                 reason_code,
-                directory_error,
+                None,
                 terminal_persistence_guard,
                 restart_state.terminal_scope(),
             )

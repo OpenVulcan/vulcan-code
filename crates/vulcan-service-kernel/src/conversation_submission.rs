@@ -2164,6 +2164,17 @@ async fn recover_accepted_queued_turn(
             "The selected queued input cannot dispatch while the session is stopped.",
         ));
     }
+    // Explicit queued recovery must report the same directory error as other Continue actions.
+    // 显式恢复排队输入时，返回与其他继续操作相同的目录错误。
+    let locator = handle
+        .storage_locator()
+        .map_err(|error| error.to_string())?;
+    let project =
+        crate::project_directories::active_project_directory_owner(state, locator.project_id())?;
+    vulcan_host_tools::project_directory::require_bound_project_directory(
+        std::path::Path::new(&project.path),
+        project.root_volume_id.as_deref(),
+    )?;
     // Read a valid receipt before the attempt so a projection issue does not repeat admitted work.
     // 尝试前读取有效回执，避免投影问题使已接收工作被重复派发。
     let (revision, phase) = queue::current_queued_submission_ack_state(state, session_id)?;
