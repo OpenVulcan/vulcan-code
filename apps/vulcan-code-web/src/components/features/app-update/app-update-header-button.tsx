@@ -19,9 +19,9 @@ export function AppUpdateHeaderButton() {
   const [open, setOpen] = React.useState(false);
   const version = pendingUpdateVersion(host?.snapshot ?? null);
   if (!host || !version) return null;
-  const hint = host.snapshot?.offer
-    ? formatMessage(t("settings.appUpdate.available"), { version })
-    : formatMessage(t("settings.appUpdate.ready"), { version });
+  const hint = host.snapshot?.readyVersion === version
+    ? formatMessage(t("settings.appUpdate.ready"), { version })
+    : formatMessage(t("settings.appUpdate.available"), { version });
   // The entry sits in the title strip, whose double click maximizes the window; double clicks on the
   // entry or inside its dialog (a portal that still bubbles through React) stay here.
   // 入口位于标题条中，标题条双击会最大化窗口；入口及其对话框（门户仍按 React 树冒泡）内的双击在此截止。

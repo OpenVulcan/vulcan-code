@@ -20,12 +20,12 @@ export interface AppUpdateHost {
 // AppUpdateContext 承载工作台的更新器状态；工作台之外为空。
 export const AppUpdateContext = createContext<AppUpdateHost | null>(null);
 
-// pendingUpdateVersion names the version the user can move to: the offered one first (the Core only
-// offers a version newer than a ready one), otherwise the version ready to start. Returns null when
-// there is nothing to update or this copy cannot update.
-// pendingUpdateVersion 给出用户可以升级到的版本：优先提议的版本（Core 只提议高于已就绪版本的版本），
-// 否则为已就绪待启动的版本。无可更新内容或本副本无法更新时返回 null。
+// pendingUpdateVersion returns the version worth notifying the user about.
+// pendingUpdateVersion 返回用于提示用户的版本。
 export function pendingUpdateVersion(snapshot: AppUpdateSnapshot | null): string | null {
   if (!snapshot || snapshot.unavailableReason) return null;
+  if (snapshot.settings.autoDownload && snapshot.offer?.installable) {
+    return snapshot.activity === "downloading" ? null : snapshot.readyVersion;
+  }
   return snapshot.offer?.version ?? snapshot.readyVersion;
 }

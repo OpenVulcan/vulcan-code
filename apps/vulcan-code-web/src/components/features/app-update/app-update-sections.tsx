@@ -166,14 +166,17 @@ export function AppUpdateOfferRows(props: { snapshot: AppUpdateSnapshot; calls: 
   const { snapshot, calls } = props;
   const busy = snapshot.activity !== "idle";
   const offer = snapshot.offer;
+  // Capture the version shown at the time the user confirms, including across the background-job check.
+  // 固定用户确认时显示的版本，后台任务计数期间也沿用同一版本。
+  const ready = snapshot.readyVersion;
   return <>
-    {snapshot.readyVersion ? (
+    {ready ? (
       <section className="vk-form-pref" data-app-update-ready>
         <div className="vk-form-pref-text">
-          <strong>{formatMessage(t("settings.appUpdate.ready"), { version: snapshot.readyVersion })}</strong>
+          <strong>{formatMessage(t("settings.appUpdate.ready"), { version: ready })}</strong>
           <p className="vk-form-note">{t("settings.appUpdate.readyHint")}</p>
         </div>
-        <Button disabled={busy} onClick={() => void restartAfterBackgroundJobCheck(() => void calls.run(restartToUpdate))} size="sm">
+        <Button disabled={busy} onClick={() => void restartAfterBackgroundJobCheck(() => void calls.run(() => restartToUpdate(ready)))} size="sm">
           {snapshot.activity === "restarting" ? t("settings.appUpdate.restarting") : t("settings.appUpdate.restart")}
         </Button>
       </section>
@@ -183,7 +186,9 @@ export function AppUpdateOfferRows(props: { snapshot: AppUpdateSnapshot; calls: 
       <section className="vk-form-pref" data-app-update-offer>
         <div className="vk-form-pref-text">
           <strong>
-            {formatMessage(t("settings.appUpdate.available"), { version: offer.version })}{" "}
+            {snapshot.activity === "downloading" && snapshot.settings.autoDownload
+              ? `${t("settings.appUpdate.downloading")} · ${offer.version}`
+              : formatMessage(t("settings.appUpdate.available"), { version: offer.version })}{" "}
             {offer.channel === "preview" ? <Badge variant="warning">{t("settings.appUpdate.preview")}</Badge> : null}
           </strong>
           <p className="vk-form-note">

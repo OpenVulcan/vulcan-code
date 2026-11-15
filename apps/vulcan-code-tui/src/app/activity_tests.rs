@@ -185,10 +185,10 @@ fn restart_waits_for_the_background_command_count() {
         (Err(()), false),
     ] {
         let (mut app, observer) = connected_app();
-        perform(&mut app, UiAction::RestartToUpdate);
+        perform(&mut app, UiAction::RestartToUpdate(String::from("1.2.3")));
         let count = sent(&observer).remove(0);
         assert_eq!(count.method, "service_running_shell_job_count");
-        perform(&mut app, UiAction::RestartToUpdate);
+        perform(&mut app, UiAction::RestartToUpdate(String::from("1.2.4")));
         assert!(sent(&observer).is_empty(), "one count at a time");
         match result {
             Ok(value) => app.apply(BackendEvent::Slot {
@@ -212,7 +212,9 @@ fn restart_waits_for_the_background_command_count() {
         }
         let calls = sent(&observer);
         assert!(
-            calls.iter().any(|call| call.method == restart),
+            calls
+                .iter()
+                .any(|call| call.method == restart && call.param("/expectedVersion") == "1.2.3"),
             "the restart is sent"
         );
     }

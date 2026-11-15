@@ -36,7 +36,7 @@ function snapshot(overrides: Partial<AppUpdateSnapshot> = {}): AppUpdateSnapshot
   return {
     currentVersion: "0.1.4",
     unavailableReason: null,
-    settings: { preview: false, route: "auto", checkInterval: "sixHours" },
+    settings: { preview: false, route: "auto", checkInterval: "oneHour", autoDownload: true },
     activity: "idle",
     progress: null,
     lastCheckedAt: null,
@@ -171,8 +171,10 @@ describe("AppUpdateSettingsArea", () => {
 
   it("saves a changed setting together with the unchanged one", async () => {
     await render(snapshot());
-    service.saveAppUpdateSettings.mockResolvedValue(snapshot({ settings: { preview: true, route: "auto", checkInterval: "sixHours" } }));
-    await act(async () => { container.querySelector<HTMLButtonElement>("[role=switch]")?.click(); });
-    expect(service.saveAppUpdateSettings).toHaveBeenCalledWith({ preview: true, route: "auto", checkInterval: "sixHours" });
+    service.saveAppUpdateSettings.mockResolvedValue(snapshot({ settings: { preview: true, route: "auto", checkInterval: "oneHour", autoDownload: true } }));
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="settings.appUpdate.previewChannel"]')?.click();
+    });
+    expect(service.saveAppUpdateSettings).toHaveBeenCalledWith({ preview: true, route: "auto", checkInterval: "oneHour", autoDownload: true });
   });
 });

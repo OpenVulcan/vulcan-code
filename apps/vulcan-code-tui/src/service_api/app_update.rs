@@ -42,10 +42,15 @@ pub fn cancel_app_update() -> ServiceCall {
     updater_call("cancel_app_update", "service_cancel_app_update")
 }
 
-/// Builds the request for `service_restart_to_update`.
-/// 构建 `service_restart_to_update` 的请求。
-pub fn restart_to_update() -> ServiceCall {
-    updater_call("restart_to_update", "service_restart_to_update")
+/// Builds a restart request for the exact `version` displayed at confirmation.
+/// 为确认时显示的确切 `version` 构建重启请求。
+pub fn restart_to_update(version: &str) -> ServiceCall {
+    ServiceCall::mutate(
+        "restart_to_update",
+        "service_restart_to_update",
+        json!({ "expectedVersion": version }),
+        &[Slot::AppUpdate],
+    )
 }
 
 /// Builds the request for `service_repair_app_install`.

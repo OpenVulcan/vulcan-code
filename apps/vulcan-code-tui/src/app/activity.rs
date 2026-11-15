@@ -137,9 +137,9 @@ pub struct ActivityState {
     /// Page shown in the previous tick, so becoming visible re-reads it.
     /// 上一次计时时显示的页面，使变为可见时重新读取。
     visible: Option<ActivityPage>,
-    /// A restart waits for the running background command count.
-    /// 一次重启正在等待运行中后台命令的计数。
-    restart_pending: bool,
+    /// The confirmed target version waiting for the background command count.
+    /// 等待后台命令计数的已确认目标版本。
+    restart_pending: Option<String>,
 }
 
 impl ActivityState {
@@ -332,7 +332,7 @@ pub fn slot_is_current(app: &App, slot: Slot, call: &ServiceCall) -> Option<bool
             call.param("/sessionId").as_str() == app.activity.session_id.as_deref()
         }
         Slot::ShellJobOutput | Slot::ShellJobOutputEarlier => log_matches(),
-        Slot::RunningShellJobCount => app.activity.restart_pending,
+        Slot::RunningShellJobCount => app.activity.restart_pending.is_some(),
         _ => return None,
     })
 }
@@ -381,7 +381,6 @@ pub fn slot_arrived(app: &mut App, slot: Slot, call: &ServiceCall) {
             }
         }
         Slot::RunningShellJobCount => {
-            app.activity.restart_pending = false;
             restart_after_count(app, value.as_u64().unwrap_or(0));
         }
         _ => {}
@@ -402,7 +401,6 @@ pub fn slot_failed(app: &mut App, slot: Slot, message: &str) {
         // The count is a courtesy; a failed count must not block an update.
         // 该计数只是提醒；计数失败不得阻止更新。
         Slot::RunningShellJobCount => {
-            app.activity.restart_pending = false;
             restart_after_count(app, 0);
         }
         _ => {}
@@ -578,13 +576,13 @@ fn open_log(app: &mut App, job_id: &str) {
     action::perform(app, UiAction::Send(Command::Call(call)));
 }
 
-/// Restarts to update, first counting the running background commands that a restart stops.
-/// 重启以更新，先统计重启会停止的运行中后台命令。
-pub fn restart_to_update(app: &mut App) {
-    if app.activity.restart_pending {
+/// Requests a restart into `version`, first counting the background commands that would stop.
+/// 请求重启到 `version`，先统计将停止的后台命令。
+pub fn restart_to_update(app: &mut App, version: String) {
+    if app.activity.restart_pending.is_some() {
         return;
     }
-    app.activity.restart_pending = true;
+    app.activity.restart_pending = Some(version);
     action::perform(
         app,
         UiAction::Send(Command::Call(api::count_running_shell_jobs())),
@@ -594,8 +592,11 @@ pub fn restart_to_update(app: &mut App) {
 /// Restarts now with nothing running, else asks first how many commands will stop.
 /// 没有运行中的命令时立即重启，否则先告知将停止的命令数并请求确认。
 fn restart_after_count(app: &mut App, running: u64) {
+    let Some(version) = app.activity.restart_pending.take() else {
+        return;
+    };
     let restart = UiAction::Send(Command::Call(
-        crate::service_api::app_update::restart_to_update(),
+        crate::service_api::app_update::restart_to_update(&version),
     ));
     if running == 0 {
         action::perform(app, restart);

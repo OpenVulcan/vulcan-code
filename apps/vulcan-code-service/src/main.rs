@@ -57,16 +57,25 @@ fn main() {
     // Finishing an update through the setup program runs after the stopped service, never as one.
     // 经安装器完成更新在已停止的服务之后运行，本身绝不作为服务运行。
     match setup_update::requested(&args) {
-        Ok(Some(request)) => match setup_update::run(&request) {
-            Ok(summary) => {
-                println!("{summary}");
-                return;
-            }
-            Err(error) => {
+        Ok(Some(request)) => {
+            // The helper must wait on the same isolated data root as the stopped Core.
+            // 辅助进程必须等待与已停止 Core 相同的隔离数据根。
+            #[cfg(feature = "test-support")]
+            if let Err(error) = service_runtime::install_isolated_test_root_from_args(&args) {
                 eprintln!("[vulcan-code-service] {error}");
-                std::process::exit(1);
+                std::process::exit(2);
             }
-        },
+            match setup_update::run(&request) {
+                Ok(summary) => {
+                    println!("{summary}");
+                    return;
+                }
+                Err(error) => {
+                    eprintln!("[vulcan-code-service] {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Ok(None) => {}
         Err(error) => {
             eprintln!("[vulcan-code-service] {error}");

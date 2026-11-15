@@ -5,8 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use vulcan_app_update::{AppUpdater, RestartPlan, UpdateHost};
 use vulcan_provider_config::config::{
-    PersistedAppUpdateCheckInterval, PersistedAppUpdateConfiguration, PersistedAppUpdateRoute,
-    ProviderConfigurationFile,
+    PersistedAppUpdateConfiguration, PersistedAppUpdateRoute, ProviderConfigurationFile,
 };
 use vulcan_service_api::{
     AppUpdateCheckInterval, AppUpdateRouteSetting, AppUpdateSettings, AppUpdateSnapshot,
@@ -65,15 +64,10 @@ pub(crate) fn app_update_settings(configuration: &ProviderConfigurationFile) -> 
             Some(PersistedAppUpdateRoute::International) => AppUpdateRouteSetting::International,
             Some(PersistedAppUpdateRoute::China) => AppUpdateRouteSetting::China,
         },
-        check_interval: match saved.check_interval {
-            None => AppUpdateCheckInterval::default(),
-            Some(PersistedAppUpdateCheckInterval::OneHour) => AppUpdateCheckInterval::OneHour,
-            Some(PersistedAppUpdateCheckInterval::SixHours) => AppUpdateCheckInterval::SixHours,
-            Some(PersistedAppUpdateCheckInterval::TwelveHours) => {
-                AppUpdateCheckInterval::TwelveHours
-            }
-            Some(PersistedAppUpdateCheckInterval::OneDay) => AppUpdateCheckInterval::OneDay,
-        },
+        check_interval: AppUpdateCheckInterval::OneHour,
+        auto_download: saved
+            .auto_download
+            .unwrap_or_else(|| AppUpdateSettings::default().auto_download),
     }
 }
 
@@ -145,8 +139,10 @@ pub(crate) fn service_cancel_app_update() -> Result<AppUpdateSnapshot, String> {
 
 /// Restarts into the version made ready, or runs its installer.
 /// 重启到已就绪的版本，或运行其安装包。
-pub(crate) fn service_restart_to_update() -> Result<AppUpdateSnapshot, String> {
-    updater()?.restart()
+pub(crate) fn service_restart_to_update(
+    expected: Option<String>,
+) -> Result<AppUpdateSnapshot, String> {
+    updater()?.restart(expected.as_deref())
 }
 
 /// Starts repairing the running version.
@@ -180,7 +176,10 @@ pub(crate) async fn service_save_app_update_settings(
         &state,
         "Failed to save the update settings",
         |configuration| {
-            configuration.app_update = persisted_settings(&settings);
+            configuration.app_update = PersistedAppUpdateConfiguration {
+                check_interval: configuration.app_update.check_interval,
+                ..persisted_settings(&settings)
+            };
             Ok(())
         },
         |_, _| (),
@@ -201,20 +200,16 @@ fn persisted_settings(settings: &AppUpdateSettings) -> PersistedAppUpdateConfigu
             AppUpdateRouteSetting::International => PersistedAppUpdateRoute::International,
             AppUpdateRouteSetting::China => PersistedAppUpdateRoute::China,
         }),
-        check_interval: (settings.check_interval != defaults.check_interval).then_some(
-            match settings.check_interval {
-                AppUpdateCheckInterval::OneHour => PersistedAppUpdateCheckInterval::OneHour,
-                AppUpdateCheckInterval::SixHours => PersistedAppUpdateCheckInterval::SixHours,
-                AppUpdateCheckInterval::TwelveHours => PersistedAppUpdateCheckInterval::TwelveHours,
-                AppUpdateCheckInterval::OneDay => PersistedAppUpdateCheckInterval::OneDay,
-            },
-        ),
+        check_interval: None,
+        auto_download: (settings.auto_download != defaults.auto_download)
+            .then_some(settings.auto_download),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_provider_config::config::PersistedAppUpdateCheckInterval;
 
     /// Saving the defaults leaves nothing in the file; a changed choice is saved and read back.
     /// 保存默认值不会在文件中留下任何内容；改变的选择会被保存并读回。
@@ -224,7 +219,8 @@ mod tests {
         let chosen = AppUpdateSettings {
             preview: true,
             route: AppUpdateRouteSetting::International,
-            check_interval: AppUpdateCheckInterval::OneDay,
+            check_interval: AppUpdateCheckInterval::OneHour,
+            auto_download: false,
         };
         let configuration = ProviderConfigurationFile {
             app_update: persisted_settings(&chosen),
@@ -246,7 +242,8 @@ mod tests {
             app_update: PersistedAppUpdateConfiguration {
                 preview: Some(true),
                 route: Some(PersistedAppUpdateRoute::China),
-                check_interval: Some(PersistedAppUpdateCheckInterval::OneHour),
+                check_interval: Some(PersistedAppUpdateCheckInterval::OneDay),
+                auto_download: Some(false),
             },
             ..ProviderConfigurationFile::default()
         };
@@ -256,6 +253,7 @@ mod tests {
                 preview: true,
                 route: AppUpdateRouteSetting::China,
                 check_interval: AppUpdateCheckInterval::OneHour,
+                auto_download: false,
             }
         );
     }

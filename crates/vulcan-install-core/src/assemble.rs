@@ -92,6 +92,9 @@ pub struct Assembly<'r> {
     /// Version being assembled.
     /// 正在组装的版本。
     version: ReleaseVersion,
+    /// An already prepared version whose files may also satisfy this assembly.
+    /// 文件也可用于当前组装的已就绪版本。
+    prepared_version: Option<ReleaseVersion>,
     /// Its platform.
     /// 其平台。
     platform: Platform,
@@ -232,11 +235,19 @@ impl<'r> Assembly<'r> {
             root,
             _lock: lock,
             version: manifest.version.clone(),
+            prepared_version: None,
             platform: manifest.platform,
             install_epoch: manifest.install_epoch,
             components,
             entries,
         })
+    }
+
+    /// Adds `version` as a reuse source alongside the current version.
+    /// 将 `version` 加入复用来源，与当前版本一起使用。
+    pub fn reuse_prepared(mut self, version: &ReleaseVersion) -> Self {
+        self.prepared_version = Some(version.clone());
+        self
     }
 
     /// Places every directory, link and locally available file in the staging directory, plans the
@@ -267,11 +278,11 @@ impl<'r> Assembly<'r> {
             }
         }
 
-        let reuse = self.reusable_version()?;
+        let reuse = self.reusable_versions()?;
         let reusable = reuse
-            .as_ref()
-            .map(|(_, record)| record.files_by_digest())
-            .unwrap_or_default();
+            .iter()
+            .map(|(dir, record)| (dir, record.files_by_digest()))
+            .collect::<Vec<_>>();
         let mut placed: HashMap<Sha256Digest, (PathBuf, u32)> = HashMap::new();
         let mut pending: BTreeMap<(Sha256Digest, u64), FrameTarget> = BTreeMap::new();
         for entry in &self.entries {
@@ -297,18 +308,22 @@ impl<'r> Assembly<'r> {
                 link_or_copy(source, *source_mode, &target, *mode)?;
                 continue;
             }
-            let recorded = reusable
-                .get(sha256)
-                .filter(|recorded| recorded.size == *size);
-            if let (Some((dir, _)), Some(recorded)) = (&reuse, recorded) {
-                let source = native(dir, recorded.path);
-                if let Some(source_mode) =
-                    trusted_mode(&source, recorded.modified_ns, *size, *sha256)?
-                {
-                    link_or_copy(&source, source_mode, &target, *mode)?;
-                    placed.insert(*sha256, (target, *mode));
-                    continue;
+            let mut reused = false;
+            for (dir, recorded) in &reusable {
+                if let Some(recorded) = recorded.get(sha256).filter(|file| file.size == *size) {
+                    let source = native(dir, recorded.path);
+                    if let Some(source_mode) =
+                        trusted_mode(&source, recorded.modified_ns, *size, *sha256)?
+                    {
+                        link_or_copy(&source, source_mode, &target, *mode)?;
+                        reused = true;
+                        break;
+                    }
                 }
+            }
+            if reused {
+                placed.insert(*sha256, (target, *mode));
+                continue;
             }
             pending
                 .entry((*pack, *offset))
@@ -333,7 +348,7 @@ impl<'r> Assembly<'r> {
             return Err(FormatError::InsufficientSpace { needed, available });
         }
         Ok(PreparedAssembly {
-            ranges: plan_ranges(pending),
+            ranges: group_ranges(pending, self.prepared_version.is_none()),
             assembly: self,
             staging,
         })
@@ -357,21 +372,24 @@ impl<'r> Assembly<'r> {
         expected
     }
 
-    /// The current version's directory and record, when another version is current and recorded.
-    /// 当前版本的目录与记录（当前为另一版本且有记录时）。
-    fn reusable_version(&self) -> FormatResult<Option<(PathBuf, InstallRecord)>> {
-        let Some(current) = self.root.current_version()? else {
-            return Ok(None);
-        };
-        if current == self.version {
-            return Ok(None);
+    /// Returns recorded sources, preferring the current installation for shared contents.
+    /// 返回有安装记录的复用来源，共用文件优先取自当前安装。
+    fn reusable_versions(&self) -> FormatResult<Vec<(PathBuf, InstallRecord)>> {
+        let current = self.root.current_version()?;
+        let mut sources = Vec::new();
+        for version in current.iter().chain(
+            self.prepared_version
+                .iter()
+                .filter(|version| Some(*version) != current.as_ref()),
+        ) {
+            if version != &self.version {
+                let dir = self.root.version_dir(version);
+                if dir.join(RECORD_FILE_NAME).is_file() {
+                    sources.push((dir.clone(), InstallRecord::read(&dir)?));
+                }
+            }
         }
-        let dir = self.root.version_dir(&current);
-        if !dir.join(RECORD_FILE_NAME).is_file() {
-            return Ok(None);
-        }
-        let record = InstallRecord::read(&dir)?;
-        Ok(Some((dir, record)))
+        Ok(sources)
     }
 }
 
@@ -445,6 +463,15 @@ impl<'r> PreparedAssembly<'r> {
 /// 将所需帧分组为 Range 请求：某文件包所需字节超过其覆盖跨度的一半时整段获取；否则间隔不超过
 /// [`RANGE_MERGE_GAP_BYTES`] 的帧共用一个请求。
 pub(crate) fn plan_ranges(pending: BTreeMap<(Sha256Digest, u64), FrameTarget>) -> Vec<RangePlan> {
+    group_ranges(pending, true)
+}
+
+/// Groups adjacent frames, also permitting gaps when `allow_gaps` is enabled.
+/// 合并相邻的帧，仅在 `allow_gaps` 开启时允许跨越间隔。
+fn group_ranges(
+    pending: BTreeMap<(Sha256Digest, u64), FrameTarget>,
+    allow_gaps: bool,
+) -> Vec<RangePlan> {
     let mut by_pack: BTreeMap<Sha256Digest, Vec<FrameTarget>> = BTreeMap::new();
     for ((pack, _), frame) in pending {
         by_pack.entry(pack).or_default().push(frame);
@@ -461,14 +488,16 @@ pub(crate) fn plan_ranges(pending: BTreeMap<(Sha256Digest, u64), FrameTarget>) -
             .map(|frame| frame.offset + frame.length)
             .max()
             .unwrap_or(start);
-        let whole_span = !overlapping && needed.saturating_mul(2) > end - start;
+        let whole_span = allow_gaps && !overlapping && needed.saturating_mul(2) > end - start;
         let mut current: Option<RangePlan> = None;
         for frame in frames {
             let frame_end = frame.offset + frame.length;
             if let Some(range) = current.as_mut() {
                 let range_end = range.offset + range.length;
                 if frame.offset >= range_end
-                    && (whole_span || frame.offset - range_end <= RANGE_MERGE_GAP_BYTES)
+                    && (frame.offset == range_end
+                        || whole_span
+                        || (allow_gaps && frame.offset - range_end <= RANGE_MERGE_GAP_BYTES))
                 {
                     range.length = frame_end - range.offset;
                     range.frames.push(frame);
@@ -646,7 +675,7 @@ fn trusted_mode(
 
 /// SHA-256 of a file.
 /// 文件的 SHA-256。
-pub(crate) fn hash_file(path: &Path) -> FormatResult<Sha256Digest> {
+pub fn hash_file(path: &Path) -> FormatResult<Sha256Digest> {
     let fail = |source| FormatError::io("hashing a file", source);
     let mut file = File::open(path).map_err(fail)?;
     let mut hasher = Sha256::new();

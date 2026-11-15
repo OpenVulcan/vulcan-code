@@ -89,7 +89,11 @@ fn offer_rows(rows: &mut Vec<Row>, snapshot: &Value, offer: &Value, busy: bool) 
     };
     let mut heading = item(
         "app-update-offer",
-        tr!("settings.appUpdate.available", version = version),
+        if s(snapshot, "/activity") == "downloading" && b(snapshot, "/settings/autoDownload") {
+            format!("{} · {version}", tr!("settings.appUpdate.downloading"))
+        } else {
+            tr!("settings.appUpdate.available", version = version)
+        },
         detail,
     )
     .actions(actions);
@@ -186,35 +190,22 @@ fn desktop_profile_rows(rows: &mut Vec<Row>, profile: &Value) {
 /// 构建可自行更新的安装的设置与修复行。
 fn settings_rows(rows: &mut Vec<Row>, snapshot: &Value, busy: bool) {
     let settings = v(snapshot, "/settings");
+    rows.push(info(
+        tr!("settings.appUpdate.checkInterval"),
+        tr!("settings.appUpdate.checkInterval.oneHour"),
+        Tone::Normal,
+    ));
     rows.push(
-        choice(
-            tr!("settings.appUpdate.checkInterval"),
-            vec![
-                (
-                    "oneHour".into(),
-                    tr!("settings.appUpdate.checkInterval.oneHour"),
-                ),
-                (
-                    "sixHours".into(),
-                    tr!("settings.appUpdate.checkInterval.sixHours"),
-                ),
-                (
-                    "twelveHours".into(),
-                    tr!("settings.appUpdate.checkInterval.twelveHours"),
-                ),
-                (
-                    "oneDay".into(),
-                    tr!("settings.appUpdate.checkInterval.oneDay"),
-                ),
-            ],
-            s(settings, "/checkInterval"),
+        toggle(
+            tr!("settings.appUpdate.autoDownload"),
+            b(settings, "/autoDownload"),
             dto(
                 settings.clone(),
-                "/checkInterval",
+                "/autoDownload",
                 api_update::save_app_update_settings,
             ),
         )
-        .detail(tr!("settings.appUpdate.checkIntervalHint")),
+        .detail(tr!("settings.appUpdate.autoDownloadHint")),
     );
     rows.push(
         toggle(
@@ -370,7 +361,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
                 },
                 // Running background commands stop with the restart, so they are counted first.
                 // 运行中的后台命令会随重启停止，因此先统计其数量。
-                action: (!busy).then_some(UiAction::RestartToUpdate),
+                action: (!busy).then_some(UiAction::RestartToUpdate(ready)),
                 tone: Tone::Accent,
                 switch: None,
             }]),
@@ -425,7 +416,7 @@ mod tests {
     fn snapshot(overrides: Value) -> Value {
         let mut base = json!({
             "currentVersion": "0.1.4", "unavailableReason": null,
-            "settings": { "preview": false, "route": "auto", "checkInterval": "sixHours" }, "activity": "idle",
+            "settings": { "preview": false, "route": "auto", "checkInterval": "oneHour", "autoDownload": true }, "activity": "idle",
             "progress": null, "lastCheckedAt": null, "offer": null, "readyVersion": null,
             "repairedFiles": null, "error": null, "rollback": null, "desktopProfile": null,
             "downloadPageUrl": "https://openvulcan.com/download"

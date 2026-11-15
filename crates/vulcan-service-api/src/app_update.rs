@@ -24,10 +24,10 @@ pub enum AppUpdateRouteSetting {
 pub enum AppUpdateCheckInterval {
     /// Every hour.
     /// 每小时。
+    #[default]
     OneHour,
     /// Every six hours.
     /// 每六小时。
-    #[default]
     SixHours,
     /// Every twelve hours.
     /// 每十二小时。
@@ -39,7 +39,7 @@ pub enum AppUpdateCheckInterval {
 
 /// The user's update settings; defaults are applied in memory and never written back.
 /// 用户的更新设置；默认值只在内存中补齐，绝不回写。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppUpdateSettings {
     /// Whether preview releases are offered as well; off by default.
@@ -51,6 +51,29 @@ pub struct AppUpdateSettings {
     /// How often the service checks on its own.
     /// 服务自行检查的频率。
     pub check_interval: AppUpdateCheckInterval,
+    /// Whether Core prepares available updates before the user confirms installation.
+    /// 是否由 Core 在用户确认安装前提前准备可用更新。
+    #[serde(default = "AppUpdateSettings::default_auto_download")]
+    pub auto_download: bool,
+}
+
+impl AppUpdateSettings {
+    /// Returns the default for clients that do not send the new setting yet.
+    /// 返回尚未发送新设置的客户端所使用的默认值。
+    const fn default_auto_download() -> bool {
+        true
+    }
+}
+
+impl Default for AppUpdateSettings {
+    fn default() -> Self {
+        Self {
+            preview: false,
+            route: AppUpdateRouteSetting::Auto,
+            check_interval: AppUpdateCheckInterval::OneHour,
+            auto_download: Self::default_auto_download(),
+        }
+    }
 }
 
 /// Why this process cannot update itself.
@@ -297,8 +320,8 @@ pub struct AppUpdateSnapshot {
     /// The newer version found by the last check.
     /// 上次检查找到的更新版本。
     pub offer: Option<AppUpdateOffer>,
-    /// A version installed and made current, waiting for a restart.
-    /// 已安装并设为当前、等待重启的版本。
+    /// A verified version prepared for the user's explicit apply-and-restart request.
+    /// 已验证并准备就绪、等待用户显式更新重启的版本。
     pub ready_version: Option<String>,
     /// Files restored by the last repair.
     /// 上次修复恢复的文件数。

@@ -23,8 +23,8 @@ export function cancelAppUpdate(): Promise<AppUpdateSnapshot> {
   return serviceClient.request<AppUpdateSnapshot>("service_cancel_app_update", {});
 }
 
-export function restartToUpdate(): Promise<AppUpdateSnapshot> {
-  return serviceClient.request<AppUpdateSnapshot>("service_restart_to_update", {});
+export function restartToUpdate(expectedVersion: string): Promise<AppUpdateSnapshot> {
+  return serviceClient.request<AppUpdateSnapshot>("service_restart_to_update", { expectedVersion });
 }
 
 export function repairAppInstall(): Promise<AppUpdateSnapshot> {

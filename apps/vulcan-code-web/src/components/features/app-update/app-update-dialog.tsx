@@ -30,7 +30,9 @@ export default function AppUpdateDialog(props: { host: AppUpdateHost; onClose: (
 
   const version = pendingUpdateVersion(snapshot);
   if (!snapshot || !version) return null;
-  const offer = snapshot.offer ?? (shownOffer?.version === version ? shownOffer : null);
+  const offer = snapshot.offer?.version === version
+    ? snapshot.offer
+    : shownOffer?.version === version ? shownOffer : null;
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) props.onClose(); }}>

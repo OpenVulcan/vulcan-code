@@ -40,7 +40,9 @@ pub(super) async fn dispatch(
             rpc_json_result(app_update_services::service_cancel_app_update())
         }
         "service_restart_to_update" => {
-            rpc_json_result(app_update_services::service_restart_to_update())
+            rpc_json_result(app_update_services::service_restart_to_update(
+                rpc_optional_param(params, "expectedVersion")?,
+            ))
         }
         "service_repair_app_install" => {
             rpc_json_result(app_update_services::service_repair_app_install())

@@ -51,16 +51,23 @@ pub struct PersistedAppUpdateConfiguration {
     /// 下载源；缺省表示自动。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<PersistedAppUpdateRoute>,
-    /// How often the service checks on its own; absence means every six hours.
-    /// 服务自行检查的频率；缺省表示每六小时。
+    /// The interval saved by older versions, retained when the user saves other settings.
+    /// 旧版保存的间隔，在用户保存其他设置时保留。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_interval: Option<PersistedAppUpdateCheckInterval>,
+    /// Whether Core prepares updates automatically; absence enables it.
+    /// Core 是否自动准备更新；缺省时开启。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_download: Option<bool>,
 }
 
 impl PersistedAppUpdateConfiguration {
     /// Returns whether nothing was chosen, so the field stays out of the saved file.
     /// 判断是否未做任何选择，使该字段不写入保存文件。
     pub fn is_default(&self) -> bool {
-        self.preview.is_none() && self.route.is_none() && self.check_interval.is_none()
+        self.preview.is_none()
+            && self.route.is_none()
+            && self.check_interval.is_none()
+            && self.auto_download.is_none()
     }
 }

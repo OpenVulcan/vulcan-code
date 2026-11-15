@@ -19,7 +19,7 @@ use vulcan_install_core::assemble::Assembly;
 use vulcan_install_core::fetch::{Downloader, Route};
 use vulcan_install_core::index::{ComponentIndex, IndexEntry};
 use vulcan_install_core::install_root::{
-    MAX_STARTUP_ATTEMPTS, ROLLBACK_FILE, Rollback, SETUP_FAILURE_FILE, SETUP_LOG_FILE,
+    InstallLock, MAX_STARTUP_ATTEMPTS, ROLLBACK_FILE, Rollback, SETUP_FAILURE_FILE, SETUP_LOG_FILE,
     STARTUP_TRIAL_FILE, SetupFailure, StartupTrial, UPDATES_DIR,
 };
 use vulcan_install_core::layout::installer_key;
@@ -27,7 +27,7 @@ use vulcan_install_core::manifest::{DownloadKind, InnoUpdate, ReleaseManifest};
 use vulcan_install_core::names::{Channel, ReleaseVersion};
 use vulcan_install_core::record::{InstallRecord, RECORD_FILE_NAME};
 use vulcan_install_core::repair::prepare_repair;
-use vulcan_install_core::signing::BUILT_IN_KEYS;
+use vulcan_install_core::signing::{BUILT_IN_KEYS, TrustedKey};
 use vulcan_install_core::update::{
     find_update, read_indexes, read_manifest, read_skipped_release_notes,
 };
@@ -39,33 +39,28 @@ use vulcan_service_api::{
     AppUpdateUnavailableReason, ServiceRestartReason, ServiceRestartingEvent,
 };
 
+#[cfg(test)]
+mod acceptance;
 mod desktop_profile;
 mod installed;
+mod prepared;
 mod signer;
 
 use desktop_profile::DesktopProfile;
 use installed::Installed;
+use prepared::{PREPARED_UPDATE_FILE, PreparedUpdate};
 
 /// Delay between service start and the first automatic check.
 /// 服务启动到首次自动检查之间的延迟。
 pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
 
-/// How often the schedule wakes to see whether an automatic check is due, so a changed interval
-/// applies without a restart.
-/// 调度醒来查看自动检查是否到期的频率，使修改后的间隔无需重启即可生效。
+/// How often the schedule wakes to see whether an automatic check is due.
+/// 调度醒来查看自动检查是否到期的频率。
 const SCHEDULE_TICK: Duration = Duration::from_secs(60);
 
-/// Time between automatic checks for each interval setting.
-/// 每种间隔设置对应的自动检查间隔时间。
-pub fn check_interval(setting: AppUpdateCheckInterval) -> Duration {
-    const HOUR: u64 = 60 * 60;
-    Duration::from_secs(match setting {
-        AppUpdateCheckInterval::OneHour => HOUR,
-        AppUpdateCheckInterval::SixHours => 6 * HOUR,
-        AppUpdateCheckInterval::TwelveHours => 12 * HOUR,
-        AppUpdateCheckInterval::OneDay => 24 * HOUR,
-    })
-}
+/// Time between periodic checks, measured from the last completed check.
+/// 周期性检查的间隔，从上次检查完成时算起。
+const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// How often a running download or repair reports its progress.
 /// 进行中的下载或修复报告进度的频率。
@@ -374,6 +369,13 @@ pub struct AppUpdater {
 /// Shared state of an [`AppUpdater`].
 /// [`AppUpdater`] 的共享状态。
 struct Inner {
+    /// Trust anchors used for release and prepared-update verification.
+    /// 发布和已就绪更新校验所用的信任锚。
+    keys: &'static [TrustedKey],
+    /// Loopback release origin used exclusively by the signed integration test.
+    /// 仅供签名集成测试使用的回环发布源。
+    #[cfg(test)]
+    origin: Option<String>,
     /// The installed layout, or why there is none.
     /// 已安装布局，或没有布局的原因。
     installed: Result<Installed, AppUpdateUnavailableReason>,
@@ -407,6 +409,9 @@ struct State {
     /// Cancels the running transfer.
     /// 取消进行中的传输。
     cancel: Option<Arc<AtomicBool>>,
+    /// Whether the current download was started by the automatic flow.
+    /// 当前下载是否由自动流程发起。
+    automatic_download: bool,
     /// When the last check finished.
     /// 上次检查完成的时间。
     last_checked_at: Option<u64>,
@@ -448,6 +453,9 @@ struct Offer {
     /// Its verified manifest.
     /// 其已校验的版本清单。
     manifest: ReleaseManifest,
+    /// The manifest bytes and detached signature for restoring a prepared update offline.
+    /// 清单原始字节和分离签名，用于离线恢复已就绪更新。
+    signed_manifest: (Vec<u8>, Vec<u8>),
     /// Indexes of the installed components, for an assembled update.
     /// 已安装组件的索引，用于组装的更新。
     indexes: Vec<ComponentIndex>,
@@ -475,9 +483,9 @@ struct Ready {
 /// 重启时为启动已就绪版本所运行的内容。
 #[derive(Clone)]
 enum Apply {
-    /// The service of the version already made current.
-    /// 已设为当前版本的服务。
-    Switched,
+    /// Switch the assembled version to current and start its service on trial.
+    /// 将已组装版本设为当前版本并试运行其服务。
+    Switch,
     /// The verified full installer.
     /// 已校验的完整安装包。
     Installer(PathBuf),
@@ -500,12 +508,18 @@ impl AppUpdater {
         let desktop_profile = installed.as_ref().ok().and_then(DesktopProfile::of);
         Self {
             inner: Arc::new(Inner {
+                keys: BUILT_IN_KEYS,
+                #[cfg(test)]
+                origin: None,
                 installed,
                 desktop_profile,
                 host,
                 user_agent,
                 state: Mutex::new(State {
-                    settings,
+                    settings: AppUpdateSettings {
+                        check_interval: AppUpdateCheckInterval::OneHour,
+                        ..settings
+                    },
                     ..State::default()
                 }),
             }),
@@ -527,6 +541,9 @@ impl AppUpdater {
             {
                 tracing::warn!("[app-update] could not prepare the AppArmor profile: {error}");
             }
+            // Clients can subscribe before startup restores the prepared update.
+            // 客户端可能在启动恢复就绪更新之前就已订阅。
+            self.inner.notify();
             let updater = self.clone();
             let spawned = std::thread::Builder::new()
                 .name(String::from("vulcan-app-update-schedule"))
@@ -559,7 +576,23 @@ impl AppUpdater {
     /// Applies new settings to the following operations.
     /// 将新设置应用于之后的操作。
     pub fn set_settings(&self, settings: AppUpdateSettings) -> AppUpdateSnapshot {
-        self.inner.lock().settings = settings;
+        let mut state = self.inner.lock();
+        if !settings.auto_download
+            && state.automatic_download
+            && let Some(cancel) = &state.cancel
+        {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        // Recheck soon when automatic downloads are enabled for an existing manual offer.
+        // 对已有手动提议开启自动下载时，尽快重新检查。
+        if settings.auto_download && !state.settings.auto_download && state.offer.is_some() {
+            state.last_check_finished = None;
+        }
+        state.settings = AppUpdateSettings {
+            check_interval: AppUpdateCheckInterval::OneHour,
+            ..settings
+        };
+        drop(state);
         self.inner.notify();
         self.snapshot()
     }
@@ -673,10 +706,10 @@ impl AppUpdater {
         Ok(self.snapshot())
     }
 
-    /// Stops the service so that the version made ready starts, or runs the full installer or the
-    /// setup program.
-    /// 停止服务以启动已就绪的版本，或运行完整安装包或安装器。
-    pub fn restart(&self) -> Result<AppUpdateSnapshot, String> {
+    /// Applies the ready update and requests a restart. When present, `expected` must match
+    /// the version shown before confirmation.
+    /// 应用已就绪更新并请求重启。传入 `expected` 时须匹配确认前展示的版本。
+    pub fn restart(&self, expected: Option<&str>) -> Result<AppUpdateSnapshot, String> {
         let installed = self.inner.available()?;
         let ready = {
             let mut state = self.inner.lock();
@@ -687,6 +720,11 @@ impl AppUpdater {
                 .ready
                 .clone()
                 .ok_or_else(|| String::from("no new version is ready"))?;
+            if expected.is_some_and(|version| version != ready.version.to_string()) {
+                return Err(String::from(
+                    "the ready update changed; confirm the current version",
+                ));
+            }
             state.activity = AppUpdateActivity::Restarting;
             ready
         };
@@ -709,7 +747,7 @@ impl AppUpdater {
                     channel: channel.as_str().to_owned(),
                 },
             ),
-            Apply::Switched => (
+            Apply::Switch => (
                 ServiceRestartReason::Update,
                 RestartPlan::Service {
                     executable: installed.executable_of(&ready.version),
@@ -720,7 +758,13 @@ impl AppUpdater {
             reason,
             version: ready.version.to_string(),
         };
-        if let Err(message) = self.inner.host.restart(event, plan) {
+        let result = if matches!(ready.apply, Apply::Switch) {
+            self.inner
+                .switch_and_restart(installed, &ready, event, plan)
+        } else {
+            self.inner.host.restart(event, plan)
+        };
+        if let Err(message) = result {
             let mut state = self.inner.lock();
             state.activity = AppUpdateActivity::Idle;
             state.error = Some(AppUpdateError {
@@ -806,7 +850,11 @@ impl Inner {
                     .is_some_and(|rollback| rollback.failed.to_string() == offer.public.version),
                 ..offer.public.clone()
             }),
-            ready_version: state.ready.as_ref().map(|ready| ready.version.to_string()),
+            ready_version: state
+                .ready
+                .as_ref()
+                .filter(|_| !state.automatic_download)
+                .map(|ready| ready.version.to_string()),
             repaired_files: state.repaired_files,
             error: state.error.clone(),
             rollback: state.rollback.as_ref().map(|rollback| AppUpdateRollback {
@@ -825,17 +873,14 @@ impl Inner {
         }
     }
 
-    /// Whether the schedule should check now: the updater is idle with nothing waiting for a
-    /// restart, and the chosen interval has passed since the last check, or `first_check` has
-    /// come when there was none.
-    /// 调度此刻是否应检查：更新器空闲且没有等待重启的版本，并且距上次检查已过所选间隔；从未检查时则
-    /// 以到达 `first_check` 为准。
+    /// Whether the updater is idle and due for a check, including while an update is prepared.
+    /// 判断更新器是否空闲且已到检查时间，包括已有准备好的更新时。
     fn wants_automatic_check(&self, first_check: Instant) -> bool {
         let state = self.lock();
-        let due = state.last_check_finished.map_or(first_check, |finished| {
-            finished + check_interval(state.settings.check_interval)
-        });
-        state.activity == AppUpdateActivity::Idle && state.ready.is_none() && Instant::now() >= due
+        let due = state
+            .last_check_finished
+            .map_or(first_check, |finished| finished + CHECK_INTERVAL);
+        state.activity == AppUpdateActivity::Idle && Instant::now() >= due
     }
 
     /// Marks `activity` as running, failing when another operation runs.
@@ -846,6 +891,7 @@ impl Inner {
             return Err(String::from("another update operation is running"));
         }
         state.activity = activity;
+        state.automatic_download = false;
         state.error = None;
         Ok(())
     }
@@ -896,13 +942,29 @@ impl Inner {
             }),
         };
         let mut state = self.lock();
-        state.activity = AppUpdateActivity::Idle;
         state.progress = None;
         state.cancel = None;
-        if operation == AppUpdateOperation::Check {
+        let checking = operation == AppUpdateOperation::Check;
+        if checking {
             state.last_checked_at = Some(now_ms());
             state.last_check_finished = Some(Instant::now());
         }
+        // Claim download before publishing the next snapshot, so there is no idle offer
+        // notification or opportunity for a second operation to start in between.
+        // 发布下一份快照前声明下载任务，避免中间出现空闲的更新提示或启动第二项操作。
+        let automatic = checking
+            && result.is_ok()
+            && state.settings.auto_download
+            && state
+                .offer
+                .as_ref()
+                .is_some_and(|offer| offer.public.installable);
+        state.activity = if automatic {
+            AppUpdateActivity::Downloading
+        } else {
+            AppUpdateActivity::Idle
+        };
+        state.automatic_download = automatic;
         match result {
             Ok(()) => {}
             Err(FormatError::Cancelled) => {}
@@ -915,7 +977,11 @@ impl Inner {
             }
         }
         drop(state);
-        self.notify();
+        if automatic {
+            self.run_claimed(AppUpdateOperation::Download, Self::download);
+        } else {
+            self.notify();
+        }
     }
 
     /// A downloader for the configured route, starting with the origin that answered last.
@@ -930,11 +996,22 @@ impl Inner {
             AppUpdateRouteSetting::International => Route::International,
             AppUpdateRouteSetting::China => Route::China,
         };
-        let mut downloader = Downloader::new(route.origins(), &self.user_agent)?;
+        let origins = route.origins();
+        #[cfg(test)]
+        let origins = self
+            .origin
+            .as_ref()
+            .map_or(origins, |origin| vec![origin.clone()]);
+        let mut downloader = Downloader::new(origins, &self.user_agent)?;
         if let Some(origin) = preferred {
             downloader.prefer(&origin);
         }
-        self.lock().cancel = Some(downloader.cancel_flag());
+        let mut state = self.lock();
+        let cancel = downloader.cancel_flag();
+        if state.automatic_download && !state.settings.auto_download {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        state.cancel = Some(cancel);
         Ok(downloader)
     }
 
@@ -949,7 +1026,13 @@ impl Inner {
     /// Reads the pointers and describes the newest version above the running one.
     /// 读取指针并描述高于正在运行版本的最新版本。
     fn check(&self, installed: &Installed, downloader: &mut Downloader) -> Result<(), FormatError> {
-        let preview = self.lock().settings.preview;
+        let (preview, ready) = {
+            let state = self.lock();
+            (
+                state.settings.preview,
+                state.ready.as_ref().map(|ready| ready.version.clone()),
+            )
+        };
         let channels: &[Channel] = if preview {
             &[Channel::Stable, Channel::Preview]
         } else {
@@ -957,14 +1040,20 @@ impl Inner {
         };
         let found = find_update(
             downloader,
-            BUILT_IN_KEYS,
+            self.keys,
             installed.platform,
             channels,
-            &installed.version,
+            ready.as_ref().unwrap_or(&installed.version),
         )?;
         let offer = match found {
             None => None,
-            Some(found) => Some(describe(installed, downloader, found)?),
+            Some(found) => Some(describe(
+                installed,
+                downloader,
+                self.keys,
+                found,
+                ready.as_ref(),
+            )?),
         };
         let mut state = self.lock();
         // A version made ready stays ready; a newer offer can still be downloaded on top of it.
@@ -978,17 +1067,14 @@ impl Inner {
         Ok(())
     }
 
-    /// Downloads the offered version: assembles it next to the running one and makes it current,
-    /// assembles it for the setup program or the Inno update package to finish, or downloads and
-    /// verifies the full installer.
-    /// 下载所提供的版本：在正在运行版本旁组装并设为当前版本；组装后交由安装器或 Inno 更新包完成；或下载并
-    /// 校验完整安装包。
+    /// Prepares the offered version and records it durably, without changing the current version.
+    /// 准备提议版本并持久化就绪记录，保持当前版本指针。
     fn download(
         &self,
         installed: &Installed,
         downloader: &mut Downloader,
     ) -> Result<(), FormatError> {
-        let (method, manifest, indexes, channel) = {
+        let (method, manifest, indexes, channel, signed_manifest, previous) = {
             let state = self.lock();
             let offer = state
                 .offer
@@ -999,15 +1085,30 @@ impl Inner {
                 offer.manifest.clone(),
                 offer.indexes.clone(),
                 offer.channel,
+                offer.signed_manifest.clone(),
+                state.ready.as_ref().map(|ready| ready.version.clone()),
             )
         };
+        let root = &installed.root;
+        let lock = root.lock()?;
+        if root.current_version()?.as_ref() != Some(&installed.version) {
+            return Err(invalid("the running installation changed before download"));
+        }
         let apply = match method {
             Method::Installer => {
                 Apply::Installer(self.download_installer(installed, downloader, &manifest)?)
             }
             Method::Switch => {
-                self.assemble(installed, downloader, &manifest, indexes, true, 0)?;
-                Apply::Switched
+                self.assemble(
+                    installed,
+                    &lock,
+                    downloader,
+                    &manifest,
+                    indexes,
+                    previous.as_ref(),
+                    0,
+                )?;
+                Apply::Switch
             }
             Method::Setup => {
                 if !installed.root.setup_program().is_file() {
@@ -1015,7 +1116,15 @@ impl Inner {
                         "the setup program of this installation is missing; run `vulcan-code-setup update`",
                     ));
                 }
-                self.assemble(installed, downloader, &manifest, indexes, false, 0)?;
+                self.assemble(
+                    installed,
+                    &lock,
+                    downloader,
+                    &manifest,
+                    indexes,
+                    previous.as_ref(),
+                    0,
+                )?;
                 Apply::Setup(channel)
             }
             Method::InnoUpdate => {
@@ -1027,10 +1136,11 @@ impl Inner {
                 // 清理。
                 self.assemble(
                     installed,
+                    &lock,
                     downloader,
                     &manifest,
                     indexes,
-                    false,
+                    previous.as_ref(),
                     package.size,
                 )?;
                 Apply::Installer(download_signed_installer(
@@ -1044,6 +1154,27 @@ impl Inner {
             }
             Method::Manual => return Err(invalid("this version cannot be installed here")),
         };
+        if downloader.is_cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        root.write_marker(
+            &lock,
+            PREPARED_UPDATE_FILE,
+            &PreparedUpdate::new(
+                installed,
+                manifest.version.clone(),
+                channel,
+                signed_manifest,
+            ),
+        )?;
+        if let Some(previous) = previous.as_ref()
+            && previous < &manifest.version
+            && previous > &installed.version
+        {
+            // The next target is durable before the superseded directory is reclaimed.
+            // 新目标持久化之后才回收被取代的目录。
+            let _ = std::fs::remove_dir_all(root.version_dir(previous));
+        }
         let mut state = self.lock();
         state.ready = Some(Ready {
             version: manifest.version,
@@ -1053,47 +1184,40 @@ impl Inner {
         Ok(())
     }
 
-    /// Assembles `manifest` next to the running version and, when `switch` is set, makes it current
-    /// on trial; otherwise the setup program or the Inno update package switches to it on restart.
-    /// The progress it starts also counts `then_bytes` the caller downloads next.
-    /// 在正在运行的版本旁组装 `manifest`；`switch` 为真时将其设为试运行中的当前版本，否则由安装器或 Inno
-    /// 更新包在重启时切换到它。它开始的进度同时计入调用方随后下载的 `then_bytes`。
+    /// Assembles `manifest` under the install lock, reusing the optional `previous` prepared version.
+    /// 在安装锁下组装 `manifest`，并复用已有的 `previous` 就绪版本（若存在）。
+    /// Progress includes the `then_bytes` the caller downloads next.
+    /// 进度计入调用方下一步下载的 `then_bytes`。
+    #[allow(clippy::too_many_arguments)]
     fn assemble(
         &self,
         installed: &Installed,
+        lock: &InstallLock,
         downloader: &mut Downloader,
         manifest: &ReleaseManifest,
         indexes: Vec<ComponentIndex>,
-        switch: bool,
+        previous: Option<&ReleaseVersion>,
         then_bytes: u64,
     ) -> Result<(), FormatError> {
         let root = &installed.root;
-        let lock = root.lock()?;
         if root
             .version_dir(&manifest.version)
             .join(RECORD_FILE_NAME)
             .is_file()
         {
+            prepared::validate_assembly(installed, manifest)?;
             self.track(downloader, then_bytes);
         } else {
-            let prepared = Assembly::new(root, &lock, manifest, indexes)?.prepare()?;
+            let assembly = Assembly::new(root, lock, manifest, indexes)?;
+            let assembly = match previous {
+                Some(version) => assembly.reuse_prepared(version),
+                None => assembly,
+            };
+            let prepared = assembly.prepare()?;
             self.track(downloader, prepared.download_bytes() + then_bytes);
             prepared.complete(downloader)?;
         }
-        if !switch {
-            return Ok(());
-        }
-        root.switch_to(&lock, &manifest.version)?;
-        root.write_marker(
-            &lock,
-            STARTUP_TRIAL_FILE,
-            &StartupTrial {
-                version: manifest.version.clone(),
-                previous: installed.version.clone(),
-                attempts: 0,
-                max_attempts: MAX_STARTUP_ATTEMPTS,
-            },
-        )
+        Ok(())
     }
 
     /// Downloads and verifies the full installer of `manifest`.
@@ -1145,6 +1269,67 @@ impl Inner {
         Ok(())
     }
 
+    /// Applies an assembled update only after the explicit restart request owns the operation.
+    /// 仅在显式重启请求取得操作归属后应用已组装更新。
+    fn switch_and_restart(
+        &self,
+        installed: &Installed,
+        ready: &Ready,
+        event: ServiceRestartingEvent,
+        plan: RestartPlan,
+    ) -> Result<(), String> {
+        let root = &installed.root;
+        let display = |error: FormatError| error.to_string();
+        let lock = root.lock().map_err(display)?;
+        let current = root.current_version().map_err(display)?;
+        if current.as_ref() == Some(&ready.version) {
+            // A previous updater may already have switched the pointer before this Core started.
+            // 此 Core 启动前，旧版更新器可能已经切换指针。
+            return self.host.restart(event, plan);
+        }
+        if current.as_ref() != Some(&installed.version) {
+            return Err(String::from(
+                "the running installation changed before restart",
+            ));
+        }
+        let prepared = root
+            .read_marker::<PreparedUpdate>(PREPARED_UPDATE_FILE)
+            .map_err(display)?
+            .ok_or_else(|| String::from("the prepared update is missing"))?
+            .restore(installed, self.keys)
+            .map_err(display)?;
+        if ready.version != prepared.version || !matches!(prepared.apply, Apply::Switch) {
+            return Err(String::from("the prepared update changed before restart"));
+        }
+        root.write_marker(
+            &lock,
+            STARTUP_TRIAL_FILE,
+            &StartupTrial {
+                version: ready.version.clone(),
+                previous: installed.version.clone(),
+                attempts: 0,
+                max_attempts: MAX_STARTUP_ATTEMPTS,
+            },
+        )
+        .map_err(display)?;
+        if let Err(error) = root.switch_to(&lock, &ready.version) {
+            let _ = root.remove_marker(&lock, STARTUP_TRIAL_FILE);
+            return Err(display(error));
+        }
+        if let Err(error) = self.host.restart(event, plan) {
+            root.switch_to(&lock, &installed.version)
+                .map_err(|restore| {
+                    format!(
+                        "{error}; restoring the previous current version also failed: {restore}"
+                    )
+                })?;
+            root.remove_marker(&lock, STARTUP_TRIAL_FILE)
+                .map_err(display)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Ends the trial of the running version, keeps a rollback notice that names it, notes a newer
     /// version already made current, and removes versions no longer needed.
     /// 结束正在运行版本的试运行，保留指明它的回退提示，记录已设为当前的更新版本，并删除不再需要的版本。
@@ -1178,7 +1363,28 @@ impl Inner {
         }
         match root.current_version()? {
             Some(current) if current == installed.version => {
-                let removed = root.prune_versions(&lock, &installed.version)?;
+                let ready = match root
+                    .read_marker::<PreparedUpdate>(PREPARED_UPDATE_FILE)
+                    .and_then(|update| {
+                        update
+                            .map(|update| update.restore(installed, self.keys))
+                            .transpose()
+                    }) {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        tracing::warn!(
+                            "[app-update] ignoring a stale or invalid prepared update: {error}"
+                        );
+                        root.remove_marker(&lock, PREPARED_UPDATE_FILE)?;
+                        None
+                    }
+                };
+                let removed = root.prune_versions_retaining(
+                    &lock,
+                    &installed.version,
+                    ready.as_ref().map(|ready| &ready.version),
+                )?;
+                self.lock().ready = ready;
                 if !removed.is_empty() {
                     tracing::info!("[app-update] removed old versions {removed:?}");
                 }
@@ -1186,7 +1392,7 @@ impl Inner {
             Some(current) if current > installed.version => {
                 self.lock().ready = Some(Ready {
                     version: current,
-                    apply: Apply::Switched,
+                    apply: Apply::Switch,
                 });
             }
             _ => {}
@@ -1200,11 +1406,12 @@ impl Inner {
 fn describe(
     installed: &Installed,
     downloader: &mut Downloader,
+    keys: &[TrustedKey],
     found: vulcan_install_core::update::Offer,
+    prepared: Option<&ReleaseVersion>,
 ) -> Result<Offer, FormatError> {
     let manifest = found.manifest;
-    let skipped =
-        read_skipped_release_notes(downloader, BUILT_IN_KEYS, &manifest, &installed.version);
+    let skipped = read_skipped_release_notes(downloader, keys, &manifest, &installed.version);
     if let Some(error) = &skipped.error {
         tracing::warn!(
             "[app-update] notes of the releases before {} stopped early: {error}",
@@ -1213,22 +1420,11 @@ fn describe(
     }
     let installer = full_installer(installed, &manifest);
     let package = update_package(installed, &manifest);
-    let method = install_method(Situation {
-        same_epoch: manifest.install_epoch == installed.install_epoch,
-        components_present: installed
-            .components
-            .iter()
-            .all(|component| manifest.components.contains_key(component)),
-        setup_owned: installed.root.setup_owned(),
-        setup_program_present: installed.root.setup_program().is_file(),
-        windows: installed.platform.is_windows(),
-        has_installer: installer.is_some(),
-        has_update_package: package.is_some(),
-    });
+    let method = method_for(installed, &manifest);
     let (kind, download_bytes, installable, indexes) = match method {
         Method::Switch | Method::Setup | Method::InnoUpdate => {
             let indexes = read_indexes(downloader, &manifest, &installed.components)?;
-            let bytes = incremental_bytes(installed, &indexes)?;
+            let bytes = incremental_bytes(installed, &indexes, prepared)?;
             let (kind, bytes) = match (method, package) {
                 (Method::Switch, _) => (AppUpdateKind::Incremental, bytes),
                 (Method::InnoUpdate, Some(package)) => (AppUpdateKind::Setup, bytes + package.size),
@@ -1267,9 +1463,27 @@ fn describe(
             previously_failed: false,
         },
         manifest,
+        signed_manifest: found.signed_manifest,
         indexes,
         channel: found.channel,
         method,
+    })
+}
+
+/// Determines the installation method from the signed release and the current layout.
+/// 从签名发布清单和当前布局确定安装方式。
+fn method_for(installed: &Installed, manifest: &ReleaseManifest) -> Method {
+    install_method(Situation {
+        same_epoch: manifest.install_epoch == installed.install_epoch,
+        components_present: installed
+            .components
+            .iter()
+            .all(|component| manifest.components.contains_key(component)),
+        setup_owned: installed.root.setup_owned(),
+        setup_program_present: installed.root.setup_program().is_file(),
+        windows: installed.platform.is_windows(),
+        has_installer: full_installer(installed, manifest).is_some(),
+        has_update_package: update_package(installed, manifest).is_some(),
     })
 }
 
@@ -1331,14 +1545,21 @@ fn download_signed_installer(
     Ok(target)
 }
 
-/// Bytes an incremental update downloads: the frames of contents the running version lacks.
-/// 增量更新的下载字节数：正在运行版本缺少的内容所在的帧。
+/// Estimates compressed bytes missing from the current and optionally `prepared` versions.
+/// 估算当前版本和可选的 `prepared` 就绪版本都缺少的压缩字节数。
 fn incremental_bytes(
     installed: &Installed,
     indexes: &[ComponentIndex],
+    prepared: Option<&ReleaseVersion>,
 ) -> Result<u64, FormatError> {
     let record = InstallRecord::read(&installed.root.version_dir(&installed.version))?;
     let local = record.files_by_digest();
+    let prepared_record = prepared
+        .map(|version| installed.root.version_dir(version))
+        .filter(|dir| dir.join(RECORD_FILE_NAME).is_file())
+        .map(|dir| InstallRecord::read(&dir))
+        .transpose()?;
+    let cached = prepared_record.as_ref().map(InstallRecord::files_by_digest);
     let mut frames = HashSet::new();
     let mut bytes = 0_u64;
     for index in indexes {
@@ -1351,6 +1572,9 @@ fn incremental_bytes(
                 ..
             } = entry
                 && !local.contains_key(sha256)
+                && !cached
+                    .as_ref()
+                    .is_some_and(|files| files.contains_key(sha256))
                 && frames.insert((*pack, *offset))
             {
                 bytes += length;

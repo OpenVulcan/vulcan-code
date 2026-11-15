@@ -394,7 +394,7 @@ pub enum UiAction {
     /// Restarts to update after the running background commands are counted, asking first when
     /// some would stop.
     /// 统计运行中的后台命令后重启以更新；有命令将被停止时先请求确认。
-    RestartToUpdate,
+    RestartToUpdate(String),
     SidebarMode(SidebarMode),
     /// Expands the sidebar list as a drawer and focuses it (the rail's expand button).
     /// 以抽屉形式展开侧栏列表并聚焦（窄栏的展开按钮）。
@@ -719,7 +719,7 @@ pub fn perform(app: &mut App, action: UiAction) {
             app.focus = Focus::Panel;
         }
         UiAction::SessionActivity(activity) => super::activity::perform(app, activity),
-        UiAction::RestartToUpdate => super::activity::restart_to_update(app),
+        UiAction::RestartToUpdate(version) => super::activity::restart_to_update(app, version),
         UiAction::SidebarMode(mode) => {
             app.sidebar = mode;
             if mode == SidebarMode::Rail && app.focus == Focus::Sidebar {

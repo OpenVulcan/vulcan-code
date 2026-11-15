@@ -347,14 +347,25 @@ impl InstallRoot {
     /// 再试。返回已删除的版本。
     pub fn prune_versions(
         &self,
+        lock: &InstallLock,
+        current: &ReleaseVersion,
+    ) -> FormatResult<Vec<ReleaseVersion>> {
+        self.prune_versions_retaining(lock, current, None)
+    }
+
+    /// Prunes versions while also keeping the fully `prepared` update, if present.
+    /// 清理版本，同时保留已完整准备的 `prepared` 更新（若有）。
+    pub fn prune_versions_retaining(
+        &self,
         _lock: &InstallLock,
         current: &ReleaseVersion,
+        prepared: Option<&ReleaseVersion>,
     ) -> FormatResult<Vec<ReleaseVersion>> {
         let installed = self.installed_versions()?;
         let previous = installed.iter().rev().find(|version| *version < current);
         let mut removed = Vec::new();
         for version in &installed {
-            if version == current || Some(version) == previous {
+            if version == current || Some(version) == previous || Some(version) == prepared {
                 continue;
             }
             if std::fs::remove_dir_all(self.version_dir(version)).is_ok() {

@@ -34,7 +34,8 @@ export function useAppUpdatePrompts(
 
   React.useEffect(() => {
     const offer = snapshot?.offer;
-    if (offer && !prompted.current.has(`offer:${offer.version}`)) {
+    const manualOffer = offer && (!snapshot?.settings.autoDownload || !offer.installable);
+    if (manualOffer && !prompted.current.has(`offer:${offer.version}`)) {
       prompted.current.add(`offer:${offer.version}`);
       toast.info(formatMessage(translateActive("settings.appUpdate.available"), { version: offer.version }), {
         id: OFFER_TOAST_ID,
@@ -42,7 +43,9 @@ export function useAppUpdatePrompts(
         action: { label: translateActive("appUpdate.toast.view"), onClick: openUpdateSettings },
       });
     }
+    if (!manualOffer) toast.dismiss(OFFER_TOAST_ID);
     const ready = snapshot?.readyVersion;
+    if (!ready) toast.dismiss(READY_TOAST_ID);
     if (ready && !prompted.current.has(`ready:${ready}`)) {
       prompted.current.add(`ready:${ready}`);
       toast.dismiss(OFFER_TOAST_ID);
@@ -53,7 +56,7 @@ export function useAppUpdatePrompts(
           label: translateActive("settings.appUpdate.restart"),
           onClick: () => {
             void restartAfterBackgroundJobCheck(() => {
-              void restartToUpdate().catch((cause: unknown) => {
+              void restartToUpdate(ready).catch((cause: unknown) => {
                 toast.error(translateActive("settings.appUpdate.failed.restart"), { description: errorMessage(cause) });
               });
             });

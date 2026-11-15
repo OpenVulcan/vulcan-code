@@ -58,6 +58,9 @@ pub struct Offer {
     /// Its manifest.
     /// 其版本清单。
     pub manifest: ReleaseManifest,
+    /// The verified manifest's original bytes and detached signature for offline revalidation.
+    /// 已校验清单的原始字节和分离签名，用于离线复核。
+    pub signed_manifest: (Vec<u8>, Vec<u8>),
     /// Its notes, when it has any.
     /// 其更新说明（若有）。
     pub notes: Option<ReleaseNotes>,
@@ -96,6 +99,7 @@ pub fn find_update(
     Ok(Some(Offer {
         channel: pointer.channel,
         manifest,
+        signed_manifest: (document, signature),
         notes,
     }))
 }

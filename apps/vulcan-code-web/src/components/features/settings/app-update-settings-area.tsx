@@ -10,7 +10,7 @@ import {
 import { PageBody, PageNotice, PageRow, PageSection } from "@/components/page";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
-import type { AppUpdateCheckInterval, AppUpdateRoute, AppUpdateSettings, AppUpdateUnavailableReason } from "@/service/app-update-events";
+import type { AppUpdateRoute, AppUpdateSettings, AppUpdateUnavailableReason } from "@/service/app-update-events";
 import { formatBytes } from "@/lib/display-format";
 import { cancelAppUpdate, checkAppUpdate, dismissAppUpdateNotice, repairAppInstall, saveAppUpdateSettings } from "@/service/app-update-service";
 import { Button } from "@/ui-kit/primitives/button";
@@ -33,15 +33,6 @@ const ROUTE_KEYS: Record<AppUpdateRoute, TranslationKey> = {
   auto: "settings.appUpdate.route.auto",
   international: "settings.appUpdate.route.international",
   china: "settings.appUpdate.route.china",
-};
-
-// Labels of the automatic check intervals, shortest first.
-// 自动检查间隔的标签，从短到长。
-const CHECK_INTERVAL_KEYS: Record<AppUpdateCheckInterval, TranslationKey> = {
-  oneHour: "settings.appUpdate.checkInterval.oneHour",
-  sixHours: "settings.appUpdate.checkInterval.sixHours",
-  twelveHours: "settings.appUpdate.checkInterval.twelveHours",
-  oneDay: "settings.appUpdate.checkInterval.oneDay",
 };
 
 // AppUpdateSettingsArea shows, top to bottom, the running version with its check and repair actions,
@@ -110,16 +101,10 @@ export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
 
     {available ? (
       <PageSection layout="rows" title={t("settings.appUpdate.settingsTitle")}>
-        <PageRow label={t("settings.appUpdate.checkInterval")} description={t("settings.appUpdate.checkIntervalHint")}>
-          <Select value={snapshot.settings.checkInterval}
-            onValueChange={(checkInterval) => saveSettings({ ...snapshot.settings, checkInterval: checkInterval as AppUpdateCheckInterval })}>
-            <SelectTrigger aria-label={t("settings.appUpdate.checkInterval")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {(Object.keys(CHECK_INTERVAL_KEYS) as AppUpdateCheckInterval[]).map((interval) => (
-                <SelectItem key={interval} value={interval}>{t(CHECK_INTERVAL_KEYS[interval])}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <PageRow label={t("settings.appUpdate.checkInterval")} description={t("settings.appUpdate.checkInterval.oneHour")} />
+        <PageRow label={t("settings.appUpdate.autoDownload")} description={t("settings.appUpdate.autoDownloadHint")}>
+          <Switch aria-label={t("settings.appUpdate.autoDownload")} checked={snapshot.settings.autoDownload}
+            onCheckedChange={(autoDownload) => saveSettings({ ...snapshot.settings, autoDownload })} />
         </PageRow>
         <PageRow label={t("settings.appUpdate.previewChannel")} description={t("settings.appUpdate.previewChannelHint")}>
           <Switch aria-label={t("settings.appUpdate.previewChannel")} checked={snapshot.settings.preview}

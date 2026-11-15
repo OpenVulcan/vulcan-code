@@ -1749,7 +1749,7 @@
     "service_app_update_status": {
       "currentVersion": "0.0.0-demo",
       "unavailableReason": null,
-      "settings": { "preview": false, "route": "auto", "checkInterval": "sixHours" },
+      "settings": { "preview": false, "route": "auto", "checkInterval": "oneHour", "autoDownload": true },
       "activity": "idle",
       "progress": null,
       "lastCheckedAt": null,

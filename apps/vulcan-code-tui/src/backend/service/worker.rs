@@ -505,6 +505,15 @@ impl Worker {
         self.windows.clear();
         self.navigations.clear();
         self.apply_snapshot(snapshot);
+        // A prepared update can predate this event subscription. Read it once on connection.
+        // 待安装的更新可能早于本次事件订阅。连接时读取一次。
+        let update = crate::service_api::app_update::load_app_update_status();
+        if let Some(client) = &self.client
+            && let Ok(value) = client.call(update.method, update.params)
+            && let Ok(snapshot) = serde_json::from_value::<api::AppUpdateSnapshot>(value)
+        {
+            self.app_update_changed(&snapshot);
+        }
         if let Some(id) = self.selected.clone() {
             if is_draft(&id) {
                 self.emit_answer_mode(&id);
@@ -1420,6 +1429,7 @@ impl Worker {
     /// `snapshot` 为服务刚发布的更新器状态。
     fn app_update_changed(&mut self, snapshot: &api::AppUpdateSnapshot) {
         if let Some(offer) = &snapshot.offer
+            && (!snapshot.settings.auto_download || !offer.installable)
             && self
                 .app_update_prompted
                 .insert(format!("offer:{}", offer.version))

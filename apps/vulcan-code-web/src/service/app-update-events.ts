@@ -33,6 +33,9 @@ export interface AppUpdateSettings {
   preview: boolean;
   route: AppUpdateRoute;
   checkInterval: AppUpdateCheckInterval;
+  // Prepare releases in the background and wait for the user to install.
+  // 在后台准备发布版本，等待用户安装。
+  autoDownload: boolean;
 }
 
 /** A verified newer release. / 已校验的更新版本。 */

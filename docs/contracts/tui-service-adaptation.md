@@ -90,7 +90,7 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | 反馈与消息 | 镜像 WebUI 反馈与消息页：接收公告开关（保存完整设置）；公告列表（类型、开始时间、Markdown 正文、更新/网址/反馈链接），离线与关闭说明，查看页面时把显示中未看的公告记为已看（`dismissed: false`，不提示）；已登录时的个人消息（逐条已读、以最新编号作 `allBefore` 全部已读）与我的反馈（状态、详情含回复与链接、关联 PR、确认后删除）；编写表单（类型、标题、正文、附带日志与客户端信息默认开、允许联系默认关）：预览调用 prepare 并显示负载、字节数与脱敏命中，发送只在预览仍对应当前表单时提供，且只发送该预览的 `draftId` 与 `digest`，任何编辑都丢弃预览，`draftId` 签发后复用，`source` 固定为 `manual`。终端不能登录 OpenVulcan 账号，登录状态取自消息摘要的 `signedIn`；翻页替换当前页并可回到最新一页，而非 WebUI 的追加 | MessageCenterSettings、Announcements、MessageSummary、Messages、FeedbackList、FeedbackDetail、FeedbackPreview、FeedbackReceipt |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
 | 诊断 | 重试配置、完整请求追踪和会话错误独立记录开关、打开及清理追踪目录、模块与日志 | Workbench |
-| 应用更新 | 镜像 WebUI 应用更新页：运行版本与最近检查时间（不可更新时显示原因且不提供操作）、检查、更新版本说明与大小、可安装时下载、需手动时打开下载页、进度与取消、已就绪时重启、回退提示与关闭、预览通道开关与下载线路（保存完整设置）、修复安装；`app.update.changed` 事件刷新槽位，并对每个更新版本与已就绪版本各提示一次，`service.restarting` 提示重启或安装，之后由连接自动重连 | AppUpdate |
+| 应用更新 | 镜像 WebUI 应用更新页：运行版本与最近检查时间（不可更新时显示原因且不提供操作）、检查、版本说明与大小、下载进度与取消、已就绪时更新重启、回退提示、修复安装；自动下载、预览通道和下载线路保存完整设置。连接后读取更新状态，`app.update.changed` 刷新槽位；自动下载只在就绪时提示，手动下载模式也提示发现更新。`service.restarting` 提示重启或安装，之后自动重连 | AppUpdate |
 | 更新记录 | 镜像 WebUI 更新记录：首先打开运行版本，每页一个发布，较新/较早翻页与版本选择，正文按界面语言以回答组件渲染；内容由 `vulcan_product_info` 从发行资源 `resources/changelog/` 读取，不经服务 | Workbench.appVersion |
 | 关于 | 应用版本、许可证目录与按哈希读取正文 | Workbench、Licenses、LicenseBody |
 | 代理技能 | 真实分类导航与生效数量、状态/来源/覆盖/跨语言搜索筛选、查看正文、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.agentSkills.categories/records/errors |

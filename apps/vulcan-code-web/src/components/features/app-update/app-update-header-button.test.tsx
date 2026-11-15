@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppUpdateContext, type AppUpdateHost } from "./app-update-context";
 import { AppUpdateHeaderButton } from "./app-update-header-button";
+import { useAppUpdatePrompts } from "@/components/workspace/workbench-layout/use-app-update-prompts";
 import type { AppUpdateOffer, AppUpdateSnapshot } from "@/service/app-update-events";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 
@@ -22,6 +23,10 @@ const { service } = vi.hoisted(() => ({ service: {
   saveAppUpdateSettings: vi.fn(),
 } }));
 vi.mock("@/service/app-update-service", () => service);
+const { notices } = vi.hoisted(() => ({ notices: {
+  info: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn(), loading: vi.fn(),
+} }));
+vi.mock("@/ui-kit/primitives/toast", () => ({ toast: notices }));
 // The restart guard counts running background commands first; none run here, so the restart starts at once.
 // 重启保护先统计运行中的后台命令；此处没有，因此重启立即开始。
 vi.mock("@/service/session-activity-service", () => ({ countRunningShellJobs: vi.fn(async () => 0) }));
@@ -37,7 +42,7 @@ function snapshot(overrides: Partial<AppUpdateSnapshot> = {}): AppUpdateSnapshot
   return {
     currentVersion: "0.1.4",
     unavailableReason: null,
-    settings: { preview: false, route: "auto", checkInterval: "sixHours" },
+    settings: { preview: false, route: "auto", checkInterval: "oneHour", autoDownload: false },
     activity: "idle",
     progress: null,
     lastCheckedAt: null,
@@ -96,6 +101,13 @@ function entry(): HTMLButtonElement | null {
   return container.querySelector<HTMLButtonElement>("[data-app-update-entry]");
 }
 
+// PromptProbe runs the workbench's production notification hook with a supplied snapshot.
+// PromptProbe 使用指定快照运行工作台实际的更新通知逻辑。
+function PromptProbe({ current }: { current: AppUpdateSnapshot }) {
+  useAppUpdatePrompts(current, 0, () => undefined);
+  return null;
+}
+
 // openDialog clicks the entry and waits for the lazily loaded dialog.
 // openDialog 点击入口并等待懒加载的对话框。
 async function openDialog(): Promise<HTMLElement> {
@@ -128,6 +140,33 @@ describe("AppUpdateHeaderButton", () => {
   it("shows nothing when this copy cannot update itself", async () => {
     await render(snapshot({ unavailableReason: "notInstalled", offer: offer() }));
     expect(entry()).toBeNull();
+  });
+
+  it("waits for automatic preparation before showing the update entry", async () => {
+    const settings = { ...snapshot().settings, autoDownload: true };
+    await render(snapshot({ settings, activity: "downloading", offer: offer() }));
+    expect(entry()).toBeNull();
+    expect(service.restartToUpdate).not.toHaveBeenCalled();
+
+    await render(snapshot({ settings, readyVersion: offer().version }));
+    expect(entry()).not.toBeNull();
+    expect(service.restartToUpdate).not.toHaveBeenCalled();
+  });
+
+  it("announces an automatic update only when ready and requests restart only after the action", async () => {
+    const settings = { ...snapshot().settings, autoDownload: true };
+    const version = offer().version;
+    await act(async () => root.render(<PromptProbe current={snapshot({ settings, activity: "downloading", offer: offer() })} />));
+    expect(notices.info).not.toHaveBeenCalled();
+    expect(notices.success).not.toHaveBeenCalled();
+
+    await act(async () => root.render(<PromptProbe current={snapshot({ settings, readyVersion: version })} />));
+    expect(notices.success).toHaveBeenCalledOnce();
+    expect(service.restartToUpdate).not.toHaveBeenCalled();
+
+    service.restartToUpdate.mockResolvedValue(snapshot({ settings, readyVersion: version, activity: "restarting" }));
+    await act(async () => { notices.success.mock.calls[0][1].action.onClick(); });
+    await vi.waitFor(() => expect(service.restartToUpdate).toHaveBeenCalledWith(version));
   });
 
   it("previews the offered notes and downloads through the shared updater call", async () => {
