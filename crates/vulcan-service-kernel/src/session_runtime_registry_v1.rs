@@ -21,11 +21,11 @@ use vulcan_session_core::v1::collaboration::{
     SetRunControlInput,
 };
 use vulcan_session_core::v1::config::QueuedInputIdentity;
-use vulcan_session_core::v1::context::LockedBaselineProjection;
+use vulcan_session_core::v1::context::{CompactionNode, LockedBaselineProjection};
 use vulcan_session_core::v1::context_maintenance::{
     ManualCompactionPendingRequest, ManualContextMaintenanceSource,
 };
-use vulcan_session_core::v1::dedicated::dedicated_provider_events;
+use vulcan_session_core::v1::dedicated::{DedicatedSessionProfile, dedicated_provider_events};
 use vulcan_session_core::v1::document::{
     ApiTransportObservedReceipt, ClientInputSubmission, CompactionCommitInput,
     ContinuationDispatchResolution, ContinuationRequest, ContinuationTerminalProjection,
@@ -61,6 +61,11 @@ use vulcan_workspace_store::workspace_store::{
 };
 
 mod compaction_continuation;
+mod request_context_preview;
+use request_context_preview::assemble_sourced_request_history;
+pub(crate) use request_context_preview::{
+    latest_context_assistant_response, preview_session_tool_definitions, simulate_request_context,
+};
 mod lifetime_usage;
 mod request_preparation;
 pub(crate) use request_preparation::SessionPhysicalPreparation;
@@ -2454,27 +2459,23 @@ impl SessionHandle {
             SessionProjectionPurpose::ProviderRequest => context_frozen_at,
             SessionProjectionPurpose::CompactionContext => Some(through_seq),
         };
-        // A dedicated session forgets closed turns started while its memory was locked.
-        // 专职会话遗忘在记忆锁定期间开始且已闭合的回合。
-        let dedicated_events = dedicated_profile
-            .as_ref()
-            .map(|profile| dedicated_provider_events(profile, &range.events, open_turn_id));
-        let mut sourced_items = project_context_generation_items_with_sources(
-            dedicated_events.as_deref().unwrap_or(&range.events),
+        let sourced_items = assemble_sourced_request_history(
+            &range.events,
+            dedicated_profile.as_ref(),
+            open_turn_id,
             retained_from_seq,
             instruction_frontier,
+            summary_compaction.as_ref(),
         )?;
-        // Derive the same fixed control for planning, controller restore and physical request preparation.
-        // 为规划、控制器恢复与物理请求准备派生同一条固定控制消息。
-        let mut image_replay_from_seq = None;
-        if let Some(summary) = summary_compaction {
+        // Image delivery policy is transport metadata, separate from assembling the history.
+        // 图片投递策略属于传输元数据，与历史组装分开。
+        let image_replay_from_seq = summary_compaction.and_then(|summary| {
             let vulcan_session_core::v1::context::CompactionContent::Summary {
                 image_replay_from_seq: replay,
                 ..
             } = &summary.content;
-            image_replay_from_seq = *replay;
-            compaction_continuation::insert_summary_continuation(&mut sourced_items, &summary)?;
-        }
+            *replay
+        });
         let items = sourced_items
             .iter()
             .map(|projected| projected.item.clone())

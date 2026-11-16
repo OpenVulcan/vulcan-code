@@ -4,6 +4,7 @@ import {
   Copy,
   FileText,
   FolderOpen,
+  ListTree,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -21,6 +22,11 @@ import {
 import { useI18n } from "@/i18n";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
 import type { ConversationSummary } from "@/types";
+
+// Load the inspector when opened, keeping its rendering and polling out of the normal workbench path.
+// 在打开时加载检查面板，使其渲染与轮询不进入常规工作台路径。
+const RequestContextDialog = React.lazy(() => import("./request-context-dialog")
+  .then((module) => ({ default: module.RequestContextDialog })));
 
 // WorkspaceTitleMenu renders title-adjacent overflow actions without joining the native drag region.
 // WorkspaceTitleMenu 在标题旁渲染溢出操作，并避免加入原生拖动区域。
@@ -46,6 +52,11 @@ export function WorkspaceTitleMenu(props: {
   // hasConversationMenu determines whether conversation-only commands can be shown.
   // hasConversationMenu 判断是否可以展示仅会话可用的命令。
   const hasConversationMenu = Boolean(props.conversation && props.onConversationMenuAction);
+  // Bind an open inspector to the conversation whose menu opened it.
+  // 将打开的检查面板绑定到触发它的会话。
+  const sessionId = props.conversation?.id;
+  const [inspectedSession, setInspectedSession] = React.useState<string>();
+  React.useEffect(() => { setInspectedSession(undefined); }, [sessionId]);
 
   // handleCopyTitle copies the visible header title and reports completion.
   // handleCopyTitle 复制当前可见标题并反馈完成状态。
@@ -75,6 +86,7 @@ export function WorkspaceTitleMenu(props: {
   if (!hasConversationMenu) return null;
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -121,7 +133,18 @@ export function WorkspaceTitleMenu(props: {
           <FileText size={15} />
           <span>{t("conversationMenu.copySessionId")}</span>
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => setInspectedSession(sessionId)}>
+          <ListTree size={15} />
+          <span>{t("requestContext.title")}</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    {inspectedSession && inspectedSession === sessionId ? (
+      <React.Suspense fallback={null}>
+        <RequestContextDialog key={inspectedSession} sessionId={inspectedSession} onClose={() => setInspectedSession(undefined)} />
+      </React.Suspense>
+    ) : null}
+    </>
   );
 }

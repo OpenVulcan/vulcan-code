@@ -14,6 +14,7 @@ use vulcan_session_core::v1::{ApiCallId, ProviderProjectionProof, Seq};
 /// 返回一份强类型成功许可夹具，仅用于测试流守卫的精确枚举判别。
 fn successful_permit_fixture() -> PreparedPhysicalApi {
     PreparedPhysicalApi::SessionV1 {
+        purpose: vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration,
         dispatch_lease: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
@@ -65,6 +66,7 @@ fn successful_permit_fixture() -> PreparedPhysicalApi {
             continuation_action_id: None,
         },
         provider_api_trace_store: None,
+        request_context_prefix: Vec::new(),
     }
 }
 

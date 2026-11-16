@@ -7,6 +7,14 @@
 //! 追踪只是诊断旁路，绝不是会话事实。每次真实 HTTP attempt 在派发前预留一个持久化单调序号，
 //! 随后把一对完整脱敏 input/output 发布到固定十槽环中。
 
+mod request_context;
+
+pub use request_context::{
+    ProviderRequestContext, ProviderRequestContextDispatch, RequestContextAssistantResponse,
+    RequestContextFixedPrompt, RequestContextPromptKind, RequestContextPromptSource,
+    render_simulated_request_context,
+};
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -222,6 +230,9 @@ struct ProviderApiTraceStoreState {
     /// One owner lock serializing reserve, publish, prepare, and clear operations.
     /// 串行化预留、发布、准备和清理操作的唯一 owner 锁。
     owner: Mutex<ProviderApiTraceOwnerState>,
+    /// Latest transport context, with a lock independent of the disk trace writer.
+    /// 最近一次传输上下文，使用独立于磁盘追踪写入器的锁。
+    request_context: request_context::ProviderRequestContextSlot,
 }
 
 /// Mutable state guarded by one trace-store owner lock.
@@ -257,8 +268,29 @@ impl ProviderApiTraceStore {
             enabled,
             state: Arc::new(ProviderApiTraceStoreState {
                 owner: Mutex::new(ProviderApiTraceOwnerState::default()),
+                request_context: request_context::ProviderRequestContextSlot::default(),
             }),
         }
+    }
+
+    /// Updates the in-memory inspector from the exact `body` handed to transport.
+    /// 从交给传输层的精确 `body` 更新内存检查面板。
+    pub fn observe_request_context(
+        &self,
+        dispatch: ProviderRequestContextDispatch,
+        body: &Value,
+        credential: &str,
+        prefix: &[RequestContextPromptSource],
+    ) {
+        self.state
+            .request_context
+            .observe(dispatch, body, credential, prefix);
+    }
+
+    /// Returns the newest actual dispatch observed by this live session owner.
+    /// 返回此实时会话所有者观察到的最近一次实际分派。
+    pub fn latest_request_context(&self) -> Option<Arc<ProviderRequestContext>> {
+        self.state.request_context.latest()
     }
 
     /// Runs one complete error-record operation under the parent lock and returns its result.

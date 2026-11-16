@@ -65,11 +65,12 @@ pub use tool_output::{
     ProviderToolSearchResult,
 };
 pub(crate) use wire_capture::provider_wire_request_capture;
-use wire_capture::{ProviderWireCaptureTargets, ProviderWireRequestCaptureTarget};
 pub use wire_capture::{
-    ProviderWireRequestCapture, ProviderWireRequestTraceDispatch, ProviderWireResponseCapture,
+    ProviderDispatchObservation, ProviderRequestContextObserver, ProviderWireRequestCapture,
+    ProviderWireRequestTraceDispatch, ProviderWireResponseCapture,
     ProviderWireResponseChunkCapture, ProviderWireResponseFrameCapture,
 };
+use wire_capture::{ProviderWireCaptureTargets, ProviderWireRequestCaptureTarget};
 
 use crate::{CredentialExecutionSecret, ProviderToolTarget, ServiceEntry};
 use futures_util::{Stream, StreamExt};
@@ -276,6 +277,7 @@ impl ProviderExecutionClient {
                 dispatch_lease: None,
                 request: None,
                 response: None,
+                context: None,
             },
         )
     }
@@ -314,6 +316,7 @@ impl ProviderExecutionClient {
                     wire_request_capture,
                 )),
                 response: None,
+                context: None,
             },
         )
     }
@@ -352,6 +355,7 @@ impl ProviderExecutionClient {
                     wire_request_capture,
                 )),
                 response: Some(wire_response_capture),
+                context: None,
             },
         )
     }
@@ -364,13 +368,10 @@ impl ProviderExecutionClient {
         request_body: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        trace: Option<(
-            oneshot::Sender<ProviderWireRequestTraceDispatch>,
-            oneshot::Sender<ProviderWireResponseCapture>,
-        )>,
+        observation: ProviderDispatchObservation,
         dispatch_lease: Option<ProviderDispatchLease>,
     ) -> ProviderExecutionStream {
-        let (request, response) = match trace {
+        let (request, response) = match observation.trace {
             Some((capture, response)) => (
                 Some(ProviderWireRequestCaptureTarget::Trace(capture)),
                 Some(response),
@@ -386,6 +387,7 @@ impl ProviderExecutionClient {
                 request,
                 response,
                 dispatch_lease,
+                context: observation.context,
             },
         )
     }

@@ -299,6 +299,7 @@ mod tests {
             };
         }
         PreparedPhysicalApi::SessionV1 {
+            purpose: vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration,
             dispatch_lease: None,
             exact_request,
             controller_config: Default::default(),
@@ -318,6 +319,7 @@ mod tests {
                 continuation_action_id: None,
             },
             provider_api_trace_store: None,
+            request_context_prefix: Vec::new(),
         }
     }
 

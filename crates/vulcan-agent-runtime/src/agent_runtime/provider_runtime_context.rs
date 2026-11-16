@@ -1,9 +1,10 @@
 //! Provider runtime context helpers for system preamble and turn-budget resolution.
 //! 面向系统前导语与轮次预算解析的 Provider 运行时上下文辅助模块。
 
-use crate::agent_runtime::config::RuntimeAgentDefinition;
+use crate::agent_runtime::config::{AgentRuntimeConfig, RuntimeAgentDefinition};
 use crate::agent_runtime::execution_models::{
-    ExecutionPreparation, ExecutionPromptPurpose, persisted_personality_to_prompt_selection,
+    ExecutionAgentPromptSnapshot, ExecutionPreparation, ExecutionPromptPurpose,
+    persisted_personality_to_prompt_selection,
 };
 use crate::agent_runtime::prompt_composer_runtime::{
     record_runtime_prompt_composer_report, runtime_prompt_composer_engine,
@@ -17,7 +18,9 @@ use std::{
     path::Path,
     sync::{Mutex, OnceLock},
 };
-use vulcan_ai_contract::{HOST_MESSAGE_GUIDANCE, HostMessageEnvelope, HostMessageKind};
+use vulcan_ai_contract::{
+    HOST_MESSAGE_GUIDANCE, HostMessageEnvelope, HostMessageKind, render_project_agents_instruction,
+};
 use vulcan_context::runtime_host::{RUNTIME_HOST_METADATA_VERSION, RuntimeHostEventMetadata};
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -28,16 +31,17 @@ use vulcan_core::types::{
 use vulcan_hooks::{SystemPromptHookBaselineKind, SystemPromptHookBlock};
 use vulcan_prompt_composer::{
     AdditionalPromptSegment, AgentPromptSnapshot, DEFAULT_PROJECT_RULES_FILE_NAME,
-    EnvironmentContextSnapshot, ModelDescriptor, ProjectRulesFileCache, ProjectRulesSnapshot,
-    PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput, PromptBaselineKind,
-    PromptBaselineProvenance, PromptSegment, PromptTarget, ProviderPromptSnapshot,
-    SubagentSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    EnvironmentContextSnapshot, ModelDescriptor, PersonalitySelection, ProjectRulesFileCache,
+    ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
+    PromptBaselineKind, PromptBaselineProvenance, PromptSegment, PromptTarget,
+    ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot, ToolDescriptor,
     build_context_compaction_developer_segment,
 };
-use vulcan_session_core::v1::DedicatedToolAccess;
+use vulcan_session_core::v1::child_execution::ChildExecutionProfile;
 use vulcan_session_core::v1::context::{
     LockedBaselineProjection, LockedBaselineSegmentInput, LockedPromptTarget, LockedSourceKind,
 };
+use vulcan_session_core::v1::{DedicatedSessionProfile, DedicatedToolAccess};
 
 /// Process-wide project-rules source cache shared by provider runtime requests.
 /// Provider 运行时请求共享的进程级项目规则来源缓存。
@@ -193,11 +197,7 @@ impl RuntimePromptLayers {
         // Carry product and agent foundations separately so existing V1 sessions can use them
         // without editing the persisted generation lock or freezing the editable base prompt.
         // 单独传递产品及代理基础指令，使现有 V1 会话能使用它们，同时保留已持久化的代际锁和基础提示词设置的生效时机。
-        let fixed_instruction_layers = CoreProviderPromptLayers {
-            system: render_fixed_instruction_segments(&output.system_segments),
-            developer: render_fixed_instruction_segments(&output.developer_segments),
-            ..Default::default()
-        };
+        let fixed_instruction_layers = render_fixed_instruction_layers(output);
         // fallback_text contains only the producer-declared stable baseline; dynamic material is emitted as User events by the non-V1 transport.
         // fallback_text 只包含生产者声明的稳定基线；动态内容由非 V1 传输层作为 User 事件发送。
         let stable_provider_layers =
@@ -665,30 +665,18 @@ fn build_runtime_prompt_assembly_input(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> Result<PromptAssemblyInput, String> {
-    // provider_prompt is the first non-blank layer of project override, user override, and built-in default.
-    // provider_prompt 是项目覆盖、用户覆盖与内置默认中第一个非空层级。
-    let provider_prompt =
-        load_effective_system_prompt(resolve_workspace_directory(&preparation.workspace_path)?)?;
-    // A dedicated session's base prompt replaces every agent prompt source.
-    // 专职会话的基础提示词取代所有代理提示词来源。
-    let agent_prompt = match preparation.dedicated_session.as_ref() {
-        Some(profile) => Some(
-            AgentPromptSnapshot::new(profile.base_prompt.clone())
-                .with_source_label("Dedicated session base prompt")
-                .with_fixed_instruction(),
-        ),
-        None => build_request_agent_prompt_snapshot(preparation)
-            // A child has its own session and inherits the parent's captured base definition.
-            // 子代理有独立会话，并继承已捕获的父代理基础定义。
-            .map(|snapshot| {
-                if preparation.subagent_prompt_context.is_some() {
-                    snapshot.with_fixed_instruction()
-                } else {
-                    snapshot
-                }
-            })
-            .or_else(|| active_agent.and_then(build_agent_prompt_snapshot)),
-    };
+    // Resolve the same product and agent sources used by the read-only request preview.
+    // 解析与只读请求预览相同的产品与代理来源。
+    let provider_prompt = build_provider_prompt_snapshot(&preparation.workspace_path)?;
+    let agent_prompt = resolve_agent_prompt_snapshot(
+        preparation
+            .dedicated_session
+            .as_ref()
+            .map(|profile| profile.base_prompt.as_str()),
+        preparation.agent_prompt_snapshot.as_ref(),
+        preparation.subagent_prompt_context.is_some(),
+        active_agent,
+    );
     let environment_context = EnvironmentContextSnapshot::new(
         crate::agent_runtime::execution_models::render_workspace_environment_context(
             &preparation.workspace_path,
@@ -722,10 +710,7 @@ fn build_runtime_prompt_assembly_input(
             model_id: preparation.model_blueprint.model_id.clone(),
             supports_native_personality: true,
         },
-        provider_prompt: Some(
-            ProviderPromptSnapshot::new(provider_prompt.text)
-                .with_source_label(provider_prompt.source_label),
-        ),
+        provider_prompt: Some(provider_prompt),
         agent_prompt,
         personality: persisted_personality_to_prompt_selection(
             &preparation.prompt_configuration.personality,
@@ -763,21 +748,44 @@ fn build_runtime_prompt_assembly_input(
 /// Selects the prompt-composer mode for one prepared execution.
 /// 为一次已准备执行选择提示词组合模式。
 fn prompt_assembly_mode_for_preparation(preparation: &ExecutionPreparation) -> PromptAssemblyMode {
-    if let Some(context) = preparation.subagent_prompt_context.as_ref() {
-        if context.uses_functional_prompt() {
-            return PromptAssemblyMode::SubagentFunctional;
-        }
-        return PromptAssemblyMode::SubagentClone;
+    resolve_prompt_assembly_mode(
+        preparation
+            .subagent_prompt_context
+            .as_ref()
+            .map(|context| context.uses_functional_prompt()),
+        preparation
+            .dedicated_session
+            .as_ref()
+            .map(|profile| profile.tool_access),
+        preparation.prompt_purpose,
+    )
+}
+
+/// Resolves the prompt strategy from the child style, dedicated profile and request purpose.
+/// 根据子代理样式、专职画像与请求用途解析提示词策略。
+/// A child style of `None` denotes a root session. Returns the exact composer mode.
+/// 子代理样式为 `None` 时表示根会话。返回精确的组合器模式。
+fn resolve_prompt_assembly_mode(
+    child_functional: Option<bool>,
+    dedicated_access: Option<DedicatedToolAccess>,
+    purpose: ExecutionPromptPurpose,
+) -> PromptAssemblyMode {
+    if let Some(functional) = child_functional {
+        return if functional {
+            PromptAssemblyMode::SubagentFunctional
+        } else {
+            PromptAssemblyMode::SubagentClone
+        };
     }
-    if let Some(profile) = preparation.dedicated_session.as_ref()
-        && preparation.prompt_purpose.supports_user_turn_tooling()
+    if let Some(access) = dedicated_access
+        && purpose.supports_user_turn_tooling()
     {
-        return match profile.tool_access {
+        return match access {
             DedicatedToolAccess::None => PromptAssemblyMode::DedicatedMinimal,
             DedicatedToolAccess::Standard => PromptAssemblyMode::DedicatedTooling,
         };
     }
-    match preparation.prompt_purpose {
+    match purpose {
         ExecutionPromptPurpose::UserTurn
         | ExecutionPromptPurpose::AgentTask
         | ExecutionPromptPurpose::ExecutionRetry
@@ -849,24 +857,145 @@ fn build_agent_prompt_snapshot(agent: &RuntimeAgentDefinition) -> Option<AgentPr
     )
 }
 
-/// Builds a request-scoped fixed agent prompt snapshot when one is present.
-/// 当请求携带固定代理提示词快照时构建请求级代理提示词快照。
-fn build_request_agent_prompt_snapshot(
-    preparation: &ExecutionPreparation,
+/// Resolves the agent prompt from the dedicated profile, request snapshot or selected agent.
+/// 从专职画像、请求快照或选中的代理解析代理提示词。
+/// Children preserve their captured foundation as a fixed instruction. Returns no segment when the source is blank.
+/// 子代理保留其捕获的基础提示词作为固定指令。来源为空白时不返回片段。
+fn resolve_agent_prompt_snapshot(
+    dedicated_prompt: Option<&str>,
+    request_snapshot: Option<&ExecutionAgentPromptSnapshot>,
+    is_child: bool,
+    active_agent: Option<&RuntimeAgentDefinition>,
 ) -> Option<AgentPromptSnapshot> {
-    let snapshot = preparation.agent_prompt_snapshot.as_ref()?;
-    let text = snapshot.text.trim();
-    if text.is_empty() {
-        return None;
+    if let Some(text) = dedicated_prompt {
+        return Some(
+            AgentPromptSnapshot::new(text.to_owned())
+                .with_source_label("Dedicated session base prompt")
+                .with_fixed_instruction(),
+        );
     }
-    Some(AgentPromptSnapshot::new(text.to_string()).with_source_label(snapshot.source_label()))
+    if let Some(snapshot) = request_snapshot {
+        // Match the composer’s blank-text rule before using the selected agent definition.
+        // 按组合器的空白文本规则处理快照，再决定是否使用所选代理定义。
+        let text = snapshot.text.trim();
+        if !text.is_empty() {
+            // Preserve the origin label while forcing the captured child foundation into the fixed prefix.
+            // 保留来源标签，并将捕获的子代理基础指令放入固定前缀。
+            let prompt = AgentPromptSnapshot::new(text.to_string())
+                .with_source_label(snapshot.source_label());
+            return Some(if is_child {
+                prompt.with_fixed_instruction()
+            } else {
+                prompt
+            });
+        }
+    }
+    active_agent.and_then(build_agent_prompt_snapshot)
+}
+
+/// Resolves the base system prompt snapshot for the supplied workspace path.
+/// 解析指定工作区路径生效的基础系统提示词快照。
+/// Returns the project override, user override or built-in snapshot, preserving read errors.
+/// 返回项目覆盖、用户覆盖或内置快照，并保留读取错误。
+fn build_provider_prompt_snapshot(workspace_path: &str) -> Result<ProviderPromptSnapshot, String> {
+    // Use the prompt loader’s precedence and error handling for both execution and inspection.
+    // 执行与检查均使用提示词加载器的优先级和错误处理。
+    let resolved = load_effective_system_prompt(resolve_workspace_directory(workspace_path)?)?;
+    Ok(ProviderPromptSnapshot::new(resolved.text).with_source_label(resolved.source_label))
+}
+
+/// Resolves and composes the fixed prefix of a conversation using only local prompt sources.
+/// 仅用本地提示来源解析并组装会话的固定前缀。
+/// `workspace_path` selects prompt overrides, `config` owns agent definitions, and both optional profiles come from the published session.
+/// `workspace_path` 决定提示词覆盖，`config` 持有代理定义，两个可选画像均来自已发布的会话。
+/// Returns system and developer instruction layers in composer order, or an explicit source or composition error.
+/// 按组合器顺序返回系统与开发者指令层，或返回明确的来源或组合错误。
+pub fn compose_conversation_prompt_preview(
+    workspace_path: &str,
+    config: &AgentRuntimeConfig,
+    dedicated: Option<&DedicatedSessionProfile>,
+    child: Option<&ChildExecutionProfile>,
+    published_baseline: Option<LockedBaselineProjection>,
+) -> Result<(CoreProviderPromptLayers, LockedBaselineProjection), String> {
+    // Conversation requests use the active agent for roots and the captured agent selection for children.
+    // 会话请求对根会话使用活动代理，对子会话使用捕获的代理选择。
+    let selected_agent_id = child
+        .and_then(|profile| profile.execution_agent_id.as_deref())
+        .unwrap_or(&config.active_agent_id);
+    // Child recovery uses the captured parent prompt even when the current agent profile changes.
+    // 即使当前代理画像变化，子代理恢复仍使用已捕获的父代理提示词。
+    let child_prompt = child
+        .and_then(|profile| profile.fixed_agent_prompt.as_deref())
+        .and_then(ExecutionAgentPromptSnapshot::fixed_parent_runtime);
+    // A functional supplement uses dynamic provenance, but its presence selects the composer strategy.
+    // 功能补充属于动态来源，但它的存在决定组合器策略。
+    let child_functional = child.map(|profile| {
+        profile
+            .prompt_context
+            .functional_system_prompt
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    });
+    // The fixed-prefix projection requires neither a selected model route nor any live tool schemas.
+    // 固定前缀投影无需已选模型路由或实时工具 Schema。
+    let input = PromptAssemblyInput {
+        mode: resolve_prompt_assembly_mode(
+            child_functional,
+            dedicated.map(|profile| profile.tool_access),
+            ExecutionPromptPurpose::UserTurn,
+        ),
+        model: ModelDescriptor {
+            family: String::new(),
+            model_id: String::new(),
+            supports_native_personality: true,
+        },
+        provider_prompt: Some(build_provider_prompt_snapshot(workspace_path)?),
+        agent_prompt: resolve_agent_prompt_snapshot(
+            dedicated.map(|profile| profile.base_prompt.as_str()),
+            child_prompt.as_ref(),
+            child.is_some(),
+            config
+                .agents
+                .iter()
+                .find(|agent| agent.id == selected_agent_id),
+        ),
+        personality: PersonalitySelection::Disabled,
+        output_style: None,
+        project_rules: if published_baseline.is_none() {
+            load_workspace_project_rules_snapshot(workspace_path)?
+        } else {
+            None
+        },
+        environment_context: None,
+        task_goal: None,
+        tool_catalog: ToolCatalogSnapshot::new(Vec::new()),
+        subagent: None,
+        custom_developer_segments: if dedicated.is_some() {
+            Vec::new()
+        } else {
+            build_prompt_purpose_developer_segments(ExecutionPromptPurpose::UserTurn)
+        },
+        custom_user_segments: Vec::new(),
+    };
+    // Use the same composer and provenance filter as the live request.
+    // 使用与实发请求相同的组合器与来源过滤规则。
+    let output = runtime_prompt_composer_engine()
+        .compose(&input)
+        .map_err(|error| format!("Runtime prompt composition failed: {error}"))?;
+    // Cold previews may project local rules, while initialized sessions retain their exact saved baseline.
+    // 冷预览可投影本地规则，已初始化会话保留精确的已保存基线。
+    let baseline = match published_baseline {
+        Some(baseline) => baseline,
+        None => project_locked_runtime_baseline(&output, &[])?,
+    };
+    Ok((render_fixed_instruction_layers(&output), baseline))
 }
 
 /// Renders one prompt-composer output into structured provider prompt layers.
 /// 将一份提示词组合器输出渲染为结构化 Provider 提示词层。
 fn render_runtime_prompt_layers(output: &PromptAssemblyOutput) -> CoreProviderPromptLayers {
     CoreProviderPromptLayers {
-        system: output.render_system_text(),
+        system: render_system_instruction_segments(output.system_segments.iter()),
         developer: output.render_developer_text(),
         tool_guidance: output.render_tool_metadata_text(),
         runtime_context: output.render_user_text(),
@@ -892,7 +1021,12 @@ fn render_locked_runtime_prompt_layers(
     hook_blocks: &[SystemPromptHookBlock],
 ) -> CoreProviderPromptLayers {
     let mut layers = CoreProviderPromptLayers {
-        system: render_locked_prompt_segments(&output.system_segments),
+        system: render_system_instruction_segments(
+            output
+                .system_segments
+                .iter()
+                .filter(|segment| segment.baseline_provenance.is_some()),
+        ),
         developer: render_locked_prompt_segments(&output.developer_segments),
         tool_guidance: render_locked_prompt_segments(&output.tool_metadata_segments),
         // User-targeted host baseline text is emitted as a User event by non-V1 transport.
@@ -931,6 +1065,40 @@ fn render_locked_prompt_segments(segments: &[PromptSegment]) -> String {
         .filter(|body| !body.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// Joins system segments in order, framing AGENTS.md only at the request boundary.
+/// 按顺序拼接系统片段，仅在请求边界封装 AGENTS.md。
+/// The composer retains the raw source for baseline persistence.
+/// 组合器保留原始来源以供持久化基线。
+fn render_system_instruction_segments<'a>(
+    segments: impl Iterator<Item = &'a PromptSegment>,
+) -> String {
+    segments
+        .filter(|segment| !segment.body.trim().is_empty())
+        .map(|segment| {
+            if segment
+                .baseline_provenance
+                .as_ref()
+                .is_some_and(|source| source.kind == PromptBaselineKind::AgentsMd)
+            {
+                std::borrow::Cow::Owned(render_project_agents_instruction(&segment.body))
+            } else {
+                std::borrow::Cow::Borrowed(segment.body.as_str())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Returns the fixed system and developer layers from the ordered composer output.
+/// 从有序的组合器产出中返回固定系统与开发者指令层。
+fn render_fixed_instruction_layers(output: &PromptAssemblyOutput) -> CoreProviderPromptLayers {
+    CoreProviderPromptLayers {
+        system: render_fixed_instruction_segments(&output.system_segments),
+        developer: render_fixed_instruction_segments(&output.developer_segments),
+        ..Default::default()
+    }
 }
 
 /// Joins fixed instruction bodies in composer order for the V1 request head.
@@ -2615,7 +2783,7 @@ mod tests {
             "dynamic agent instructions body",
             "dynamic plan context body",
             "dynamic hook body",
-            "Current execution mode: Build",
+            "Current execution mode: Work",
         ] {
             assert!(
                 layers.provider_layers.system.contains(dynamic_body)

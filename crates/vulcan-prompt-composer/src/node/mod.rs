@@ -140,8 +140,8 @@ pub fn render_node(
                 CachedSegmentDescriptor::new(
                     "project_rules",
                     snapshot.content_hash,
-                    PromptNodeKind::User,
-                    PromptTarget::User,
+                    PromptNodeKind::System,
+                    PromptTarget::System,
                     format!("Project Rules {}", snapshot.source),
                     &snapshot.text,
                     format!("Project rules `{}`", snapshot.source),

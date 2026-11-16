@@ -35,6 +35,34 @@ fn client() -> ProviderExecutionClient {
     )
 }
 
+/// Checks the production Chat path preserves paragraph boundaries for separate system sources.
+/// 检查生产 Chat 路径为独立系统来源保留段落边界。
+#[test]
+fn production_chat_preserves_system_fragment_boundaries() {
+    // End the base prompt with a Markdown list so loss of the separator is observable in preview.
+    // 让基础提示词以 Markdown 列表结束，以便预览能观察到丢失的分隔符。
+    let base = "Base instructions\n\n- Last rule";
+    let persona = "Use a supportive tone.";
+    let profile = "<vmm_profile>\nSaved profile.\n</vmm_profile>";
+    let mut request = request_with_host_messages();
+    request.messages.splice(
+        ..1,
+        [base, persona, profile].map(|text| AiMessage {
+            role: MessageRole::System,
+            content: vec![ContentItem::Text { text: text.into() }],
+            provider_context_items: Vec::new(),
+        }),
+    );
+    let body = client()
+        .encode_request(&pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID), &request)
+        .expect("encode a physical Chat request")
+        .body;
+    assert_eq!(
+        fixed_top_text(OPENAI_CHAT_PROFILE_ID, &body),
+        [base, persona, profile].join("\n\n")
+    );
+}
+
 /// Renders one host-authored dynamic event before it enters the provider-neutral User message.
 /// 在进入供应商无关 User 消息前渲染一条宿主编写的动态事件。
 fn rendered_host_message(event_id: &str, kind: HostMessageKind, body: &str) -> String {

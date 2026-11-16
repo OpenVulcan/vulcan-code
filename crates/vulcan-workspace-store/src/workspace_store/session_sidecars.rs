@@ -71,6 +71,25 @@ pub fn load_session_subagent_models<T: DeserializeOwned>(
     load_sidecar(locator, SESSION_SUBAGENT_MODELS_FILE)
 }
 
+/// Reads the exact session allowlist bytes without performing a schema upgrade.
+/// 读取精确会话白名单字节，无需执行 Schema 升级。
+/// The locator selects one session, and absence is returned separately from read errors.
+/// 定位器选择一个会话，文件缺失与读取错误分别返回。
+pub fn read_session_subagent_models_bytes(
+    locator: &SessionV1StorageLocator,
+) -> Result<Option<Vec<u8>>, String> {
+    // The writer atomically replaces the document, so a reader sees one complete version.
+    // 写入方原子替换文档，因此读取方只会看到一个完整版本。
+    let path = locator
+        .session_directory()
+        .join(SESSION_SUBAGENT_MODELS_FILE);
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Read {}: {error}", path.display())),
+    }
+}
+
 /// Saves the session allowlist document, or removes it when `document` is `None`.
 /// 保存会话白名单文档；`document` 为 `None` 时删除该文件。
 pub fn save_session_subagent_models<T: Serialize>(
@@ -132,10 +151,8 @@ pub fn load_session_subagent_models_with_upgrade<T: Serialize>(
         .join(SESSION_SUBAGENT_MODELS_FILE);
     // Preserve absence separately from corruption or I/O failures.
     // 区分缺失与损坏或输入输出失败。
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("Read {}: {error}", path.display())),
+    let Some(bytes) = read_session_subagent_models_bytes(locator)? else {
+        return Ok(None);
     };
     // Validation completes before any backup or policy mutation.
     // 所有校验在备份和策略修改之前完成。

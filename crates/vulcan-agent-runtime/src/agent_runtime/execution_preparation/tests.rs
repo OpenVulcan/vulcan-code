@@ -1215,3 +1215,60 @@ pub(in crate::agent_runtime) fn test_execution_preparation_request() -> Executio
         embedded_turn_usage_segments: Vec::new(),
     }
 }
+/// Verifies local preview reuses real tool admission without acquiring a model route lease.
+/// 验证本地预览复用真实工具准入，且不建立模型路由租约。
+#[test]
+fn request_context_tool_preview_matches_prepared_tools_without_leasing() {
+    // Use the same configured route for both preparation paths.
+    // 两条准备路径使用同一份已配置路由。
+    let config = test_provider_config();
+    // The fixture runtime owns an in-memory provider catalog and no network dispatch.
+    // 夹具运行时拥有内存供应商目录且无网络分派。
+    let foundation = test_runtime_foundation(&config);
+    // Plan mode proves that preview tools are filtered by request mode.
+    // 计划模式用于验证工具预览会按请求模式过滤。
+    let mut request = test_execution_preparation_request();
+    request.execution_mode = String::from("plan");
+    // Prepare against the same public runtime so a stray lease is observable.
+    // 使用同一个公共运行时准备，便于观察误建的租约。
+    let runtime = foundation.public_ai_runtime().unwrap();
+    // The preview must succeed before any real preparation.
+    // 预览必须在任何真实准备之前成功。
+    let preview = super::preview_request_tools(
+        foundation,
+        runtime.clone(),
+        None,
+        &config,
+        request.clone(),
+        false,
+        None,
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .session_selection_lease(&request.session_id.to_string())
+            .unwrap()
+            .is_none()
+    );
+    // Prepare the fixture normally to compare its resolved schemas, not just the names.
+    // 常规准备夹具以比较实际解析的 Schema，而不只是名称。
+    let prepared = prepare_execution_with_tool_snapshot(
+        &test_runtime_foundation(&config),
+        None,
+        &config,
+        &request,
+    )
+    .unwrap();
+    assert!(!preview.is_empty());
+    assert_eq!(
+        preview.len(),
+        prepared.tool_snapshot.resolved_tool_definitions.len()
+    );
+    for (tool, definition) in preview
+        .iter()
+        .zip(&prepared.tool_snapshot.resolved_tool_definitions)
+    {
+        assert_eq!(tool["name"], definition.descriptor.id);
+        assert_eq!(tool["parameters"], definition.parameters_schema);
+    }
+}

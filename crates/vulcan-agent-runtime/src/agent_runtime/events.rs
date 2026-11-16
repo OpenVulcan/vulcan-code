@@ -199,6 +199,9 @@ pub enum PreparedPhysicalApi {
     /// A V1 session request rebuilt from the durable event ledger and committed before dispatch.
     /// 从可靠事件账本重建并在分派前完成提交的 V1 会话请求。
     SessionV1 {
+        /// Exact purpose admitted for this V1 request.
+        /// 本次 V1 请求准入的精确用途。
+        purpose: vulcan_session_core::v1::event::ApiPurposeKind,
         /// Orders publication of a changed project binding against this physical dispatch.
         /// 将项目绑定更改的发布与本次物理派发排序。
         dispatch_lease: Option<vulcan_provider_adapters::ProviderDispatchLease>,
@@ -223,6 +226,10 @@ pub enum PreparedPhysicalApi {
         /// Unique session-scoped diagnostic trace owner; absent only for non-production fixtures.
         /// 唯一的会话级诊断追踪 owner；仅非生产测试夹具允许为空。
         provider_api_trace_store: Option<ProviderApiTraceStore>,
+        /// Owned initial prompt origins for this permit's encoded request inspector.
+        /// 此许可对应编码请求检查器的初始提示词来源。
+        request_context_prefix:
+            Vec<vulcan_workspace_store::workspace_store::RequestContextPromptSource>,
     },
     /// A typed non-session request that is intentionally outside the V1 event ledger.
     /// 明确位于 V1 事件账本之外的强类型非会话请求。

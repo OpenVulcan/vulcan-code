@@ -52,6 +52,78 @@ fn user_text(snapshot: &SessionProviderProjectionSnapshot) -> String {
         .join("\n")
 }
 
+/// Verifies an unused session previews current project rules in the initial system prompt without dispatch.
+/// 验证未使用的会话无需派发即可在初始系统提示词中预览当前项目规则。
+#[test]
+fn request_context_simulation_projects_fresh_project_rules() {
+    // Store the project and session in the same isolated fixture root.
+    // 在同一个隔离夹具根目录保存项目和会话。
+    let temporary = tempfile::tempdir().unwrap();
+    let session_id = SessionId::new_v4();
+    let locator =
+        create_session_v1_storage_fixture(temporary.path(), &session_id.to_string(), 1).unwrap();
+    // The canonical file is read before any baseline has been published.
+    // 在基线发布之前读取规范项目规则文件。
+    std::fs::write(
+        temporary.path().join("AGENTS.md"),
+        "## fixture project rules",
+    )
+    .unwrap();
+    let agent_config =
+        vulcan_agent_runtime::agent_runtime::config::AgentRuntimeConfig::from_sources(
+            &Default::default(),
+            &Default::default(),
+        );
+    let preview = simulate_request_context(
+        &locator,
+        temporary.path().to_str().unwrap(),
+        &agent_config,
+        |_| {
+            Ok(vec![serde_json::json!({
+                "type": "function",
+                "name": "fixture_tool",
+                "parameters": {"type": "object"},
+            })])
+        },
+    )
+    .unwrap();
+    assert!(preview["nodes"].as_array().unwrap().iter().any(|row| {
+        row["field"] == "tools"
+            && serde_json::from_str::<serde_json::Value>(row["content"].as_str().unwrap())
+                .is_ok_and(|tool| {
+                    tool["name"] == "fixture_tool" && tool["parameters"]["type"] == "object"
+                })
+    }));
+    let rules = preview["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["text"]
+                .as_str()
+                .is_some_and(|body| body.contains("fixture project rules"))
+        })
+        .expect("the local AGENTS.md is previewed");
+    assert_eq!(rules["role"], "system");
+    assert!(
+        preview["promptOrigins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|origin| {
+                origin["kind"] == "agents_md" && origin["tag"] == "vulcan_context_agent_md"
+            })
+    );
+    assert!(preview.get("dispatch").is_none());
+    assert!(
+        load_session_v1_full(&locator)
+            .unwrap()
+            .document
+            .events()
+            .is_empty()
+    );
+}
+
 /// Verifies persisted compaction freezes prefix selection while summary planning prunes expired instructions.
 /// 验证持久压缩冻结前缀选择，同时摘要规划裁剪失效指令。
 /// Exercises real files, a genuine compaction API and a cold owner; no provider network is used.
@@ -134,6 +206,24 @@ fn durable_context_generation_preserves_prefix_after_expiry_and_cold_load() {
         .unwrap()
         .value
         .api_call_id;
+    // Reasoning and text are separate durable events with their own revisions.
+    // 思考和正文是各有独立修订号的可靠事件。
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::DisplayBoundary,
+            |document| {
+                document.append_reasoning(
+                    api,
+                    "summary reasoning",
+                    AssistantSemanticStatus::Completed,
+                    7,
+                )
+            },
+        )
+        .unwrap();
+    // Persist the answer after its reasoning prefix in the same physical call.
+    // 在同一次实发调用内，于思考前缀后持久化回答。
     let summary_seq = handle
         .mutate_durable(
             SessionMutationAdmission::ExistingTurn,
@@ -205,9 +295,77 @@ fn durable_context_generation_preserves_prefix_after_expiry_and_cold_load() {
     assert_eq!(current.current_compaction_id, summary.current_compaction_id);
     assert_eq!(current.document_revision, summary.document_revision);
 
+    // Preview the existing generation directly from disk, without using the runtime request slot.
+    // 直接从磁盘预览已有代际，无需使用运行时请求槽。
+    // Resolve a real project override even when the durable session is opened from disk.
+    // 即使会话从磁盘打开，也解析真实的项目级提示词覆盖。
+    let prompt_path =
+        vulcan_provider_config::config::project_system_prompt_file_path(temporary.path());
+    vulcan_provider_config::config::save_system_prompt_file(
+        &prompt_path,
+        "project-owned-foundation",
+    )
+    .unwrap();
+    // Supply normal agent definitions without accessing a provider.
+    // 提供正常代理定义，无需访问供应商。
+    let agent_config =
+        vulcan_agent_runtime::agent_runtime::config::AgentRuntimeConfig::from_sources(
+            &Default::default(),
+            &Default::default(),
+        );
+    // Assemble without dispatching or changing the generation.
+    // 在无实发、无代际变更的情况下组装。
+    let preview = simulate_request_context(
+        &locator,
+        temporary.path().to_str().unwrap(),
+        &agent_config,
+        |_| Ok(Vec::new()),
+    )
+    .unwrap();
+    let rows = preview["nodes"].as_array().unwrap();
+    let first = rows
+        .first()
+        .expect("the fixed system instruction is present");
+    assert_eq!(first["role"], "system");
+    assert!(
+        first["content"]
+            .as_str()
+            .unwrap()
+            .contains("project-owned-foundation")
+    );
+    assert!(rows.iter().any(|row| {
+        row["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("user-owned-request"))
+    }));
+    assert!(rows.iter().any(|row| {
+        row["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("summary"))
+    }));
+    assert!(preview.get("dispatch").is_none());
+    // A response must belong to the inspected API and must not be borrowed by another one.
+    // 回复必须属于受检 API，其他 API 不能借用该回复。
+    handle
+        .read(|document| {
+            let response =
+                latest_context_assistant_response(document.events(), api.value()).unwrap();
+            // The final answer carries reasoning only from its own completed API group.
+            // 最终回答只携带其所属已完成 API 组的思考。
+            let response = serde_json::to_value(response).unwrap();
+            assert_eq!(response["content"], "summary");
+            assert_eq!(response["reasoning"], "summary reasoning");
+            assert!(latest_context_assistant_response(document.events(), u64::MAX).is_none());
+        })
+        .unwrap();
+
     // Reading a new owner must reconstruct the same immutable prefix without relying on cached state.
     // 新所有者读取必须重建相同不可变前缀，不依赖缓存状态。
     let reloaded = load_session_v1_full(&locator).unwrap();
+    assert_eq!(
+        reloaded.document.memory_revision(),
+        current.document_revision
+    );
     let cold = SessionHandle::new(session_id, locator, reloaded.document);
     let cold_provider = cold.capture_controller_projection_snapshot().unwrap();
     assert_eq!(cold_provider.sourced_items, current.sourced_items);

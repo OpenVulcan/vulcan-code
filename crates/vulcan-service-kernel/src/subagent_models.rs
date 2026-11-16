@@ -13,7 +13,8 @@ use vulcan_service_api::{
     SubagentModelsSaveRequest, SubagentModelsSnapshot,
 };
 use vulcan_workspace_store::workspace_store::{
-    load_session_subagent_models_with_upgrade, save_session_subagent_models,
+    SessionV1StorageLocator, load_session_subagent_models_with_upgrade,
+    read_session_subagent_models_bytes, save_session_subagent_models,
 };
 
 use crate::SharedServiceBridgeState;
@@ -141,6 +142,21 @@ pub(crate) fn session_subagent_model_policy(
         .map_err(|error| error.to_string())?;
     load_session_subagent_models_with_upgrade(&locator, decode_policy_document)?
         .map(grants_from_document)
+        .transpose()
+}
+
+/// Resolves the policy identified by the locator without publishing a sidecar upgrade.
+/// 解析定位器所指白名单，无需发布旁置文件版本升级。
+/// Returns the session policy, or absence when normal inheritance applies.
+/// 返回会话白名单，正常继承时返回缺省。
+pub(crate) fn preview_session_subagent_model_policy(
+    locator: &SessionV1StorageLocator,
+) -> Result<Option<SubagentModelPolicy>, String> {
+    read_session_subagent_models_bytes(locator)?
+        .map(|bytes| {
+            let (document, _) = decode_policy_document(&bytes)?;
+            grants_from_document(document)
+        })
         .transpose()
 }
 

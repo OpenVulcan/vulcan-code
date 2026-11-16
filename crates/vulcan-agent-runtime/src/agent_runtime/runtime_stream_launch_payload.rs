@@ -1795,7 +1795,7 @@ mod tests {
         assert_eq!(
             runtime_host_user_item_indexes(
                 &first.core_snapshot.messages,
-                "Current execution mode: Build"
+                "Current execution mode: Work"
             )
             .len(),
             1
@@ -1882,7 +1882,7 @@ mod tests {
         assert_eq!(
             runtime_host_user_item_indexes(
                 &second.core_snapshot.messages,
-                "Current execution mode: Build"
+                "Current execution mode: Work"
             )
             .len(),
             1,

@@ -305,6 +305,18 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
         .expect("first compose should succeed");
     assert_eq!(first.diagnostics.cache_report.bundle_hits, 0);
     assert_eq!(first.diagnostics.cache_report.bundle_misses, 1);
+    assert!(first.system_segments.iter().any(|segment| {
+        segment
+            .baseline_provenance
+            .as_ref()
+            .is_some_and(|source| source.kind == PromptBaselineKind::AgentsMd)
+    }));
+    assert!(!first.user_segments.iter().any(|segment| {
+        segment
+            .baseline_provenance
+            .as_ref()
+            .is_some_and(|source| source.kind == PromptBaselineKind::AgentsMd)
+    }));
     assert!(
         first
             .system_segments

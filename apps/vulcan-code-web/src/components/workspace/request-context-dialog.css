@@ -1,0 +1,237 @@
+/* Use the standard Vulcan document dialog at a viewport-relative size. */
+/* 使用标准 Vulcan 文档弹窗，并按视口比例设置尺寸。 */
+.vk-dialog.vk-request-context-dialog[data-size="fullscreen"] {
+  width: 80dvw;
+  height: 80dvh;
+  max-height: 100%;
+}
+
+.vk-request-context-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 3);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-request-context-meta strong { color: var(--vk-ink); }
+.vk-request-context-status { padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 5); color: var(--vk-ink-2); }
+.vk-dialog.vk-request-context-dialog .vk-request-context-body {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Keep the node list stationary while the selected detail scrolls independently. */
+/* 保持节点列表的位置，所选详情独立滚动。 */
+.vk-request-context-inspector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+  background: var(--vk-panel);
+}
+
+.vk-request-context-inspector[data-detail="true"] {
+  grid-template-columns: minmax(0, 1fr) minmax(19rem, 37%);
+}
+
+.vk-request-context-list,
+.vk-request-context-detail-scroll {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.vk-request-context-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  width: 100%;
+  min-height: calc(var(--vk-u) * 7.5);
+  padding: var(--vk-u) calc(var(--vk-u) * 3);
+  border: 0;
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  border-inline-start: 2px solid transparent;
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vk-request-context-row:hover { background: var(--vk-hover); }
+.vk-request-context-row[aria-pressed="true"] {
+  background: var(--vk-select);
+  border-inline-start-color: var(--vk-ember);
+}
+
+.vk-request-context-row:focus-visible {
+  outline: var(--vk-bw) solid var(--vk-signal);
+  outline-offset: -2px;
+}
+
+.vk-request-context-row > svg { flex: none; width: var(--vk-icon); height: var(--vk-icon); }
+.vk-request-context-row-arrow { margin-inline-start: auto; color: var(--vk-ink-3); }
+
+.vk-request-context-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-request-context-badge {
+  padding-inline: var(--vk-u);
+  background: color-mix(in srgb, var(--vk-context-role, var(--vk-ink-3)) 13%, var(--vk-panel));
+  color: var(--vk-context-role, var(--vk-ink-2));
+  font-size: var(--vk-fs-xs);
+  font-weight: 600;
+}
+
+.vk-request-context-row[data-tone="user"] { --vk-context-role: var(--vk-signal); }
+.vk-request-context-row[data-tone="injection"] { --vk-context-role: var(--vk-ok); }
+.vk-request-context-row[data-tone="assistant"],
+.vk-request-context-row[data-tone="assistant_text"] { --vk-context-role: var(--vk-ember); }
+.vk-request-context-row[data-tone="tool"] { color: var(--vk-warn); }
+.vk-request-context-row[data-tone="tool"] > code.vk-request-context-preview { color: inherit; }
+.vk-request-context-row[data-tone="system"] { background: var(--vk-sunken); }
+.vk-request-context-row[data-tone="system"]:is(:hover, [aria-pressed="true"]) { background: var(--vk-select); }
+
+.vk-request-context-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-inline-start: var(--vk-bw) solid var(--vk-line-strong);
+  background: var(--vk-panel);
+}
+
+.vk-request-context-detail-header,
+.vk-request-context-tabs {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: calc(var(--vk-u) * 2);
+  padding-inline: calc(var(--vk-u) * 3);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+}
+
+.vk-request-context-detail-header {
+  min-height: calc(var(--vk-u) * 9);
+  justify-content: space-between;
+  background: var(--vk-sunken);
+}
+
+.vk-request-context-tabs button {
+  min-height: calc(var(--vk-u) * 7);
+  padding-inline: calc(var(--vk-u) * 2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--vk-ink-2);
+  cursor: pointer;
+}
+
+.vk-request-context-tabs button[aria-pressed="true"] {
+  border-bottom-color: var(--vk-ember);
+  color: var(--vk-ink);
+}
+
+.vk-request-context-metadata,
+.vk-request-context-origins {
+  max-height: 9rem;
+  margin: 0;
+  flex: none;
+  overflow: auto;
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 4);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-request-context-metadata > div {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: calc(var(--vk-u) * 2);
+}
+
+.vk-request-context-metadata dt { color: var(--vk-ink-2); }
+.vk-request-context-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.vk-request-context-origins { display: grid; list-style: none; gap: var(--vk-u); }
+.vk-request-context-origins li { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-request-context-origins li span { flex: none; font-weight: 600; }
+.vk-request-context-origins li small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vk-ink-2); }
+
+.vk-request-context-text {
+  min-height: 0;
+  overflow: auto;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4);
+}
+
+.vk-request-context-text pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-request-context-text p { color: var(--vk-ink-2); margin-top: var(--vk-u); }
+
+.vk-request-context-reasoning {
+  padding: var(--vk-u) calc(2 * var(--vk-u));
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  color: var(--vk-ink-2);
+}
+
+.vk-request-context-reasoning > summary { cursor: pointer; }
+.vk-request-context-reasoning > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.vk-request-context-tool-name { color: var(--vk-ink); }
+.vk-request-context-detail-header .vk-request-context-tool-name,
+.vk-request-context-tool-part .vk-request-context-tool-name { margin-inline-start: calc(2 * var(--vk-u)); }
+.vk-request-context-tool-part + .vk-request-context-tool-part {
+  margin-block-start: calc(3 * var(--vk-u));
+  padding-block-start: calc(2 * var(--vk-u));
+  border-block-start: var(--vk-bw) solid var(--vk-line);
+}
+.vk-request-context-tool-part pre { margin-block-start: calc(2 * var(--vk-u)); }
+
+.vk-request-context-schema { font-size: var(--vk-fs-sm); }
+.vk-request-context-schema-name,
+.vk-request-context-schema-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(2 * var(--vk-u));
+}
+.vk-request-context-schema-name {
+  margin-block-end: calc(2 * var(--vk-u));
+  font-weight: 600;
+}
+.vk-request-context-schema-rule { margin-block-start: var(--vk-u); }
+.vk-request-context-schema-rule > span > code + code { margin-inline-start: calc(2 * var(--vk-u)); }
+.vk-request-context-schema-rule code { overflow-wrap: anywhere; }
+.vk-request-context-schema > section + section,
+.vk-request-context-schema-branch {
+  margin-block-start: calc(3 * var(--vk-u));
+  padding-block-start: calc(2 * var(--vk-u));
+  border-block-start: var(--vk-bw) solid var(--vk-line);
+}
+.vk-request-context-schema-branch summary { cursor: pointer; }
+.vk-request-context-schema-branch ol { margin-block: calc(2 * var(--vk-u)); padding-inline-start: calc(4 * var(--vk-u)); }
+.vk-request-context-schema-branch li + li { margin-block-start: calc(2 * var(--vk-u)); }
+.vk-request-context-schema-table :is(th, td) { vertical-align: top; white-space: normal; }
+.vk-request-context-schema-table td:first-child { overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .vk-dialog.vk-request-context-dialog[data-size="fullscreen"] { width: 94dvw; }
+  .vk-request-context-inspector[data-detail="true"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(5rem, 2fr) minmax(0, 3fr);
+  }
+  .vk-request-context-detail {
+    border-inline-start: 0;
+    border-top: var(--vk-bw) solid var(--vk-line-strong);
+  }
+}

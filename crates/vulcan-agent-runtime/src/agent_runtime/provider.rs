@@ -206,7 +206,7 @@ pub fn provider_route_lease_identity_matches(
 /// 返回值
 /// `Ok(())` for the same target, or an explicit stale-lease error requiring reselection.
 /// 目标一致时返回 `Ok(())`，否则返回要求重新选择的显式过期租约错误。
-fn validate_session_lease_target(
+pub(crate) fn validate_session_lease_target(
     selection: &vulcan_provider_adapters::ResolvedPublicAiSelection,
     provider_id_override: Option<&str>,
     model_id_override: Option<&str>,
@@ -286,33 +286,14 @@ pub fn resolve_public_ai_provider_blueprint(
         }
         selection
     } else {
-        // configuration is read once for the candidate and never consulted again after leasing.
-        // configuration 仅为候选读取一次，租约建立后绝不再次查询。
-        let configuration = runtime.configuration_snapshot()?;
         // candidate resolves through the current immutable provider generation exactly once.
         // candidate 仅通过当前不可变供应商代际解析一次。
-        let candidate = match (
+        let candidate = resolve_unleased_public_ai_selection(
+            runtime,
             provider_id_override,
             model_id_override,
             connection_id_override,
-        ) {
-            (Some(provider_id), Some(model_id), Some(connection_id)) => runtime
-                .resolve_connection_model_selection(
-                    &configuration,
-                    connection_id,
-                    provider_id,
-                    model_id,
-                )?,
-            (Some(provider_id), Some(model_id), None) => {
-                runtime.resolve_model_selection(&configuration, provider_id, model_id)?
-            }
-            (None, None, None) => runtime.resolve_active_selection(&configuration)?,
-            _ => {
-                return Err(String::from(
-                    "Public AI request overrides require provider_id and model_id; connection_id is optional only with both.",
-                ));
-            }
-        };
+        )?;
         // candidateIdentity proves restart restoration is safe before the candidate enters memory.
         // candidateIdentity 在候选进入内存前证明重启恢复安全。
         let candidate_identity = provider_route_lease_identity(&candidate);
@@ -345,6 +326,35 @@ pub fn resolve_public_ai_provider_blueprint(
     };
 
     provider_blueprint_from_selection(selection, requested_reasoning_effort)
+}
+
+/// Resolves the complete model selection from the current provider generation without leasing it.
+/// 从当前供应商代次解析完整模型选择且不建立租约。
+/// Optional IDs either specify a provider and model with an optional connection, or inherit the active selection.
+/// 可选标识指定供应商及模型并可附带连接，或继承活动选择。
+/// Returns one immutable selection or the exact selection error.
+/// 返回一份不可变选择，或精确的选择错误。
+pub(crate) fn resolve_unleased_public_ai_selection(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    provider: Option<&str>,
+    model: Option<&str>,
+    connection: Option<&str>,
+) -> Result<vulcan_provider_adapters::ResolvedPublicAiSelection, String> {
+    // All three paths use the same configuration snapshot.
+    // 三条路径共用同一份配置快照。
+    let configuration = runtime.configuration_snapshot()?;
+    match (provider, model, connection) {
+        (Some(provider), Some(model), Some(connection)) => {
+            runtime.resolve_connection_model_selection(&configuration, connection, provider, model)
+        }
+        (Some(provider), Some(model), None) => {
+            runtime.resolve_model_selection(&configuration, provider, model)
+        }
+        (None, None, None) => runtime.resolve_active_selection(&configuration),
+        _ => Err(String::from(
+            "Public AI request overrides require provider_id and model_id; connection_id is optional only with both.",
+        )),
+    }
 }
 
 /// Freezes an explicit Git summary target without reading or mutating conversation leases.

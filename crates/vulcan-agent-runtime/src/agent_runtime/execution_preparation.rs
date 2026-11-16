@@ -883,3 +883,96 @@ fn execution_prompt_preview(request: &ExecutionPreparationRequest) -> String {
 #[cfg(test)]
 #[path = "execution_preparation/tests.rs"]
 pub(in crate::agent_runtime) mod tests;
+/// Resolves model-visible host tool definitions for a local inspection.
+/// 为本地检查解析模型可见的宿主工具定义。
+///
+/// The caller supplies the current foundation, configuration and session settings. A pending
+/// model selection resolves against the current catalog without using the previous route lease.
+/// 调用方提供当前运行基础、配置和会话设置。待生效模型从当前目录解析，不使用旧路由租约。
+/// Returns the normal host tool names, descriptions and schemas, or a preparation error.
+/// 返回常规宿主工具名称、说明和 Schema，或准备错误。
+pub fn preview_request_tools(
+    mut foundation: RuntimeFoundation,
+    public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    config: &ProviderConfigurationFile,
+    mut request: ExecutionPreparationRequest,
+    pending_model: bool,
+    child: Option<&vulcan_session_core::v1::child_execution::ChildExecutionProfile>,
+) -> Result<Vec<serde_json::Value>, String> {
+    use crate::agent_runtime::provider::{
+        provider_blueprint_from_selection, resolve_unleased_public_ai_selection,
+        validate_session_lease_target,
+    };
+    use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
+
+    if let Some(profile) = child {
+        crate::agent_runtime::task_runtime::restore_child_execution_settings(
+            &mut request,
+            profile,
+        )?;
+    }
+    // Existing leases represent the fixed route. A preview never installs one.
+    // 已有租约代表冻结路由。预览永不建立租约。
+    let runtime = public_ai_runtime.as_ref();
+    // A pending model override belongs to the next request, so it supersedes the active lease.
+    // 待生效模型覆盖属于下一请求，因此优先于活动租约。
+    let lease = if pending_model {
+        None
+    } else {
+        runtime.session_selection_lease(&request.session_id.to_string())?
+    };
+    // Resolve only the session-selected route; do not acquire credentials or start a request here.
+    // 只解析会话选定的路由，不在此获取凭据或启动请求。
+    let selection = match lease {
+        Some(selection) => {
+            validate_session_lease_target(
+                &selection,
+                request.provider_id_override.as_deref(),
+                request.model_id_override.as_deref(),
+                request.connection_id_override.as_deref(),
+            )?;
+            selection
+        }
+        None => resolve_unleased_public_ai_selection(
+            runtime,
+            request.provider_id_override.as_deref(),
+            request.model_id_override.as_deref(),
+            request.connection_id_override.as_deref(),
+        )?,
+    };
+    // The explicit blueprint bypasses the lease acquisition performed for a real request.
+    // 显式蓝图使预览跳过实发请求的租约建立。
+    let blueprint = provider_blueprint_from_selection(selection, request.reasoning_effort)?;
+    foundation.install_public_ai_runtime(public_ai_runtime);
+    // Reuse both request preparation and the final host-tool visibility filter.
+    // 复用请求准备和最终宿主工具可见性筛选。
+    let prepared = prepare_execution_with_provider_blueprint(
+        &foundation,
+        luaskills_runtime,
+        config,
+        &request,
+        Some(&blueprint),
+    )?;
+    // This bridge is projected only; its tool handlers are never invoked during inspection.
+    // 这里只投影调用桥，检查期间永不调用工具处理器。
+    let tools = prepare_host_tool_runtime_context(
+        prepared.tool_snapshot.tools_manager,
+        &prepared.tool_snapshot.resolved_tool_definitions,
+        request.session_id,
+        &request.execution_mode,
+        foundation.task_runtime(),
+    );
+    Ok(tools
+        .provider_tool_definitions
+        .into_iter()
+        .map(|tool| {
+            serde_json::json!({
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            })
+        })
+        .collect())
+}

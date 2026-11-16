@@ -71,6 +71,29 @@ pub(super) struct ProviderWireCaptureTargets {
     /// Optional raw response receiver endpoint.
     /// 可选的原始响应接收端点。
     pub(super) response: Option<oneshot::Sender<ProviderWireResponseCapture>>,
+    /// Observes the encoded context at the initial send boundary, independently of disk traces.
+    /// 在初次发送边界观察编码后的上下文，独立于磁盘追踪。
+    pub(super) context: Option<ProviderRequestContextObserver>,
+}
+
+/// Receives the exact encoded body, its request credential and dispatch time once per send attempt.
+/// 每次发送尝试仅接收一次精确编码正文、本次请求凭据及分派时间。
+pub type ProviderRequestContextObserver =
+    Box<dyn FnOnce(&Value, &super::CredentialExecutionSecret, i64) + Send>;
+
+/// Optional diagnostics attached to the same physical transport dispatch.
+/// 附属于同一次物理传输分派的可选诊断。
+#[derive(Default)]
+pub struct ProviderDispatchObservation {
+    /// Existing optional paired disk trace channels.
+    /// 现有的可选磁盘追踪双通道。
+    pub trace: Option<(
+        oneshot::Sender<ProviderWireRequestTraceDispatch>,
+        oneshot::Sender<ProviderWireResponseCapture>,
+    )>,
+    /// Optional observer for the latest context displayed by the local UI.
+    /// 用于本地界面展示最新上下文的可选观察器。
+    pub context: Option<ProviderRequestContextObserver>,
 }
 
 /// Carries the raw HTTP response bytes observed before SSE framing and protocol decoding.

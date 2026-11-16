@@ -53,6 +53,7 @@ impl ProviderExecutionClient {
                 request: wire_request_capture,
                 response: wire_response_capture,
                 dispatch_lease,
+                mut context,
             } = wire_captures;
             // wireRequestCapture remains available until the HTTP request is ready for dispatch.
             // wireRequestCapture 保留到 HTTP 请求准备分派时使用。
@@ -128,6 +129,11 @@ impl ProviderExecutionClient {
             let dispatch = std::future::poll_fn(|cx| {
                 let result = std::future::Future::poll(send.as_mut(), cx);
                 drop(dispatch_lease.take());
+                // The client has now been polled with the encoded request, even if the network later fails.
+                // 客户端已收到编码请求并开始轮询，网络之后仍可能失败。
+                if let Some(observe) = context.take() {
+                    observe(&encoded.body, &secret, dispatched_at_ms);
+                }
                 result
             });
             let response = tokio::time::timeout(

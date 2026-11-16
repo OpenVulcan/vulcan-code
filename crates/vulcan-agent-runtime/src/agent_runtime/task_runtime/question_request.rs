@@ -80,7 +80,7 @@ pub fn restore_child_business_request(
 /// `request` 已校验用途和归属；`profile` 提供精确非敏感配置。
 /// All fallible conversion precedes mutation; lifecycle and history fields remain caller-owned.
 /// 所有可能失败的转换先于修改；生命周期和历史字段继续由调用方拥有。
-fn restore_child_execution_settings(
+pub(crate) fn restore_child_execution_settings(
     request: &mut ExecutionPreparationRequest,
     profile: &ChildExecutionProfile,
 ) -> Result<(), String> {

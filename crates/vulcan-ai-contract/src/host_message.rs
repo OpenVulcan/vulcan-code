@@ -247,6 +247,15 @@ fn escape_xml_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Frames a project-owned AGENTS.md body as a system instruction. The body is escaped before framing.
+/// 将项目的 AGENTS.md 正文封装为系统指令，封装前转义正文。
+pub fn render_project_agents_instruction(body: &str) -> String {
+    format!(
+        "<vulcan_context_agent_md>\n{}\n</vulcan_context_agent_md>",
+        escape_xml_text(body)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

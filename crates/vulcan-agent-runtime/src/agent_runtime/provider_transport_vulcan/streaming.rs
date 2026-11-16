@@ -189,6 +189,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 });
             }
             PreparedPhysicalApi::SessionV1 {
+                purpose,
                 dispatch_lease,
                 exact_request,
                 controller_config,
@@ -197,6 +198,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 context_budget,
                 core_start,
                 provider_api_trace_store,
+                request_context_prefix,
             } => {
                 let _ = controller_config;
                 (
@@ -204,7 +206,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     controller_snapshot,
                     request_snapshot,
                     context_budget,
-                    provider_api_trace_store.map(|store| (core_start.api_call_id, store)),
+                    provider_api_trace_store.map(|store| (core_start.api_call_id, purpose, store, request_context_prefix)),
                     dispatch_lease,
                 )
             }
@@ -260,7 +262,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         let rejected_secret_revision = secret.revision();
         let execution_id = uuid::Uuid::new_v4().to_string();
         let trace_attempt =
-            if let Some((api_call_id, trace_store)) = provider_api_trace_context.as_ref() {
+            if let Some((api_call_id, _, trace_store, _)) = provider_api_trace_context.as_ref() {
                 match self.claim_provider_api_trace_attempt(*api_call_id, trace_store) {
                     Ok(Some(reservation)) => Some((reservation, trace_store.clone())),
                     Ok(None) => None,
@@ -347,12 +349,40 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             Some((request, response, failure)) => (Some((request, response)), Some(failure)),
             None => (None, None),
         };
+        // The local inspector uses the same session owner whether or not disk tracing was enabled.
+        // 无论磁盘追踪是否启用，本机面板都使用同一个会话所有者。
+        let context = provider_api_trace_context.map(
+            |(api_call_id, purpose, store, request_context_prefix)| {
+                // Bind the observer to the route and identity of this one dispatch.
+                // 把观察器绑定到本次分派的路由及标识。
+                let execution_id = execution_id.clone();
+                let protocol = self.route.protocol_route.protocol_profile_id.clone();
+                let model = public.model_id.clone();
+                let observe: vulcan_provider_adapters::ProviderRequestContextObserver =
+                    Box::new(move |body, credential, dispatched_at_ms| {
+                        store.observe_request_context(
+                        vulcan_workspace_store::workspace_store::ProviderRequestContextDispatch {
+                            execution_id,
+                            api_call_id: api_call_id.value().to_string(),
+                            purpose,
+                            model,
+                            protocol,
+                            dispatched_at_ms,
+                        },
+                        body,
+                        credential.expose_value(),
+                        &request_context_prefix,
+                    );
+                    });
+                observe
+            },
+        );
         let mut stream = self.client.execute_with_dispatch_lease(
             self.route.clone(),
             public.clone(),
             secret,
             execution_id,
-            trace,
+            vulcan_provider_adapters::ProviderDispatchObservation { trace, context },
             dispatch_lease,
         );
         let mut trace_processing_failure =

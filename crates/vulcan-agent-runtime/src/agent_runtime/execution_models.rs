@@ -228,7 +228,14 @@ const EXECUTION_MODE_CONTEXT_PREFIX: &str = "\nCurrent execution mode: ";
 /// Renders the two environment fields inside one provider prompt segment.
 /// 在一个供应商提示词片段中渲染两个环境字段。
 pub(crate) fn render_workspace_environment_context(path: &str, mode: &str) -> String {
-    format!("{WORKSPACE_CONTEXT_PREFIX}{path}{EXECUTION_MODE_CONTEXT_PREFIX}{mode}")
+    // Build is the internal execution identity for the product's Work mode.
+    // Build 是产品工作模式的内部执行标识。
+    let mode_name = if mode.eq_ignore_ascii_case("build") {
+        "Work"
+    } else {
+        mode
+    };
+    format!("{WORKSPACE_CONTEXT_PREFIX}{path}{EXECUTION_MODE_CONTEXT_PREFIX}{mode_name}")
 }
 
 /// Reads the single workspace field from a previously dispatched runtime-context segment.

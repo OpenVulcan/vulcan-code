@@ -75,8 +75,10 @@ pub use project_groups::{
 pub use provider_api_trace::{
     PROVIDER_API_TRACE_LIMIT, ProviderApiTraceAttemptReservation, ProviderApiTraceDiagnostic,
     ProviderApiTraceDiagnosticCode, ProviderApiTracePayload, ProviderApiTraceReservationOutcome,
-    ProviderApiTraceStore, ProviderApiTraceWriteOutcome, REDACTED_PROVIDER_SECRET,
-    redact_provider_secrets,
+    ProviderApiTraceStore, ProviderApiTraceWriteOutcome, ProviderRequestContext,
+    ProviderRequestContextDispatch, REDACTED_PROVIDER_SECRET, RequestContextAssistantResponse,
+    RequestContextFixedPrompt, RequestContextPromptKind, RequestContextPromptSource,
+    redact_provider_secrets, render_simulated_request_context,
 };
 pub use resource_catalog::{
     MISSING_RESOURCE_PLACEHOLDER, ProjectResourceCatalog, ProjectResourceCatalogError,
@@ -96,8 +98,8 @@ pub(crate) use session_index_v1::SESSION_INDEX_V1_SCHEMA_SQL;
 pub use session_index_v1::{record_session_request_v1, set_project_session_order_v1};
 pub use session_sidecars::{
     load_session_outside_file_access, load_session_review_prompt, load_session_subagent_models,
-    load_session_subagent_models_with_upgrade, save_session_outside_file_access,
-    save_session_review_prompt, save_session_subagent_models,
+    load_session_subagent_models_with_upgrade, read_session_subagent_models_bytes,
+    save_session_outside_file_access, save_session_review_prompt, save_session_subagent_models,
 };
 pub use session_usage::{load_session_lifetime_usage, save_session_lifetime_usage};
 #[cfg(feature = "test-support")]

@@ -1059,19 +1059,24 @@ fn validated_responses_continuation<'a>(
 fn encode_codex_instructions(
     request: &AiExecutionRequest,
 ) -> Result<String, ProtocolConversionError> {
+    // Preserve a paragraph boundary between distinct system messages when lowering them into one string.
+    // 将独立系统消息合并为字符串时保留段落边界。
     let mut instructions = Vec::new();
     for message in request
         .messages
         .iter()
         .filter(|message| message.role == MessageRole::System)
     {
+        // Text items belonging to the same message retain their line boundaries.
+        // 同一消息内的文本项保留行边界。
+        let mut parts = Vec::new();
         for item in &message.content {
             match item {
                 ContentItem::Text { text } | ContentItem::Refusal { text } => {
-                    instructions.push(text.clone());
+                    parts.push(std::borrow::Cow::Borrowed(text.as_str()));
                 }
                 ContentItem::StructuredJson { value } => {
-                    instructions.push(encode_json_or_string(value)?);
+                    parts.push(std::borrow::Cow::Owned(encode_json_or_string(value)?));
                 }
                 _ => {
                     return Err(ProtocolConversionError::new(
@@ -1080,8 +1085,11 @@ fn encode_codex_instructions(
                 }
             }
         }
+        if !parts.is_empty() {
+            instructions.push(parts.join("\n"));
+        }
     }
-    Ok(instructions.join("\n"))
+    Ok(instructions.join("\n\n"))
 }
 
 /// Encodes one validated resource for OpenAI Chat-compatible content.

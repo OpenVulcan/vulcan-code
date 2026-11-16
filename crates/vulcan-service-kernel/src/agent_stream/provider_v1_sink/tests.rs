@@ -823,8 +823,11 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
             "fixed-base-system\n\nfixed-agent-system".into(),
         ),
         text_ai_message(MessageRole::System, HOST_MESSAGE_GUIDANCE.into()),
+        text_ai_message(
+            MessageRole::System,
+            render_project_agents_instruction("persisted-baseline-content"),
+        ),
         text_ai_message(MessageRole::Developer, "fixed-capability-guide".into()),
-        text_ai_message(MessageRole::User, "persisted-baseline-content".into()),
     ]));
     // Verify both an in-band prefix and a protocol with dedicated system instructions.
     // 同时验证消息内前缀和使用独立系统指令字段的协议。
@@ -839,6 +842,25 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
         chat.body["messages"][0]["content"],
         "fixed-base-system\n\nfixed-agent-system"
     );
+    // A historical user-targeted AGENTS.md is encoded in the system layer, before user input.
+    // 旧会话中以用户层存储的 AGENTS.md 会在用户输入之前编码入系统层。
+    let project_message = chat.body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("persisted-baseline-content"))
+        })
+        .expect("encoded project rules");
+    assert_eq!(project_message["role"], "system");
+    assert!(
+        project_message["content"]
+            .as_str()
+            .unwrap()
+            .contains("<vulcan_context_agent_md>")
+    );
     let responses =
         vulcan_llm_core::encode_codex_responses_request(&rebuilt.transport.exact_request)
             .expect("encode exact request for Codex Responses");
@@ -847,6 +869,12 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
             .as_str()
             .unwrap()
             .starts_with("fixed-base-system\n\nfixed-agent-system")
+    );
+    assert!(
+        responses.body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("<vulcan_context_agent_md>")
     );
     assert_eq!(responses.body["input"][0]["role"], "developer");
     assert_eq!(

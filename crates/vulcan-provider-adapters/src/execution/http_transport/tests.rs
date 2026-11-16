@@ -114,6 +114,9 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
     let (request_capture_sender, request_capture_receiver) =
         oneshot::channel::<ProviderWireRequestTraceDispatch>();
     let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+    // The inspector receives a separate view even while the paired trace awaits the response.
+    // 即使成对追踪仍在等待响应，检查面板也会收到独立视图。
+    let (context_sender, context_receiver) = oneshot::channel();
     // Hold the workspace binding while the provider request is being encoded.
     // 编码供应商请求时保持工作目录绑定。
     let cutover = std::sync::Arc::new(tokio::sync::RwLock::new(()));
@@ -140,7 +143,12 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
         request,
         secret,
         String::from("execution-wire-capture"),
-        Some((request_capture_sender, response_capture_sender)),
+        super::super::ProviderDispatchObservation {
+            trace: Some((request_capture_sender, response_capture_sender)),
+            context: Some(Box::new(move |body, _, _| {
+                let _ = context_sender.send(body.clone());
+            })),
+        },
         Some(dispatch_lease),
     );
     // completed proves the mock response reached the declared terminal protocol event.
@@ -175,6 +183,10 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
     assert!(completed);
     assert!(cutover.try_write().is_ok());
     assert_eq!(captured.body, dispatched);
+    assert_eq!(
+        context_receiver.await.expect("inspector must see dispatch"),
+        dispatched
+    );
     assert_eq!(captured.body["reasoning"]["effort"], "none");
     assert_eq!(captured.transport, "http_sse");
     assert_eq!(captured.method, "POST");

@@ -126,6 +126,7 @@ use status_events::*;
 use tool_surface::*;
 
 pub(crate) use parent_events::build_task_execution_handler;
+pub(crate) use question_request::restore_child_execution_settings;
 pub use question_request::{restore_child_business_request, restore_child_question_request};
 pub use question_reservation::{ChildAuxiliaryExecutionGuard, ChildAuxiliaryExecutionPurpose};
 pub(crate) use tool_surface::build_subagent_tool_candidates;

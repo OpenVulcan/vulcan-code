@@ -26,7 +26,7 @@ use vulcan_ai_contract::{
     AiMessage, ContentItem, HOST_MESSAGE_GUIDANCE, MessageRole, ProviderReplayEnvelope,
     ProviderReplayProjection, ProviderReplayRoute, ResourceKind, ResourceReference,
     ResourceSourceKind, ToolCall as AiToolCall, ToolResult as AiToolResult,
-    project_provider_replay,
+    project_provider_replay, render_project_agents_instruction,
 };
 use vulcan_change_set::{PersistentChangeSetError, persistent_change_set_from_host_result};
 use vulcan_context::protocol::validate_session_conversation_message_identities;
@@ -66,6 +66,7 @@ use vulcan_session_core::v1::projection::{ProjectedItem, ProjectedSystemRole};
 use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::workspace_store::{
     ProjectResourceCatalog, ProjectResourceCatalogError, ProjectResourceCatalogRegistry,
+    RequestContextFixedPrompt, RequestContextPromptKind, RequestContextPromptSource,
     load_project_resource_catalog,
 };
 #[cfg(test)]
@@ -1824,39 +1825,87 @@ fn append_provider_request_prefix(
     messages: &mut Vec<AiMessage>,
     system_prompt_parts: &mut Vec<String>,
 ) -> Result<(), SessionRuntimeError> {
-    for (role, target, fixed_text) in [
+    visit_initial_request_prefix(fixed, baseline, |role, text, _, _| {
+        system_prompt_parts.push(text.to_owned());
+        messages.push(text_ai_message(role, text.to_owned()));
+    });
+    append_context_prefix(baseline, messages)
+}
+
+/// Visits each rendered fragment in physical order with its model role, kind and source label.
+/// 按物理顺序访问渲染片段及其模型角色、类型和来源标签。
+/// The locked AGENTS.md body is framed at this boundary for both saved and freshly prepared baselines.
+/// 在此边界为已保存与新准备基线中的锁定 AGENTS.md 正文加上标签。
+fn visit_initial_request_prefix(
+    fixed: &ProviderPromptLayers,
+    baseline: &LockedBaselineProjection,
+    mut visit: impl FnMut(MessageRole, &str, RequestContextPromptKind, Option<&str>),
+) {
+    // Project rules are placed at the end of the system layer for every generation.
+    // 所有代际的项目规则统一放在系统层末尾。
+    let project_rules = baseline
+        .locked_sources()
+        .iter()
+        .filter(|source| source.kind == LockedSourceKind::AgentsMd);
+    for (role, target, fixed_text, fixed_kind) in [
         (
             MessageRole::System,
             LockedPromptTarget::System,
-            &fixed.system,
+            fixed.system.as_str(),
+            RequestContextFixedPrompt::SystemPrompt,
         ),
         (
             MessageRole::Developer,
             LockedPromptTarget::Developer,
-            &fixed.developer,
+            fixed.developer.as_str(),
+            RequestContextFixedPrompt::DeveloperPrompt,
         ),
     ] {
         if !fixed_text.is_empty() {
-            system_prompt_parts.push(fixed_text.clone());
-            messages.push(text_ai_message(role, fixed_text.clone()));
+            visit(
+                role,
+                fixed_text,
+                RequestContextPromptKind::Fixed(fixed_kind),
+                None,
+            );
         }
         for source in baseline
             .locked_sources()
             .iter()
-            .filter(|source| source.target == target)
+            .filter(|source| source.kind != LockedSourceKind::AgentsMd && source.target == target)
         {
-            system_prompt_parts.push(source.content.clone());
-            messages.push(text_ai_message(
-                locked_prompt_message_role(source)?,
-                source.content.clone(),
-            ));
+            visit(
+                role,
+                &source.content,
+                RequestContextPromptKind::Locked(source.kind),
+                source.source_label.as_deref(),
+            );
+        }
+        if role == MessageRole::System {
+            for source in project_rules.clone() {
+                visit(
+                    role,
+                    &render_project_agents_instruction(&source.content),
+                    RequestContextPromptKind::Locked(source.kind),
+                    source.source_label.as_deref(),
+                );
+            }
         }
     }
+}
+
+/// Appends any locked contextual messages that remain outside the instruction layer.
+/// 追加位于指令层之外的其余锁定上下文消息。
+fn append_context_prefix(
+    baseline: &LockedBaselineProjection,
+    messages: &mut Vec<AiMessage>,
+) -> Result<(), SessionRuntimeError> {
     for source in baseline.locked_sources().iter().filter(|source| {
-        !matches!(
-            source.target,
-            LockedPromptTarget::System | LockedPromptTarget::Developer
-        )
+        source.kind != LockedSourceKind::AgentsMd
+            && !matches!(
+                source.target,
+                LockedPromptTarget::System | LockedPromptTarget::Developer
+            )
     }) {
         messages.push(text_ai_message(
             locked_prompt_message_role(source)?,
@@ -1864,6 +1913,28 @@ fn append_provider_request_prefix(
         ));
     }
     Ok(())
+}
+
+/// Projects the same ordered prefix as dispatch and returns metadata for the rendered initial prompt.
+/// 投影与实发同序的前缀，并返回渲染后初始提示词的元数据。
+pub(crate) fn preview_request_prefix(
+    fixed: &ProviderPromptLayers,
+    baseline: &LockedBaselineProjection,
+) -> Result<(Vec<AiMessage>, Vec<RequestContextPromptSource>), SessionRuntimeError> {
+    // Collect messages and provenance in one pass so labels follow the actual assembly order.
+    // 在同一次遍历中收集消息和来源，使标签遵循实际组装顺序。
+    let mut messages = Vec::new();
+    let mut origins = Vec::new();
+    visit_initial_request_prefix(fixed, baseline, |role, text, kind, source| {
+        messages.push(text_ai_message(role, text.to_owned()));
+        origins.push(RequestContextPromptSource::new(
+            kind,
+            source.map(str::to_owned),
+            text.to_owned(),
+        ));
+    });
+    append_context_prefix(baseline, &mut messages)?;
+    Ok((messages, origins))
 }
 
 /// Converts one locked baseline target into its exact Provider-neutral message role.
@@ -2366,6 +2437,20 @@ impl ProviderV1StreamSink {
         let core_start = prepared.core_start;
         let locked_baseline = prepared.locked_baseline;
         let transport = prepared.transport;
+        // Keep prefix provenance with this exact permit so the observer can correlate it with encoded text.
+        // 将前缀来源与本次精确许可绑定，供观察者和编码正文关联。
+        let mut request_context_prefix = Vec::new();
+        visit_initial_request_prefix(
+            &transport.fixed_instruction_layers,
+            &locked_baseline,
+            |_, text, kind, source| {
+                request_context_prefix.push(RequestContextPromptSource::new(
+                    kind,
+                    source.map(str::to_owned),
+                    text.to_owned(),
+                ));
+            },
+        );
         // A newly prepared API supersedes the previous physical terminal as the stream's final API.
         // 新准备的 API 会取代上一物理终态，成为当前流的最终物理 API。
         self.api_terminal_completion = None;
@@ -2389,6 +2474,7 @@ impl ProviderV1StreamSink {
             tool_batch_prepared: false,
         });
         Ok(PreparedPhysicalApi::SessionV1 {
+            purpose,
             dispatch_lease: prepared.dispatch_lease,
             exact_request: transport.exact_request,
             controller_config: transport.controller_config,
@@ -2397,6 +2483,7 @@ impl ProviderV1StreamSink {
             context_budget: transport.context_budget,
             core_start,
             provider_api_trace_store: self.handle.provider_api_trace_store(),
+            request_context_prefix,
         })
     }
 
