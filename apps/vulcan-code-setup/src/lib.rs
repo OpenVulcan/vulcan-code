@@ -21,6 +21,7 @@ mod processes;
 mod prompt;
 mod report;
 mod root;
+mod route;
 mod screen;
 mod selfupdate;
 mod session;
@@ -118,8 +119,8 @@ pub(crate) fn run_engine(arguments: &[String]) -> i32 {
             return 2;
         }
     }
-    // Resolve the node before the first network request, even when a newer installer takes over.
-    // 在首次联网前确定节点，即使稍后由新版安装器接管也沿用该节点。
+    // Confirm the route before self-update or any product download.
+    // 在自更新或下载产品之前确认线路。
     let updating = match &mut command {
         Command::Install(options) => Some((&mut options.common, options.channel)),
         Command::Update(common) => Some((common, None)),
@@ -184,8 +185,8 @@ pub fn unix_desktop_package(image: &'static [u8]) -> i32 {
     gui::run(command, Some(image))
 }
 
-/// Selects a route for `common` before HTTPS, then checks for a newer installer on `channel`.
-/// 在 HTTPS 请求前为 `common` 选定线路，再按 `channel` 检查新版安装器。
+/// Confirms the install route for `common`, then checks for a newer installer on `channel`.
+/// 为 `common` 确认安装线路，再按 `channel` 检查新版安装器。
 fn prepare(
     common: &mut args::CommonOptions,
     channel: Option<Channel>,
@@ -201,11 +202,11 @@ fn prepare(
     let route = if common.route.is_none() && wizard::wanted(common.yes) {
         // This selection was absent from the original arguments.
         // 原命令行参数中没有这次选择。
-        let route = wizard::choose_route(initial_route)?;
+        let route = wizard::choose_route(initial_route.unwrap_or_else(route::recommendation))?;
         next_arguments.push(format!("--route={}", args::route_name(route)));
         route
     } else {
-        initial_route
+        initial_route.unwrap_or_default()
     };
     common.route = Some(route);
     selfupdate::check(

@@ -1,8 +1,8 @@
 //! Vulcan-owned LuaSkills runtime settings stored under the user's configuration directory.
 //! 存储在用户配置目录下、由 Vulcan 持有的 LuaSkills 运行时设置。
 //!
-//! An absent file means the compiled defaults. Fresh installations can initialize the selected Hub.
-//! 文件不存在即表示编译默认值；首次安装可初始化所选的 Hub。
+//! An absent file means the compiled defaults. Fresh installs can seed regional Hub and GitHub downloads.
+//! 文件不存在即表示编译默认值；首次安装可按区域初始化 Hub 和 GitHub 下载源。
 
 mod atomic_file;
 
@@ -25,6 +25,10 @@ pub const LUASKILLS_RUNTIME_SETTINGS_SCHEMA_VERSION: u32 = 1;
 /// The default lives only in memory so an unset field keeps following future defaults.
 /// 默认值只存在于内存中，使未设置的字段持续跟随将来的默认值。
 pub const DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL: &str = "https://hub.luaskills.com";
+
+/// The mainland China download mirror also listed by LuaSkills' built-in mirror catalog.
+/// LuaSkills 内置镜像目录中同样提供的中国大陆下载镜像。
+const CHINA_GITHUB_DOWNLOAD_BASE_URL: &str = "https://gh-proxy.com/https://github.com";
 
 /// The official Hub region chosen by the installer on a fresh installation.
 /// 首次安装时由安装器选定的官方 Hub 区域。
@@ -613,11 +617,11 @@ pub fn save_runtime_settings(
     Ok(normalized)
 }
 
-/// Creates the runtime settings with `hub` when no settings document exists in `config_directory`.
-/// 当 `config_directory` 下不存在设置文档时，创建使用 `hub` 的运行时设置。
+/// Seeds the Hub and GitHub downloads for `hub` when `config_directory` has no settings yet.
+/// 当 `config_directory` 下不存在设置文档时，按 `hub` 初始化 Hub 和 GitHub 下载源。
 /// Concurrent saves and existing user settings keep their original contents.
 /// 并发保存及已有用户设置保留原内容。
-pub fn initialize_official_skill_hub(
+pub fn initialize_network_region(
     config_directory: &Path,
     hub: OfficialSkillHub,
 ) -> Result<(), String> {
@@ -625,6 +629,11 @@ pub fn initialize_official_skill_hub(
     // 从常规运行时默认值构建，确保已发布的旧版服务也能读取文档。
     let mut settings = LuaSkillsRuntimeSettings::default();
     settings.network.official_skill_hub_base_url = Some(hub.base_url().to_owned());
+    // An unset download override is the catalog's direct GitHub choice. GitHub API stays official.
+    // 下载覆盖留空对应镜像目录中的 GitHub 直连项。GitHub API 继续使用官方地址。
+    if hub == OfficialSkillHub::China {
+        settings.network.github_base_url = Some(CHINA_GITHUB_DOWNLOAD_BASE_URL.to_owned());
+    }
     let contents = encode_runtime_settings(&settings.normalized()?)?;
     atomic_file::create_file_atomically(&runtime_settings_file_path(config_directory), &contents)
 }
@@ -666,25 +675,32 @@ mod tests {
     /// Initializes both official regions and preserves the exact bytes of settings already saved.
     /// 验证两个官方区域均可初始化，并且已有设置按原字节保留。
     #[test]
-    fn initial_hub_never_replaces_an_existing_settings_document() {
+    fn regional_network_settings_never_replace_an_existing_document() {
         for region in [OfficialSkillHub::China, OfficialSkillHub::Global] {
             let directory = tempfile::tempdir().expect("isolated settings");
             let root = directory.path();
-            initialize_official_skill_hub(root, region).expect("initialize Hub");
+            initialize_network_region(root, region).expect("initialize network settings");
             let mut settings = load_runtime_settings(root).expect("load seeded settings");
             assert_eq!(
                 settings.network.official_skill_hub_base_url.as_deref(),
                 Some(region.base_url())
             );
+            let github = match region {
+                OfficialSkillHub::China => Some(CHINA_GITHUB_DOWNLOAD_BASE_URL),
+                OfficialSkillHub::Global => None,
+            };
+            assert_eq!(settings.network.github_base_url.as_deref(), github);
+            assert!(settings.network.github_api_base_url.is_none());
 
-            // A later initializer must leave a manually selected Hub and its containing document intact.
-            // 后续初始化必须保留手动选定的 Hub 及其所在文档。
+            // A retry must preserve the manually chosen endpoints and their containing document.
+            // 重试必须保留手动选择的站点及其所在文档。
             settings.network.official_skill_hub_base_url = Some("https://hub.example.test".into());
-            save_runtime_settings(root, &settings).expect("save custom Hub");
+            settings.network.github_base_url =
+                Some("https://mirror.example.test/https://github.com".into());
+            save_runtime_settings(root, &settings).expect("save custom endpoints");
             let path = runtime_settings_file_path(root);
             let previous = fs::read(&path).expect("read user settings");
-            initialize_official_skill_hub(root, OfficialSkillHub::China)
-                .expect("retry initialization");
+            initialize_network_region(root, OfficialSkillHub::China).expect("retry initialization");
             assert_eq!(fs::read(path).expect("read preserved settings"), previous);
         }
     }

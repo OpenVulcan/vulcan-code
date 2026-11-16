@@ -398,7 +398,9 @@ Vulcan 的**配置侧已齐备**：`enable_private_url_skill_install` 与 `priva
 
 - **来源值**：`official_hub` 的 `source` 是 Hub 扁平技能标识（如 `weather`），由 LuaSkills 引擎经 `{Hub}/api/v1/skills/{id}/resolve?version=latest` 解析下载地址；宿主不自行下载或校验压缩包。
 - **Hub 基础地址只有一处定义**：`vulcan-luaskills-config` 的 `DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL`（`https://hub.luaskills.com`）。`LuaSkillsNetworkSettings::effective_official_skill_hub_base_url` 在用户未填写 `official_skill_hub_base_url` 时只在内存中返回该默认值，**不回写**用户配置；引擎宿主选项与搜索客户端都使用这一结果。中国大陆用户可在“Hub 与下载源”页选择中国站 `https://hub.luaskills.cn`；宿主不按地区静默切换，账号区域提示见 §13.7，也不随 Hub 改写 GitHub 镜像地址。
-- **首次安装**：安装器以已选线路初始化 `<application_data_root>/config/luaskills-runtime-setting.json` 中的官方 Hub。国内与国际分别指向对应站点，自动选择跟随安装下载源。初始化只创建缺失的设置文件，并在登记可能启动 Core 的系统集成之前完成。
+- **首次安装**：安装器按已选线路初始化 `<application_data_root>/config/luaskills-runtime-setting.json` 中的官方 Hub 和 GitHub 下载源。
+  国内使用 `hub.luaskills.cn` 与 `https://gh-proxy.com/https://github.com`，国际使用 `hub.luaskills.com` 与 GitHub 直连。
+  自动线路跟随实际安装下载源，GitHub API 继续使用官方地址。安装器在登记可启动 Core 的系统集成前，只在设置文件缺失时原子创建它。
 - **只读元数据管理器**（`build_skill_manager_for_root`）刻意不设置 Hub 地址，它不执行安装。
 - **搜索 RPC**：`service_search_luaskills_hub`（参数 `query`、`cursor`、`locale`，均可选）→ `luaskills_hub::search_official_hub`，访问运行中引擎构建时所用的同一 Hub 的 `GET /api/v1/skills/search`。搜索不获取 LuaSkills 管理锁；查询长度、游标格式、响应大小、超时与重定向（禁止）都在 `luaskills_hub.rs` 内定义唯一边界。搜索读取宿主的实时网络设置（`luaskills_bridge::live_network_settings`），保存新的 Hub 地址后立即切换，无需重启。
 - **按语言查询**：`locale` 是界面语言代码，宿主只做字符集与长度的边界校验后原样作为 `lang` 传给 Hub，不在客户端匹配语言；省略时 Hub 返回原文（旧客户端行为不变）。每个结果可带 `content`（`kind` 为 `original`、`translation` 或 `original_fallback`，含本地化摘要、AI 简介与功能列表），未精炼的技能为 `null`。

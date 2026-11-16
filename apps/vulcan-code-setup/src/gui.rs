@@ -78,6 +78,9 @@ enum Message {
     /// Changes the download source.
     /// 修改下载源。
     Route(RouteChoice),
+    /// Applies the initial HTTPS latency probe result.
+    /// 应用安装首页的 HTTPS 响应测速结果。
+    RouteMeasured(Route),
     /// Changes an install option.
     /// 修改安装选项。
     Option(OptionField, bool),
@@ -331,6 +334,9 @@ struct Setup {
     /// The installed or edited download route displayed by the selector.
     /// 选择器显示的已安装或已编辑下载线路。
     route: Route,
+    /// The latest measured default, absent until the probe has been scheduled.
+    /// 测得的默认线路，尚未安排测速时为空。
+    route_recommendation: Option<Route>,
     /// Whether the install is still registered to Inno.
     /// 安装是否仍由 Inno 登记。
     legacy: bool,
@@ -462,13 +468,15 @@ pub fn run(command: Command, console_image: Option<&'static [u8]>) -> i32 {
     });
     let result = iced::application(
         move || {
-            Setup::new(
+            let mut setup = Setup::new(
                 command.clone(),
                 Arc::clone(&state_code),
                 brand.clone(),
                 platform,
                 console_image,
-            )
+            );
+            let probe = setup.probe_route();
+            (setup, probe)
         },
         Setup::update,
         Setup::view,
@@ -553,6 +561,7 @@ impl Setup {
             initial,
             installed: false,
             route: Route::Auto,
+            route_recommendation: None,
             legacy: false,
             installed_version: None,
             brand,
@@ -585,7 +594,12 @@ impl Setup {
             self.installed = false;
             self.legacy = false;
             self.installed_version = None;
-            self.route = self.options.common.route.unwrap_or_default();
+            self.route = self
+                .options
+                .common
+                .route
+                .or(self.route_recommendation)
+                .unwrap_or_default();
             return;
         }
         let root = PathBuf::from(directory);
@@ -604,8 +618,27 @@ impl Setup {
         };
         self.route = self.options.common.route.unwrap_or(match ownership {
             Ok(Ownership::Owned(state)) => state.route,
+            _ if !self.installed => self.route_recommendation.unwrap_or_default(),
             _ => Route::Auto,
         });
+    }
+
+    /// Starts one background latency probe when the current route is automatic.
+    /// 当前使用自动线路时，启动一次后台延迟探测。
+    fn probe_route(&mut self) -> Task<Message> {
+        if self.route != Route::Auto
+            || self.route_recommendation.is_some()
+            || self.initial == Some(Operation::Uninstall)
+        {
+            return Task::none();
+        }
+        // Mark the probe as started so edits to the directory field cannot start more probes.
+        // 标记已启动测速，防止编辑目录输入时重复发起探测。
+        self.route_recommendation = Some(Route::Auto);
+        Task::perform(
+            async { crate::route::recommendation() },
+            Message::RouteMeasured,
+        )
     }
 
     /// Looks up a label in the shared setup catalog.
@@ -635,6 +668,7 @@ impl Setup {
             Message::Directory(value) => {
                 self.directory = value;
                 self.inspect();
+                return self.probe_route();
             }
             Message::Browse => {
                 // The native dialog is modal to the same HWND as the installer.
@@ -677,12 +711,22 @@ impl Setup {
             Message::Browsed(Ok(Some(directory))) => {
                 self.directory = directory.display().to_string();
                 self.inspect();
+                return self.probe_route();
             }
             Message::Browsed(Err(error)) => self.warnings.push(error),
             Message::Browsed(Ok(None)) => {}
             Message::Route(value) => {
                 self.route = value.0;
                 self.options.common.route = Some(value.0);
+                return self.probe_route();
+            }
+            Message::RouteMeasured(route) => {
+                self.route_recommendation = Some(route);
+                // The result may arrive after the user picked a route or an existing installation.
+                // 测速结果可能在用户改选线路或选择现有安装后才送达。
+                if !self.installed && self.options.common.route.is_none() {
+                    self.route = route;
+                }
             }
             Message::PortRange(value) => {
                 self.options.port_range = Some(value).filter(|range| !range.trim().is_empty());
@@ -697,6 +741,7 @@ impl Setup {
             Message::LeaveRemoval => {
                 self.initial = None;
                 self.purge = false;
+                return self.probe_route();
             }
             Message::EditInstallation => self.edit_installation(),
             Message::Answer(yes) => match self.confirmation.take() {
@@ -792,6 +837,7 @@ impl Setup {
                 self.result = None;
                 self.warnings.clear();
                 self.inspect();
+                return self.probe_route();
             }
             Message::Launch => {
                 if let Some(Ok(Some(outcome))) = &self.result
@@ -882,6 +928,7 @@ impl Setup {
         }
         let mut options = self.options.clone();
         options.common.prefix = Some(PathBuf::from(self.directory.trim()));
+        options.common.route = Some(self.route);
         // Match the terminal wizard's whitespace normalization before validating a port range.
         // 校验端口范围前，采用与终端向导一致的空白字符处理方式。
         options.port_range = options.port_range.map(|value| value.trim().to_owned());
@@ -1068,6 +1115,7 @@ fn prepare_gui(
 ) -> Result<selfupdate::Outcome, String> {
     let platform = Platform::WindowsX64;
     let (channel, route) = install::preferences(&options.common, options.channel, platform);
+    let route = route.unwrap_or_default();
     options.common.route = Some(route);
     let mut arguments = vec![
         String::from(if operation == Operation::Update {
@@ -1119,6 +1167,34 @@ fn prepare_gui(
 mod window_tests {
     use super::window_bounds;
     use iced::{Point, Size, window::Position};
+
+    /// A measured default selects a fresh install's route without replacing a manual choice.
+    /// 测速结果可以设置首次安装的默认线路，同时保留用户手动选择。
+    #[test]
+    fn measured_default_preserves_a_manual_route() {
+        use super::{Command, InstallOptions, Message, Platform, Route, RouteChoice, Setup};
+        use std::sync::{Arc, atomic::AtomicI32};
+
+        let fixture = tempfile::tempdir().expect("isolated install directory");
+        let mut options = InstallOptions::default();
+        options.common.prefix = Some(fixture.path().join("fresh"));
+        let mut setup = Setup::new(
+            Command::Install(options),
+            Arc::new(AtomicI32::new(0)),
+            None,
+            Platform::current().expect("supported installer platform"),
+            None,
+        );
+        let _ = setup.update(Message::RouteMeasured(Route::China));
+        assert_eq!(setup.route, Route::China);
+        let _ = setup.update(Message::Route(RouteChoice(
+            Route::International,
+            String::new(),
+        )));
+        let _ = setup.update(Message::RouteMeasured(Route::China));
+        assert_eq!(setup.route, Route::International);
+        assert_eq!(setup.options.common.route, Some(Route::International));
+    }
 
     /// Verifies a worker panic reaches the window through an error event with its cause.
     /// 验证线程异常通过带有具体原因的错误事件到达窗口。

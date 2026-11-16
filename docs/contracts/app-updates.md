@@ -137,8 +137,10 @@
   在子 Shell 执行，当前终端继承的 PATH 不会变动。 `promote-setup.yml` 把
   stable 安装器指针所列的脚本按摘要校验后放到主下载源顶层（缓存 60 秒）；openvulcan-web 把 `setup/` 与顶层
   脚本同步到中国镜像。
-- **线路选择与自更新**：交互式 `install`、`update` 在访问网络前先选择自动、国际或中国大陆节点，默认高亮
-  该安装目录已保存的线路或自动。显式 `--route` 跳过选择页。无人值守沿用显式参数、已保存线路或自动。
+- **线路选择与自更新**：首次交互式安装时，终端第一步与图形首页并行向两个官方下载源的稳定安装器指针发送 HTTPS `HEAD` 请求，
+  默认选中响应更快的节点，可手动改选。已安装的目录优先使用已保存线路。终端显式 `--route` 跳过选择页。
+  无人值守沿用显式参数、已保存线路或自动。选择自动时，下载器优先使用测速较快的节点，失败时尝试另一个节点。
+  两边均未测通时按国际源、国内镜像的顺序尝试实际下载。一次运行的安装器自更新与产品下载共用测速结果。
   同一线路用于安装器自更新、产品清单及组件下载，保存至安装器的安装记录，并在自动重启时传递给新进程。
   安装器读取通道（preview 同时读 stable）的已签名安装器指针，与自身版本比较。
   有新版本时自动下载、校验、替换并重启，无需确认。显式 `--no-self-update` 跳过。替换后保留原安装参数并用
@@ -159,10 +161,11 @@
   `fish/conf.d`，POSIX 登录 Shell 使用 `.profile`。重复安装复用原区块，关闭 PATH 集成或卸载时只移除该安装
   的区块。纯命令行安装结束后显示服务注册、前台启动和停止、适用的服务管理器命令，以及从已安装 Core
   的 `--describe` 读取的 WebUI 端口范围。服务启动输出显示实际绑定地址。
-- **首次安装的 LuaSkills Hub**：安装器从已组装 Core 的 `--describe` 取得用户数据目录。登记快捷方式或服务前，
-  若安装根属于首次安装且用户尚无 LuaSkills 运行时设置，则按安装线路初始化官方 Hub。国内入口选国内 Hub，国际线路选国际 Hub，
-  自动线路跟随这次产品下载选中的来源。已有 LuaSkills 设置、升级与旧安装接管保留原值。Hub 地址和设置格式由
-  `vulcan-luaskills-config` 管理。
+- **首次安装的 LuaSkills 下载源**：安装器从已组装 Core 的 `--describe` 取得用户数据目录。登记快捷方式或服务前，
+  若安装根属于首次安装且用户尚无 LuaSkills 运行时设置，则按安装线路同时初始化 Hub 和 GitHub 下载源。
+  国内线路使用 `hub.luaskills.cn` 和 `https://gh-proxy.com/https://github.com`，国际线路使用 `hub.luaskills.com`
+  和 GitHub 直连。自动线路跟随本次产品下载实际使用的来源。GitHub API 仍使用官方地址。
+  已有 LuaSkills 设置、升级与旧安装接管保留原值。地址和设置格式由 `vulcan-luaskills-config` 管理。
 - **Windows 桌面集成**：GUI 安装时把 `bin/vulcan-code-launcher.exe` 复制为 `<root>\VulcanCode.exe`，快捷方式用
   运行布局（schema 4）的 `desktopIdentity` 写入 AppUserModelID 与通知激活 CLSID，与 Inno 安装包一致；同时把
   安装器放入 PATH 并作为卸载入口的 `DisplayIcon`/卸载命令。完成与 `status` 时告知卸载命令。

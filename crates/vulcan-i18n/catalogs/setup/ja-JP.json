@@ -46,7 +46,7 @@
   "setup.gui.close": "閉じる",
   "setup.route.title": "ダウンロード元",
   "setup.route.auto": "自動",
-  "setup.route.autoDetail": "国際配信元を優先し、利用できない場合は中国本土のミラーを使用します。",
+  "setup.route.autoDetail": "応答が速い配信元を優先し、失敗した場合はもう一方を使用します。",
   "setup.route.international": "国際",
   "setup.route.internationalDetail": "{domain} のみを使用します。",
   "setup.route.china": "中国本土",

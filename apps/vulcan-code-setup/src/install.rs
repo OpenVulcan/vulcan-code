@@ -21,7 +21,7 @@ use vulcan_install_core::repair::prepare_repair;
 use vulcan_install_core::signing::BUILT_IN_KEYS;
 use vulcan_install_core::update::read_manifest;
 use vulcan_install_core::update::{find_update, read_indexes};
-use vulcan_luaskills_config::{OfficialSkillHub, initialize_official_skill_hub};
+use vulcan_luaskills_config::{OfficialSkillHub, initialize_network_region};
 
 use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions, check_port_range};
 use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
@@ -195,15 +195,15 @@ pub fn channels(channel: Channel) -> &'static [Channel] {
     }
 }
 
-/// The channel and origins `install` or `update` will use, for looking up a newer setup program
-/// before anything else: the options given, then the recorded choices, then the defaults.
-/// `install` 或 `update` 将使用的通道与下载源，用于在其他步骤之前查找更新的安装器：依次取给出的选项、
-/// 记录的选择与默认值。
+/// Returns the requested or saved preferences used to check for a newer setup program.
+/// 返回用于检查新版安装器的显式参数或已保存的偏好。
+/// The channel defaults to Stable. An absent route lets the caller choose a fresh default.
+/// 通道缺省使用 Stable，线路缺省时由调用方决定首次安装的默认值。
 pub fn preferences(
     common: &CommonOptions,
     channel: Option<Channel>,
     platform: Platform,
-) -> (Channel, Route) {
+) -> (Channel, Option<Route>) {
     let recorded = resolve_root(common.prefix.as_deref(), platform)
         .and_then(|root| root::ownership(&root))
         .ok()
@@ -215,10 +215,7 @@ pub fn preferences(
         channel
             .or(recorded.as_ref().map(|state| state.channel))
             .unwrap_or(Channel::Stable),
-        common
-            .route
-            .or(recorded.as_ref().map(|state| state.route))
-            .unwrap_or_default(),
+        common.route.or(recorded.as_ref().map(|state| state.route)),
     )
 }
 
@@ -551,7 +548,7 @@ fn apply_target(
             .map_err(|error| error.to_string())?,
     };
     let mut downloader =
-        Downloader::new(choices.route.origins(), USER_AGENT).map_err(|error| error.to_string())?;
+        crate::route::downloader(choices.route).map_err(|error| error.to_string())?;
     let cancel = downloader.cancel_flag();
     reporter.cancel_with(Arc::clone(&cancel));
     reporter.stage(Stage::Checking(choices.channel));
@@ -699,12 +696,12 @@ fn apply_target(
 
     reporter.stage(Stage::Integrating);
     let installed_version = Version::read(&root.version_dir(&version))?;
-    // Seed the Hub before integrating any shortcut or service that can start Core. A retry of an
+    // Seed the LuaSkills endpoints before integrating shortcuts or services that start Core. A retry of an
     // interrupted first install is still fresh until its setup state is written.
-    // 在登记可能启动 Core 的快捷方式或服务之前初始化 Hub。安装状态写入前，首次安装中断后的重试仍属于首次安装。
+    // 在登记可启动 Core 的快捷方式或服务之前初始化 LuaSkills 端点。安装状态写入前，重试仍属于首次安装。
     if *ownership == Ownership::Fresh {
         let description = Description::read(&installed_version.dir)?;
-        initialize_official_skill_hub(
+        initialize_network_region(
             &description.data_root.join("config"),
             initial_skill_hub(choices.route, downloader.preferred_origin()),
         )?;

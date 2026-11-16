@@ -46,7 +46,7 @@
   "setup.gui.close": "Close",
   "setup.route.title": "Download source",
   "setup.route.auto": "Auto",
-  "setup.route.autoDetail": "Try the international source first, then the mainland China mirror if unavailable.",
+  "setup.route.autoDetail": "Use the source that responds fastest, with the other source available if it fails.",
   "setup.route.international": "International",
   "setup.route.internationalDetail": "Use only {domain}.",
   "setup.route.china": "Mainland China",

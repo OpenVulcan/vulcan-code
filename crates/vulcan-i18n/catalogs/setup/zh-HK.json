@@ -46,7 +46,7 @@
   "setup.gui.close": "關閉",
   "setup.route.title": "下載節點",
   "setup.route.auto": "自動",
-  "setup.route.autoDetail": "優先使用國際來源，無法連線時改用中國內地鏡像。",
+  "setup.route.autoDetail": "優先使用回應較快的節點，失敗時改用另一個節點。",
   "setup.route.international": "國際節點",
   "setup.route.internationalDetail": "只使用 {domain}。",
   "setup.route.china": "中國內地節點",

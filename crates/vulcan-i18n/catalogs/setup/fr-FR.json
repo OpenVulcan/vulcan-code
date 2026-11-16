@@ -46,7 +46,7 @@
   "setup.gui.close": "Fermer",
   "setup.route.title": "Source de téléchargement",
   "setup.route.auto": "Automatique",
-  "setup.route.autoDetail": "Essayer la source internationale, puis le miroir en Chine continentale si elle est indisponible.",
+  "setup.route.autoDetail": "Utiliser la source qui répond le plus vite et passer à l’autre en cas d’échec.",
   "setup.route.international": "Internationale",
   "setup.route.internationalDetail": "Utiliser uniquement {domain}.",
   "setup.route.china": "Chine continentale",

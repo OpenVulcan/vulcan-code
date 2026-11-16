@@ -46,7 +46,7 @@
   "setup.gui.close": "Fechar",
   "setup.route.title": "Origem do download",
   "setup.route.auto": "Automática",
-  "setup.route.autoDetail": "Tentar primeiro a origem internacional e usar o espelho da China continental se ela estiver indisponível.",
+  "setup.route.autoDetail": "Usar a origem que responde mais rápido e recorrer à outra em caso de falha.",
   "setup.route.international": "Internacional",
   "setup.route.internationalDetail": "Usar apenas {domain}.",
   "setup.route.china": "China continental",

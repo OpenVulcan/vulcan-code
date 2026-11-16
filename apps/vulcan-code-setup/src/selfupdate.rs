@@ -17,7 +17,7 @@ use vulcan_install_core::signing::BUILT_IN_KEYS;
 use vulcan_install_core::update::find_setup_update;
 
 use crate::args::SelfUpdate;
-use crate::install::{USER_AGENT, channels};
+use crate::install::channels;
 use crate::prompt::megabytes;
 
 /// The version of this setup program, defined only in its `Cargo.toml`.
@@ -94,8 +94,7 @@ pub fn check(
     // The lookup reaches the network before anything else is shown, so it says what it is doing.
     // 该查询在显示任何其他内容之前访问网络，因此先说明正在做什么。
     surface.announce(format_args!("Looking for a newer setup program..."));
-    let mut downloader =
-        Downloader::new(route.origins(), USER_AGENT).map_err(|error| error.to_string())?;
+    let mut downloader = crate::route::downloader(route).map_err(|error| error.to_string())?;
     let pointer = match find_setup_update(&mut downloader, BUILT_IN_KEYS, channels(channel), &own) {
         Ok(Some(pointer)) => pointer,
         Ok(None) => return Ok(Outcome::Continue),
