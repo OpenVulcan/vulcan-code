@@ -89,6 +89,10 @@ pub struct StartupSnapshot {
     /// 本次启动时接管冲突用户定义的签名模型身份。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_reconciliation_notices: Vec<StartupModelReconciliationNotice>,
+    /// Skill IDs whose required dependencies could not be prepared during startup.
+    /// 启动时无法准备必需依赖的技能标识。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub luaskills_dependency_failures: Vec<String>,
 }
 
 /// Identifies one provider model whose manual definition was removed on startup.

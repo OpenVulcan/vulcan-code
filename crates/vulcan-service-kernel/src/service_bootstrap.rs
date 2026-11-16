@@ -643,16 +643,42 @@ fn run_service_bootstrap(
         };
     // Keep the archive progress callback scoped to synchronous bootstrap.
     // 归档下载进度回调的生效范围仅限同步引导。
-    let bootstrap_result = {
-        let _downloads = StartupSkillDownloads::install(state, event_emitter);
-        vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
-            |message| update_luaskills_bootstrap_progress(state, event_emitter, &logs, message),
-            |progress| {
-                update_managed_runtime_bootstrap_progress(state, event_emitter, &logs, progress)
-            },
-            luaskills_github_token,
-        )
-    };
+    let (bootstrap_result, luaskills_dependency_failures) =
+        crate::luaskills_diagnostics::capture_startup_dependency_failures(|| {
+            let _downloads = StartupSkillDownloads::install(state, event_emitter);
+            vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
+                |phase, skill_id, message| {
+                    if phase
+                        == vulcan_service_runtime::luaskills_bridge::LUASKILLS_LOADING_CATALOG_PHASE
+                    {
+                        crate::luaskills_diagnostics::begin_final_startup_skill_load();
+                    }
+                    update_luaskills_bootstrap_progress(
+                        state,
+                        event_emitter,
+                        &logs,
+                        phase,
+                        skill_id,
+                        message,
+                    );
+                },
+                |progress| {
+                    update_managed_runtime_bootstrap_progress(state, event_emitter, &logs, progress)
+                },
+                luaskills_github_token,
+            )
+        });
+    // Retain safe skill identities across subsequent startup snapshots and the workbench handoff.
+    // 在后续启动快照与工作台交接中保留安全的技能标识。
+    if !luaskills_dependency_failures.is_empty() {
+        logs.push(format!(
+            "[webui-service] LuaSkills dependency preparation failed for: {}",
+            luaskills_dependency_failures.join(", ")
+        ));
+        if let Ok(mut guard) = state.lock() {
+            guard.startup.luaskills_dependency_failures = luaskills_dependency_failures.clone();
+        }
+    }
     let (luaskills_runtime, luaskills_catalog, luaskills_step_status, luaskills_step_message) =
         match bootstrap_result {
             Ok(runtime_handle) => {
@@ -680,11 +706,22 @@ fn run_service_bootstrap(
                             catalog.skills.len(),
                             catalog.entry_count
                         ));
+                        // A dependency failure leaves the engine usable with a partial skill set.
+                        // 依赖失败后引擎仍可使用，但可用技能不完整。
+                        let status = if luaskills_dependency_failures.is_empty() {
+                            StartupStepStatus::Ready
+                        } else {
+                            StartupStepStatus::Warning
+                        };
                         (
                             Some(runtime_handle),
                             catalog,
-                            StartupStepStatus::Ready,
-                            String::from("LuaSkills engine and skill catalog ready"),
+                            status,
+                            if status == StartupStepStatus::Warning {
+                                String::from("Some LuaSkills dependencies failed to prepare")
+                            } else {
+                                String::from("LuaSkills engine and skill catalog ready")
+                            },
                         )
                     }
                     Err(error) => {
@@ -1921,6 +1958,7 @@ fn run_service_bootstrap(
     );
     startup.ui_locale = provider_configuration.ui_locale;
     startup.model_reconciliation_notices = model_reconciliation_notices;
+    startup.luaskills_dependency_failures = luaskills_dependency_failures;
     // initial_projection_started_at measures selected-session locator validation and first workbench projection.
     // initial_projection_started_at 测量选中会话定位校验与首次工作台投影。
     let initial_projection_started_at = start_bootstrap_stage("initial_workbench_projection");

@@ -1,7 +1,10 @@
+import { useEffect, useRef } from "react";
 import type { StartupSnapshot } from "@/types";
-import { BootErrorScreen } from "@/app/boot-startup-screen";
-import { StartupProgressPanel, type StartupProgressLabels } from "@/components/shell/startup-progress-panel";
+import { BootErrorScreen, useBootText } from "@/app/boot-startup-screen";
+import { StartupProgressPanel } from "@/components/shell/startup-progress-panel";
 import { useI18n } from "@/i18n";
+import type { LocaleCode } from "@/i18n-messages";
+import { toast } from "@/ui-kit/primitives/toast";
 
 // StartupOverlay renders the in-shell bootstrap blocker below the main header. The first load is covered by the
 // persistent boot surface (see WebuiApp); this overlay only appears when the service restarts under a mounted shell.
@@ -14,22 +17,49 @@ export function StartupOverlay(props: {
   // 最近一次服务启动快照。
   startup: StartupSnapshot;
 }) {
-  const { t } = useI18n();
-  // labels maps the full i18n catalog onto the shared startup panel copy.
-  // labels 将完整 i18n 文案映射为共用启动面板文案。
-  const labels: StartupProgressLabels = {
-    loadingWorkspace: t("startup.loadingWorkspace"),
-    connectingService: t("startup.connectingService"),
-    loadingProjectIndex: t("startup.loadingProjectIndex"),
-    loadingStep: t("startup.loadingStep"),
-    completedSteps: t("workspaceAudit.startupSteps"),
-    downloadProgress: t("startup.downloadProgress"),
-  };
+  const { locale } = useI18n();
+  // The shared startup surface displays the current locale after its small catalog arrives.
+  // 小型目录到达后，共用启动层显示当前语言。
+  const text = useBootText(locale);
   return (
     <div className="vk-startup-overlay" role="status" aria-live="polite">
-      <StartupProgressPanel startup={props.startup} labels={labels} />
+      {text ? <StartupProgressPanel startup={props.startup} labels={text} /> : null}
     </div>
   );
+}
+
+// Identifies the dismissible warning for the current service startup.
+// 标识当前服务启动对应的可关闭警告。
+const STARTUP_DEPENDENCY_WARNING_ID = "startup-luaskills-dependency-failure";
+
+/** Shows the dependency warning for a ready startup snapshot in the workbench locale.
+ * 对已就绪的启动快照，使用工作台语言显示依赖警告。 */
+export function useStartupDependencyWarning(startup: StartupSnapshot, locale: LocaleCode): void {
+  // The last shown set suppresses repeated startup RPC and event snapshots.
+  // 已显示的失败集合用于去重启动 RPC 和事件快照。
+  const shown = useRef<string | null>(null);
+  // The warning waits for the selected language before publishing the notification.
+  // 警告在选定语言就绪后再发布通知。
+  const text = useBootText(locale);
+  useEffect(() => {
+    const failures = startup.luaskillsDependencyFailures;
+    if (!startup.ready || !failures?.length) {
+      if (shown.current !== null) toast.dismiss(STARTUP_DEPENDENCY_WARNING_ID);
+      shown.current = null;
+      return;
+    }
+    if (!text) return;
+    // The server returns a stable ordered list of skill IDs.
+    // 服务返回顺序稳定的技能标识列表。
+    const skills = failures.join(", ");
+    if (shown.current === skills) return;
+    shown.current = skills;
+    toast.warning(text.dependencyFailure.replace("{skills}", skills), {
+      id: STARTUP_DEPENDENCY_WARNING_ID,
+      description: text.githubMirrorHint,
+      duration: Infinity,
+    });
+  }, [startup.ready, startup.luaskillsDependencyFailures, text]);
 }
 
 // ErrorScreen renders a startup failure.

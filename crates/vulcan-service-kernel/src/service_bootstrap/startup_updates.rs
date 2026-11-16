@@ -79,7 +79,8 @@ fn update_startup_skill_download(
             .map(|(done, total)| ((u128::from(done.min(total)) * 100) / u128::from(total)) as u8);
         // Only the initial archive sample needs an event; every sample is available through RPC.
         // 只有首个归档进度需要事件，每个进度样本都可通过 RPC 读取。
-        let download_started = step.skill_id.as_deref() != Some(skill_id);
+        let download_started = step.progress_phase.as_deref() != Some("downloading")
+            || step.skill_id.as_deref() != Some(skill_id);
         step.message = Some(format!("Downloading LuaSkills skill: {skill_id}"));
         step.progress_phase = Some(String::from("downloading"));
         step.skill_id = Some(skill_id.to_owned());
@@ -116,6 +117,7 @@ pub(crate) fn update_startup<F>(
     if let Ok(mut guard) = state.lock() {
         startup.ui_locale = guard.startup.ui_locale.clone();
         startup.model_reconciliation_notices = guard.startup.model_reconciliation_notices.clone();
+        startup.luaskills_dependency_failures = guard.startup.luaskills_dependency_failures.clone();
         guard.startup = startup.clone();
     }
     emit_service_event_with_trace(
@@ -192,6 +194,8 @@ pub(crate) fn update_luaskills_bootstrap_progress(
     state: &SharedServiceBridgeState,
     event_emitter: &ServiceEventEmitter,
     logs: &[String],
+    phase: &str,
+    skill_id: Option<&str>,
     message: &str,
 ) {
     update_startup(
@@ -200,7 +204,7 @@ pub(crate) fn update_luaskills_bootstrap_progress(
         "bootstrapping-luaskills",
         logs,
         |now| {
-            startup_steps_with_status(
+            let mut steps = startup_steps_with_status(
                 now,
                 &[
                     (
@@ -230,7 +234,14 @@ pub(crate) fn update_luaskills_bootstrap_progress(
                         "Waiting for the workspace database to load",
                     ),
                 ],
-            )
+            );
+            // Keep the phase and skill identity independent from the English diagnostic.
+            // 将启动阶段和技能标识独立于英文诊断保存。
+            if let Some(step) = steps.iter_mut().find(|step| step.id == "luaskills") {
+                step.progress_phase = Some(phase.to_owned());
+                step.skill_id = skill_id.map(str::to_owned);
+            }
+            steps
         },
     );
 }
@@ -323,6 +334,7 @@ pub(crate) fn update_service_failure(
     if let Ok(mut guard) = state.lock() {
         startup.ui_locale = guard.startup.ui_locale.clone();
         startup.model_reconciliation_notices = guard.startup.model_reconciliation_notices.clone();
+        startup.luaskills_dependency_failures = guard.startup.luaskills_dependency_failures.clone();
         workbench.ui_locale = guard.startup.ui_locale.clone();
         guard.startup = startup.clone();
         crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);

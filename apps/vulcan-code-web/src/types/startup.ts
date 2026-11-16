@@ -98,6 +98,9 @@ export interface StartupSnapshot {
   // Signed identities that replaced local manual definitions during this service startup.
   // 本次服务启动时接管本地手工定义的签名身份。
   modelReconciliationNotices?: { providerId: string; modelId: string }[];
+  // Skills skipped because a required dependency failed during this startup.
+  // 本次启动中因必需依赖失败而跳过的技能。
+  luaskillsDependencyFailures?: string[];
 }
 
 // RuntimeModuleSnapshot describes one runtime module card.

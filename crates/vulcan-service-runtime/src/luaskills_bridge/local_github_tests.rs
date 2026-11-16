@@ -735,7 +735,7 @@ fn root_bootstrap_moves_github_installs_to_the_configured_hub() {
             &handle.skill_roots,
             entries,
             &mut engine,
-            &mut |message: &str| messages.push(message.to_string()),
+            &mut |_, _, message: &str| messages.push(message.to_string()),
         )
         .expect("ROOT bootstrap");
         messages

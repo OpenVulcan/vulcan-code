@@ -361,18 +361,24 @@ pub struct TauriLuaSkillToolSummary {
     pub description: String,
 }
 
+/// Startup phase for the final skill catalog load, including required dependency preparation.
+/// 最终技能目录加载的启动阶段，包括必需依赖准备。
+pub const LUASKILLS_LOADING_CATALOG_PHASE: &str = "loading-catalog";
+
 /// Bootstraps LuaSkills using the in-process database mode shared by Vulcan Code hosts.
 /// 使用 Vulcan Code 宿主共享的进程内数据库模式引导 LuaSkills。
 ///
 /// `github_token` is the token read from the host's secure store; it only reaches engine memory.
 /// `github_token` 是从宿主安全存储读取的令牌；它只进入引擎内存。
+/// `progress` receives a stable phase, optional skill ID and an English diagnostic.
+/// `progress` 接收稳定阶段、可选技能标识和英文诊断。
 pub fn bootstrap_luaskills<F, G>(
     mut progress: F,
     mut managed_progress: G,
     github_token: Option<String>,
 ) -> Result<TauriLuaSkillsHandle, String>
 where
-    F: FnMut(&str),
+    F: FnMut(&'static str, Option<&str>, &str),
     G: FnMut(&ManagedRuntimeBootstrapProgress),
 {
     let runtime_root =
@@ -391,7 +397,11 @@ where
             )
         })?,
     );
-    progress("Preparing the LuaSkills runtime directories");
+    progress(
+        "preparing-directories",
+        None,
+        "Preparing the LuaSkills runtime directories",
+    );
     // The release tree is read-only at run time: settings, the ROOT skill layer, managed
     // environments and installer work areas all live below the user's Vulcan Code root, so every
     // installed version shares them and an update never carries or loses them.
@@ -432,15 +442,16 @@ where
     let managed_runtime_report = bootstrap_managed_runtimes(
         &managed_runtime_work_root,
         &managed_runtime_distribution_root,
-        |event: &ManagedRuntimeBootstrapProgress| {
-            progress(&event.message);
-            managed_progress(event);
-        },
+        |event: &ManagedRuntimeBootstrapProgress| managed_progress(event),
     );
-    progress(&format!(
-        "Managed Python/Node runtime: {}",
-        managed_runtime_report.diagnostic
-    ));
+    progress(
+        "managed-runtime",
+        None,
+        &format!(
+            "Managed Python/Node runtime: {}",
+            managed_runtime_report.diagnostic
+        ),
+    );
     // managed_runtime_environment_root keeps writable environments beside the ROOT skill layer.
     // managed_runtime_environment_root 将可写环境保存在 ROOT 技能层旁。
     let managed_runtime_environment_root = managed_runtime_environment_root();
@@ -471,7 +482,11 @@ where
         &mut engine,
         &mut progress,
     )?;
-    progress("Loading the LuaSkills skill catalog");
+    progress(
+        LUASKILLS_LOADING_CATALOG_PHASE,
+        None,
+        "Loading the LuaSkills skill catalog",
+    );
     engine
         .load_from_roots(&skill_roots)
         .map_err(|error| format!("Failed to load the LuaSkills skill roots: {error}"))?;
@@ -1606,11 +1621,10 @@ fn ensure_configured_root_skills_installed(
     skill_roots: &[RuntimeSkillRoot],
     configured_skills: Vec<RootSkillBootstrapEntry>,
     engine: &mut LuaEngine,
-    progress: &mut impl FnMut(&str),
+    progress: &mut impl FnMut(&'static str, Option<&str>, &str),
 ) -> Result<(), String> {
     let root_target = resolve_named_skill_root(skill_roots, "ROOT")?;
     if configured_skills.is_empty() {
-        progress("No LuaSkills ROOT skills are configured for automatic installation");
         return Ok(());
     }
 
@@ -1654,7 +1668,11 @@ fn ensure_configured_root_skills_installed(
         }
 
         let install_message = format!("Installing LuaSkills skill: {}", configured_skill.skill_id);
-        progress(&install_message);
+        progress(
+            "installing-skill",
+            Some(&configured_skill.skill_id),
+            &install_message,
+        );
         let install_request = SkillInstallRequest {
             skill_id: Some(configured_skill.skill_id.clone()),
             source: Some(configured_skill.source.clone()),
@@ -1675,12 +1693,20 @@ fn ensure_configured_root_skills_installed(
                 )
             })?;
         let installed_message = format!("Installed LuaSkills skill: {}", configured_skill.skill_id);
-        progress(&installed_message);
+        progress(
+            "installed-skill",
+            Some(&configured_skill.skill_id),
+            &installed_message,
+        );
         installed_any_skill = true;
     }
 
     if installed_any_skill {
-        progress("Refreshing the LuaSkills skill roots");
+        progress(
+            "refreshing-skill-roots",
+            None,
+            "Refreshing the LuaSkills skill roots",
+        );
         // Every system install above is already committed on disk, so a reload failure
         // must not read as "no default skill was installed": the next bootstrap would
         // otherwise re-attempt installs that already succeeded.
@@ -1689,8 +1715,6 @@ fn ensure_configured_root_skills_installed(
         engine.reload_from_roots(skill_roots).map_err(|error| {
             format!("The ROOT default skills are installed, but refreshing the LuaSkills skill roots failed: {error}")
         })?;
-    } else {
-        progress("The LuaSkills default skills already exist; loading the catalog");
     }
 
     Ok(())
@@ -1764,7 +1788,7 @@ fn migrate_root_skill_source(
     engine: &mut LuaEngine,
     configured_skill: &RootSkillBootstrapEntry,
     configured_type: SkillInstallSourceType,
-    progress: &mut impl FnMut(&str),
+    progress: &mut impl FnMut(&'static str, Option<&str>, &str),
 ) -> bool {
     let skill_id = configured_skill.skill_id.as_str();
     let record = match root_manager.install_record(skill_id) {
@@ -1774,9 +1798,13 @@ fn migrate_root_skill_source(
         // 没有受管记录的 ROOT 技能是手工放置的；迁移会覆盖不归安装流程管理的内容。
         Ok(_) => return false,
         Err(error) => {
-            progress(&format!(
-                "Skipped the source check of ROOT skill `{skill_id}`: reading its install record failed: {error}"
-            ));
+            progress(
+                "refreshing-skill-roots",
+                None,
+                &format!(
+                    "Skipped the source check of ROOT skill `{skill_id}`: reading its install record failed: {error}"
+                ),
+            );
             return false;
         }
     };
@@ -1789,13 +1817,17 @@ fn migrate_root_skill_source(
         return false;
     }
 
-    progress(&format!(
-        "Moving LuaSkills skill `{skill_id}` from {} `{}` to {} `{}`",
-        skill_install_source_type_label(record.source.source_type),
-        record.source.locator,
-        skill_install_source_type_label(configured_type),
-        configured_skill.source
-    ));
+    progress(
+        "installing-skill",
+        Some(skill_id),
+        &format!(
+            "Moving LuaSkills skill `{skill_id}` from {} `{}` to {} `{}`",
+            skill_install_source_type_label(record.source.source_type),
+            record.source.locator,
+            skill_install_source_type_label(configured_type),
+            configured_skill.source
+        ),
+    );
     let request = SkillInstallRequest {
         skill_id: Some(configured_skill.skill_id.clone()),
         source: Some(configured_skill.source.clone()),
@@ -1809,16 +1841,24 @@ fn migrate_root_skill_source(
         &request,
     ) {
         Ok(result) => {
-            progress(&format!(
-                "Moved LuaSkills skill `{skill_id}` to the configured source ({}): {}",
-                result.status, result.message
-            ));
+            progress(
+                "installed-skill",
+                Some(skill_id),
+                &format!(
+                    "Moved LuaSkills skill `{skill_id}` to the configured source ({}): {}",
+                    result.status, result.message
+                ),
+            );
             true
         }
         Err(error) => {
-            progress(&format!(
-                "Keeping LuaSkills skill `{skill_id}` on its recorded source; moving it to the configured source failed and will be retried on the next start: {error}"
-            ));
+            progress(
+                "refreshing-skill-roots",
+                None,
+                &format!(
+                    "Keeping LuaSkills skill `{skill_id}` on its recorded source; moving it to the configured source failed and will be retried on the next start: {error}"
+                ),
+            );
             false
         }
     }

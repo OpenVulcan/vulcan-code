@@ -109,11 +109,18 @@ test('forwards authenticated Core startup steps before readiness without exposin
     // Capture the renderer projection through the public launcher reporter.
     // 通过公开启动器上报接口捕获渲染投影。
     const snapshots: unknown[] = [];
+    // Collect any dependency failures forwarded alongside the safe steps.
+    // 收集随安全步骤一起转发的依赖失败。
+    const dependencyFailures: unknown[] = [];
     await ensureServiceInstance(description, [], progress => {
       if (progress.snapshot) snapshots.push(progress.snapshot.steps[0]);
+      if (progress.snapshot?.luaskillsDependencyFailures) {
+        dependencyFailures.push(progress.snapshot.luaskillsDependencyFailures);
+      }
       assert(!JSON.stringify(progress).includes('test-only'));
     });
     assert.deepEqual(snapshots, steps);
+    assert.deepEqual(dependencyFailures, [['fixture']]);
   }, (request, response) => {
     assert.equal(request.method, 'POST');
     assert.equal(request.headers['x-vulcan-service-token'], 'test-only');
@@ -122,7 +129,10 @@ test('forwards authenticated Core startup steps before readiness without exposin
     let body = '';
     request.setEncoding('utf8').on('data', chunk => { body += chunk; }).on('end', () => {
       assert.deepEqual(JSON.parse(body), { method: 'startup.snapshot' });
-      response.end(JSON.stringify({ ok: true, result: { ready: false, phase: 'bootstrapping', steps: [steps[probes++]], recentLogs: ['test-only'] } }));
+      const step = steps[probes++];
+      assert(step, 'unexpected startup snapshot request');
+      response.end(JSON.stringify({ ok: true, result: { ready: false, phase: 'bootstrapping', steps: [step],
+        luaskillsDependencyFailures: step.id === 'mcp' ? ['fixture'] : undefined, recentLogs: ['test-only'] } }));
     });
   });
 });

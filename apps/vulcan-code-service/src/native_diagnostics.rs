@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use vulcan_service_kernel::luaskills_diagnostics::{
     RuntimeLogCallback, RuntimeLogEvent, RuntimeLogLevel, VulcanPluginNativeIdentityCallback,
     VulcanPluginNativeIdentityEvent, VulcanPluginNativeIdentitySubscription, emit_runtime_log,
-    install_native_identity_observer, set_log_callback,
+    install_native_identity_observer, observe_startup_dependency_failure, set_log_callback,
 };
 
 /// Sole maximum record footprint for both callback families, including JSON escaping overhead.
@@ -318,6 +318,7 @@ impl NativeDiagnosticCapture {
             if event.message == INSTALL_PROBE {
                 callback_probe.store(true, Ordering::Release);
             } else {
+                observe_startup_dependency_failure(event);
                 core_ingress.core(event);
             }
         });

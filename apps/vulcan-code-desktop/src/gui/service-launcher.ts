@@ -98,6 +98,9 @@ export interface ServiceStartupSnapshot {
   phase: string;
   uiLocale?: string;
   steps: unknown[];
+  /** Skill IDs with dependency failures from this startup.
+   * 本次启动中依赖失败的技能标识。 */
+  luaskillsDependencyFailures?: string[];
 }
 
 /** Reads startup progress from the verified instance while keeping its token in the main process.
@@ -125,6 +128,9 @@ async function readStartupSnapshot(instance: LiveServiceInstance): Promise<Servi
     return {
       ready: snapshot.ready, phase: snapshot.phase, steps: snapshot.steps,
       ...(typeof snapshot.uiLocale === 'string' ? { uiLocale: snapshot.uiLocale } : {}),
+      ...(Array.isArray(snapshot.luaskillsDependencyFailures)
+        && snapshot.luaskillsDependencyFailures.every((id) => typeof id === 'string')
+        ? { luaskillsDependencyFailures: snapshot.luaskillsDependencyFailures } : {}),
     };
   } catch {
     // Missing progress does not change the verified health state or launch deadline.

@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import {
   BootErrorScreen,
   BootLoadingScreen,
-  bootText,
+  useBootText,
   NATIVE_WINDOW_BUTTONS,
   StartupWindowBar,
 } from "@/app/boot-startup-screen";
@@ -96,7 +96,7 @@ function DesktopStartupPage() {
     },
     () => state,
   );
-  const closeLabel = bootText(locale).closeWindow;
+  const text = useBootText(locale);
   return (
     <>
       {current.failure === null
@@ -104,7 +104,7 @@ function DesktopStartupPage() {
         : <BootErrorScreen error={current.failure} uiLocale={locale} windowBar={false} />}
       {/* macOS keeps its native window buttons on the frameless window, so only other systems need a close button. */}
       {/* macOS 在无边框窗口上保留原生窗口按钮，因此只有其他系统需要关闭按钮。 */}
-      {NATIVE_WINDOW_BUTTONS ? null : <StartupWindowBar closeLabel={closeLabel} onClose={() => window.close()} />}
+      {NATIVE_WINDOW_BUTTONS || !text ? null : <StartupWindowBar closeLabel={text.closeWindow} onClose={() => window.close()} />}
     </>
   );
 }

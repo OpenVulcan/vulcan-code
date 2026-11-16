@@ -4,15 +4,12 @@ import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
 import { readElectronDesktopBridge } from "@/host-shell/electron-bridge";
 import { StartupProgressPanel, type StartupProgressLabels } from "@/components/shell/startup-progress-panel";
 import type { StartupSnapshot } from "@/types";
-import { resolveAppLocale, type LocaleCode } from "@/i18n-locales";
+import { DEFAULT_LOCALE, resolveAppLocale, type LocaleCode } from "@/i18n-locales";
 import defaultBootCatalog from "@catalogs/boot/en-US.json";
 
 // BootText stores the minimal boot-screen labels: the shared progress copy plus the boot failure copy.
 // BootText 保存最小启动屏文案：共用进度文案加上启动失败文案。
 export interface BootText extends StartupProgressLabels {
-  // Localized skill download wording is available before the main language catalog loads.
-  // 完整语言目录加载前即可使用本地化技能下载文案。
-  downloadingSkill: string;
   // Startup failure prefix.
   // 启动失败前缀。
   failedPrefix: string;
@@ -31,17 +28,60 @@ export interface BootText extends StartupProgressLabels {
 // DEFAULT_BOOT_TEXT 是英文启动目录；该赋值证明共享目录覆盖 BootText。
 const DEFAULT_BOOT_TEXT: BootText = defaultBootCatalog;
 
-// BOOT_CATALOGS bundles the small shared boot catalogs without importing the full application catalogs.
-// BOOT_CATALOGS 打包体积很小的共享启动目录，而不导入完整应用目录。
-const BOOT_CATALOGS = new Map(
-  Object.entries(import.meta.glob<Partial<BootText>>("@catalogs/boot/*.json", { eager: true, import: "default" }))
-    .map(([path, catalog]) => [/([a-z]{2}-[A-Z]{2})\.json$/u.exec(path)?.[1], catalog] as const),
+// The boot entry loads only the selected locale, with English available synchronously.
+// 启动入口只加载选中的语言，英语可同步读取。
+const bootCatalogLoaders = new Map(
+  Object.entries(import.meta.glob<Partial<BootText>>(["@catalogs/boot/*.json", "!@catalogs/boot/en-US.json"], { import: "default" }))
+    .map(([path, load]) => [/([a-z]{2}-[A-Z]{2})\.json$/u.exec(path)?.[1], load] as const),
 );
 
-// bootText returns the boot labels of one language, completing missing keys from English.
-// bootText 返回一种语言的启动文案，并用英文补全缺失的键。
-export function bootText(locale: LocaleCode): BootText {
-  return { ...DEFAULT_BOOT_TEXT, ...BOOT_CATALOGS.get(locale) };
+// Cache the localized result separately from its pending import for immediate reuse across startup components.
+// 将本地化结果和待完成导入分开缓存，便于启动组件之间立即复用。
+const bootCatalogs = new Map<LocaleCode, BootText>([[DEFAULT_LOCALE, DEFAULT_BOOT_TEXT]]);
+// Concurrent consumers share one import per locale.
+// 并发消费者为每种语言共享同一次导入。
+const pendingBootCatalogs = new Map<LocaleCode, Promise<BootText>>();
+
+/** Loads the boot labels for a locale, filling missing keys with the default catalog.
+ * 加载指定语言的启动文案，使用默认目录补全缺失键。 */
+export function loadBootText(locale: LocaleCode): Promise<BootText> {
+  // Resolved text and in-flight imports are both shared by startup surfaces.
+  // 已解析的文案与正在执行的导入都由启动界面共享。
+  const cached = bootCatalogs.get(locale);
+  if (cached) return Promise.resolve(cached);
+  const pending = pendingBootCatalogs.get(locale);
+  if (pending) return pending;
+  const load = bootCatalogLoaders.get(locale);
+  if (!load) return Promise.resolve(DEFAULT_BOOT_TEXT);
+  // The default copy remains available if an updated installation cannot read a locale asset.
+  // 更新后的安装无法读取语言资源时，仍可使用默认文案。
+  const request = load().then((catalog) => {
+    const text = { ...DEFAULT_BOOT_TEXT, ...catalog };
+    bootCatalogs.set(locale, text);
+    return text;
+  }).catch((error: unknown) => {
+    console.error(`Startup language catalog could not be loaded: ${locale}`, error);
+    return DEFAULT_BOOT_TEXT;
+  }).finally(() => pendingBootCatalogs.delete(locale));
+  pendingBootCatalogs.set(locale, request);
+  return request;
+}
+
+/** Returns the selected boot catalog once loaded, or null while its import is pending.
+ * 选定的启动目录加载后返回该目录，导入等待期间返回 null。 */
+export function useBootText(locale: LocaleCode): BootText | null {
+  // The loaded result carries its locale so a previous selection cannot overwrite a newer one.
+  // 加载结果携带语言标识，避免之前的选择覆盖新的选择。
+  const [loaded, setLoaded] = React.useState<{ locale: LocaleCode; text: BootText }>();
+  React.useEffect(() => {
+    if (bootCatalogs.has(locale)) return;
+    // An unmounted or superseded consumer no longer receives the result.
+    // 已卸载或被新选择取代的消费者不再接收结果。
+    let active = true;
+    void loadBootText(locale).then((text) => { if (active) setLoaded({ locale, text }); });
+    return () => { active = false; };
+  }, [locale]);
+  return bootCatalogs.get(locale) ?? (loaded?.locale === locale ? loaded.text : null);
 }
 
 // STARTUP_SURFACE_FADE_MS is the single duration of the startup surface hand-off fade; the stylesheet reads it
@@ -74,7 +114,7 @@ export function BootLoadingScreen(props: {
   const { leaving = false, onLeft } = props;
   // text stores localized labels for the boot screen without importing the full translation catalog.
   // text 保存启动屏本地化文案，而不导入完整翻译表。
-  const text = bootText(bootLocale(props.startup?.uiLocale ?? props.uiLocale));
+  const text = useBootText(bootLocale(props.startup?.uiLocale ?? props.uiLocale)) ?? DEFAULT_BOOT_TEXT;
 
   React.useEffect(() => {
     if (!leaving || !onLeft) {
@@ -114,7 +154,7 @@ export function BootErrorScreen(props: {
 }) {
   // text stores localized labels for the boot error.
   // text 保存启动错误的本地化文案。
-  const text = bootText(bootLocale(props.uiLocale));
+  const text = useBootText(bootLocale(props.uiLocale)) ?? DEFAULT_BOOT_TEXT;
   // desktop is the frameless desktop window that needs drawn close and reload buttons, or null.
   // desktop 是需要自绘关闭与刷新按钮的无边框桌面窗口，否则为 null。
   const desktop = props.windowBar === false ? null : framelessDesktopWindow();

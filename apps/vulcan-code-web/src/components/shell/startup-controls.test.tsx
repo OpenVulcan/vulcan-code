@@ -3,9 +3,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StartupDownloadProgress } from "./startup-download-progress";
-import { StartupOverlay } from "./startup-screen";
-import { BootErrorScreen, BootLoadingScreen, STARTUP_SURFACE_FADE_MS } from "@/app/boot-startup-screen";
-vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+import { StartupOverlay, useStartupDependencyWarning } from "./startup-screen";
+import { BootErrorScreen, BootLoadingScreen, loadBootText, STARTUP_SURFACE_FADE_MS } from "@/app/boot-startup-screen";
+import type { StartupSnapshot } from "@/types";
+import { getToasts, toast } from "@/ui-kit/primitives/toast";
+vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US" }) }));
 vi.mock("./startup-logo-mark", () => ({ StartupLogoMark: () => null }));
 describe("startup controls", () => {
   let root: Root;
@@ -21,6 +23,7 @@ describe("startup controls", () => {
     // reload records the user's recovery intent, independent of error length.
     // reload 记录用户恢复意图，与错误长度独立。
     const reload = vi.fn();
+    await loadBootText("zh-CN");
     await act(async () => root.render(<BootErrorScreen error={"SyntheticFailure".repeat(100)} uiLocale="zh-CN" onReload={reload} />));
     expect(host.querySelector('details')?.open).toBe(false);
     expect(host.querySelector('summary')?.textContent).toBe("查看详情");
@@ -92,6 +95,53 @@ describe("startup controls", () => {
       ...startup, steps: [{ ...skill, totalBytes: 100, progressPercent: 32 }],
     }} />));
     expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("32");
+  });
+  it("localizes dependency preparation and names skipped skills separately from a download", async () => {
+    // The English diagnostic stays available to support while the startup screen uses the phase.
+    // 英文诊断保留给排查，启动屏按阶段显示文案。
+    const startup = { ready: false, phase: "bootstrapping-luaskills", recentLogs: [], uiLocale: "zh-CN" };
+    const step = { id: "luaskills", label: "LuaSkills", status: "running" as const,
+      progressPhase: "loading-catalog", message: "Loading the LuaSkills skill catalog" };
+    const text = await loadBootText("zh-CN");
+    await act(async () => root.render(<BootLoadingScreen startup={{ ...startup, steps: [step] }} />));
+    expect(host.querySelector(".startup-progress-message")?.textContent).toBe(text.loadingSkillCatalog);
+    expect(host.querySelector(".startup-dependency-hint")?.textContent).toBe(text.githubMirrorHint);
+    await act(async () => root.render(<BootLoadingScreen startup={{
+      ...startup,
+      luaskillsDependencyFailures: ["vulcan-codekit"],
+      steps: [{ id: "workspace", label: "Workspace", status: "running" }],
+    }} />));
+    expect(host.querySelector(".startup-dependency-hint[role='status']")?.textContent)
+      .toBe(text.dependencyFailure.replace("{skills}", "vulcan-codekit"));
+    expect(host.querySelector(".startup-progress-title")?.textContent)
+      .toBe(text.loadingStep.replace("{step}", text.stepWorkspace));
+  });
+  // A ready handoff publishes one dismissible warning in the workbench language.
+  // 就绪交接后用工作台语言发布一条可关闭的警告。
+  it("keeps the mirror guidance available after startup without repeating it", async () => {
+    // Render the workbench warning hook against a supplied startup snapshot.
+    // 用传入的启动快照渲染工作台警告钩子。
+    function WarningFixture({ startup }: { startup: StartupSnapshot }) {
+      useStartupDependencyWarning(startup, "zh-TW");
+      return null;
+    }
+    // Simulate an incomplete startup followed by a ready engine with one unavailable skill.
+    // 模拟启动尚未完成，随后引擎就绪但有一个技能不可用。
+    const startup: StartupSnapshot = { ready: false, phase: "bootstrapping-luaskills", steps: [], recentLogs: [],
+      luaskillsDependencyFailures: ["vulcan-codekit"] };
+    const text = await loadBootText("zh-TW");
+    await act(async () => root.render(<WarningFixture startup={startup} />));
+    expect(getToasts()).toHaveLength(0);
+    await act(async () => root.render(<WarningFixture startup={{ ...startup, ready: true, phase: "ready" }} />));
+    expect(getToasts()).toEqual([expect.objectContaining({
+      tone: "warning",
+      title: text.dependencyFailure.replace("{skills}", "vulcan-codekit"),
+      description: text.githubMirrorHint,
+    })]);
+    toast.dismiss();
+    await act(async () => root.render(<WarningFixture startup={{ ...startup, ready: true, phase: "ready",
+      luaskillsDependencyFailures: ["vulcan-codekit"] }} />));
+    expect(getToasts()).toHaveLength(0);
   });
   // The surface fades out on hand-off and reports its departure only after the shared fade duration.
   // 启动层在交接时淡出，并仅在共用淡出时长结束后报告离场。

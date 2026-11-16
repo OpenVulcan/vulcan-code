@@ -15,7 +15,7 @@ import { ActivityRail, type ActivityRailEntry } from "@/components/shell/activit
 import { CommandPalette } from "@/components/shell/command-palette";
 import { useNewConversationRequests } from "@/components/composer/composer-external-commands";
 import { WorkbenchStatusBar } from "@/components/shell/workbench-status-bar";
-import { StartupOverlay } from "@/components/shell/startup-screen";
+import { StartupOverlay, useStartupDependencyWarning } from "@/components/shell/startup-screen";
 import {
   normalizedComposerSlashCommandId,
   SLASH_SKILL_PROMPT,
@@ -252,6 +252,7 @@ export function WorkbenchLayout(props: {
   // i18n provides localized shell labels and the active language.
   // i18n 提供本地化外壳标签与当前语言。
   const i18n = useI18n();
+  useStartupDependencyWarning(props.startup, i18n.locale);
   // localizedPrimaryFeatureAreas stores the translated top navigation metadata.
   // localizedPrimaryFeatureAreas 保存已翻译的顶部导航元数据。
   const localizedPrimaryFeatureAreas = React.useMemo(
