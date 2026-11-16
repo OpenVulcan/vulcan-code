@@ -14,6 +14,9 @@ pub struct VulcanToolsManager {
     /// Workspace root that relative tool paths resolve against, when the execution has one.
     /// 相对工具路径解析所依据的工作区根目录（执行存在工作区时）。
     workspace_root: Option<std::path::PathBuf>,
+    /// Policy-filtered plugin targets indexed by prompt skill and action.
+    /// 按提示词技能与动作索引、已通过策略筛选的插件目标。
+    skill_actions: std::collections::BTreeMap<(String, String), ResolvedToolDefinition>,
 }
 
 impl VulcanToolsManager {
@@ -23,6 +26,7 @@ impl VulcanToolsManager {
         Self {
             candidates: normalize_candidate_public_tool_names(candidates),
             workspace_root: None,
+            skill_actions: Default::default(),
         }
     }
 
@@ -37,6 +41,44 @@ impl VulcanToolsManager {
     /// 返回本管理器工具共享的工作区根目录（如有）。
     pub fn workspace_root(&self) -> Option<&std::path::Path> {
         self.workspace_root.as_deref()
+    }
+
+    /// Stores skill actions admitted for this turn without adding Provider tool definitions.
+    /// 存储本回合获准的技能动作，无需增加 Provider 工具定义。
+    /// Each entry pairs a canonical skill name with the original resolved tool.
+    /// 每项以规范技能名与原始已解析工具组成。
+    pub fn set_skill_actions(
+        &mut self,
+        actions: impl IntoIterator<Item = (String, ResolvedToolDefinition)>,
+    ) {
+        self.skill_actions = actions
+            .into_iter()
+            .map(|(skill, definition)| ((skill, definition.descriptor.id.clone()), definition))
+            .collect();
+    }
+
+    /// Returns the exact admitted action for a canonical skill name and tool ID.
+    /// 根据规范技能名和工具 ID 返回精确获准的动作。
+    pub fn skill_action(&self, skill: &str, action: &str) -> Option<&ResolvedToolDefinition> {
+        self.skill_actions
+            .get(&(skill.to_owned(), action.to_owned()))
+    }
+
+    /// Iterates the original definitions available through the specified skill.
+    /// 遍历指定技能可以调用的原始定义。
+    pub fn skill_actions(&self, skill: &str) -> impl Iterator<Item = &ResolvedToolDefinition> {
+        self.skill_actions
+            .iter()
+            .filter(move |((name, _), _)| name.eq_ignore_ascii_case(skill))
+            .map(|(_, definition)| definition)
+    }
+
+    /// Returns all admitted action descriptors for durable child tool admission.
+    /// 返回所有已获准的动作描述，用于固化子代理工具准入。
+    pub fn skill_action_descriptors(&self) -> impl Iterator<Item = &VulcanToolDescriptor> {
+        self.skill_actions
+            .values()
+            .map(|definition| &definition.descriptor)
     }
 
     /// Resolves the final AI-visible tool set for one execution-mode label.

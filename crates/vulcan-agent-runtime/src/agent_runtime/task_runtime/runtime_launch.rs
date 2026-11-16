@@ -7,14 +7,14 @@ use vulcan_session_core::v1::child_execution::{ChildToolOrigin, ChildToolSourceK
 /// `descriptors` 是最终准备集合；拒绝参数遵循流执行器契约。
 /// Returns public IDs mapped to immutable origins, excluding request-rejected tools.
 /// 返回公开 ID 到不可变来源的映射，排除请求拒绝的工具。
-pub(super) fn capture_child_admitted_tools(
-    descriptors: &[VulcanToolDescriptor],
+pub(super) fn capture_child_admitted_tools<'a>(
+    descriptors: impl IntoIterator<Item = &'a VulcanToolDescriptor>,
     rejection_reason: Option<&str>,
     rejection_all: bool,
     rejection_ids: &[String],
 ) -> BTreeMap<String, ChildToolOrigin> {
     descriptors
-        .iter()
+        .into_iter()
         .filter(|descriptor| {
             rejection_reason.is_none()
                 || (!rejection_all && !rejection_ids.contains(&descriptor.id))
@@ -639,7 +639,12 @@ pub(super) fn prepare_task_runtime_execution(
                 temperature: prepared.preparation.temperature,
                 request_overrides: capture_child_request_overrides(&request)?,
                 admitted_tools: capture_child_admitted_tools(
-                    &prepared.preparation.tool_descriptors,
+                    prepared.preparation.tool_descriptors.iter().chain(
+                        prepared
+                            .tool_snapshot
+                            .tools_manager
+                            .skill_action_descriptors(),
+                    ),
                     prepared
                         .preparation
                         .tool_request_rejection_reason

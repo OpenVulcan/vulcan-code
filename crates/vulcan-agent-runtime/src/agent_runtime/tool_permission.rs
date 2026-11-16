@@ -647,6 +647,9 @@ fn classify_native(tool_id: &str, args: &Value) -> Option<PermissionSubject> {
         | "read_session"
         | "send_session_message"
         | "send_notification" => PermissionSubject::Ungoverned,
+        // The bridge classifies the resolved action itself; an unresolved envelope grants no access.
+        // 桥接层按解析后的动作本身分类；未解析的封装不授予权限。
+        crate::tooling::native::PLUGIN_CALL_TOOL_ID => PermissionSubject::Opaque,
         FILE_TOOL_ID => {
             let action = args.get("action").and_then(Value::as_str);
             if action.is_some_and(|action| FILE_READ_ACTIONS.contains(&action)) {

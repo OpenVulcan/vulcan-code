@@ -20,6 +20,8 @@ Hook 字段直接引用 `vulcan-hooks` 的生产枚举，运行时枚举直接�
 - [无状态工具复用声明](plugin-tool-reuse.schema.json)；
 - [声明式设置版面](plugin-settings-layout.schema.json)，即 `kind: settings` 挂载入口文件的结构。
 
+Lua 工具可用 `prompt_skill` 指向本包 `skills/` 下的技能名。声明后，工具仍按原有插件组、会话工具策略与计划模式约束解析，模型通过 `skill` 查看允许的动作及输入 Schema，再用 `plugin_call` 调用。调用执行原始插件工具的权限检查和参数校验。当前内置 Context7 使用这条路径。
+
 这些文件描述全部字段、枚举、字段存在性、类型及版本组合，不是插件激活许可。
 跨字段数值关系、唯一身份、支持的后端、资源文件、授权、宿主预算及实时回调仍由生产 Rust 校验。
 编辑器通过 Schema 不等于插件通过包检查，也不等于真实 Lua、外部进程或网络服务已经成功运行。

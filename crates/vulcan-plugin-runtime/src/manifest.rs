@@ -1042,6 +1042,10 @@ pub struct VulcanPluginToolManifest {
     /// 工具是否允许在计划模式中执行。
     #[serde(default)]
     pub available_in_plan: bool,
+    /// Local prompt skill through which this tool is callable, when declared.
+    /// 声明此字段时，该工具通过插件内对应的提示词技能调用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_skill: Option<String>,
     /// Generic runtime dispatch declaration.
     /// 通用运行时调度声明。
     pub execution: VulcanPluginToolExecutionManifest,

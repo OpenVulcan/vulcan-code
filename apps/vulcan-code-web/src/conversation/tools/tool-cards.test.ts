@@ -5,7 +5,7 @@ import type { ToolCallEvent } from "@/service/conversation-event-display-project
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import { askAnswers, askQuestions } from "./cards/ask-card";
 import { commandOutputFromText } from "./cards/command-card";
-import { documentBody } from "./cards/document-card";
+import { DocumentCard, documentBody } from "./cards/document-card";
 import { listEntries, readLines, requestPreviewStat, statFacts } from "./cards/file-cards";
 import { toolNameParts } from "./cards/generic-card";
 import { knowledgeEdits } from "./cards/knowledge-write-card";
@@ -43,6 +43,27 @@ function toolEvent(toolName: string, input: Record<string, unknown>, host: { kin
     tool_name: toolName,
   } as unknown as ToolCallEvent;
 }
+
+describe("Context7 skill action cards", () => {
+  it.each(["running", "completed"] as const)("renders the same document card while %s", (status) => {
+    // Render the stored envelope through the same projection used during live updates.
+    // 通过实时更新使用的同一投影渲染已持久化的封装。
+    const input = { libraryId: "/owner/library", query: "How does caching work?" };
+    // Keep the provider-facing name in the original event for replay.
+    // 保留原事件中的供应商工具名用于回放。
+    const event = {
+      ...toolEvent("plugin_call", { skill: "context7:library-docs", action: "context7_query_docs", arguments: input }),
+      status,
+    };
+    // The document card consumes the original action and arguments.
+    // 文档工具卡读取原始动作和参数。
+    const call = readToolCall(event);
+    expect(resolveToolCard(call)).toEqual({ Card: DocumentCard, family: "web" });
+    expect(call.name).toBe("context7_query_docs");
+    expect(call.input).toEqual(input);
+    expect(event.tool_name).toBe("plugin_call");
+  });
+});
 
 describe("Vulcan Work tool cards", () => {
   it("routes explicit and implicit office calls to the matching family", () => {

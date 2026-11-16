@@ -7,6 +7,23 @@ import type {
  * 携带完整权威展示载荷的工具调用事件。 */
 export type ToolCallEvent = Extract<ConversationEventBody, { kind: "tool_call" }>;
 
+/** Projects the Context7 skill envelope to its original document card identity and input.
+ * 将 Context7 技能调用封装投影为原文档工具卡的身份与输入。
+ * Accepts the durable call event and returns the view used by card renderers.
+ * 接收可靠调用事件，返回供工具卡渲染器使用的视图。 */
+export function projectSkillActionForDisplay(event: ToolCallEvent): ToolCallEvent {
+  if (event.tool_name !== "plugin_call" || event.input.skill !== "context7:library-docs") return event;
+  // The exact shipped action IDs share the existing Context7 card and details.
+  // 发行包中的精确动作 ID 复用原有 Context7 工具卡和详情。
+  const action = event.input.action;
+  // An assembled object is needed to project the original tool input.
+  // 需要已组装完成的对象才能投影原工具输入。
+  const args = event.input.arguments;
+  if ((action !== "context7_resolve_library_id" && action !== "context7_query_docs")
+    || args === null || typeof args !== "object" || Array.isArray(args)) return event;
+  return { ...event, tool_name: action, input: args };
+}
+
 /** Exact safe-boundary request-configuration change rendered as one permanent UI fact.
  * 作为永久 UI 事实渲染的精确安全边界请求配置变更。 */
 export type RequestConfigChangedEvent = Extract<ConversationEventBody, { kind: "request_config_changed" }>;

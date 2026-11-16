@@ -18,7 +18,7 @@ use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::provider_tool_bridge::build_provider_tool_candidates;
-use crate::tooling::native::SUBMIT_PLAN_TOOL_ID;
+use crate::tooling::native::{PLUGIN_CALL_TOOL_ID, SUBMIT_PLAN_TOOL_ID};
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
@@ -311,17 +311,6 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
     }
     let implicit_luaskills = tool_exposure.luaskills_dispatch_tools.clone();
     let mut additional_developer_segments = Vec::new();
-    if let Some(segment) = build_skill_developer_segment(request.prompt_purpose, &prompt_skills) {
-        additional_developer_segments.push(AdditionalPromptSegment::locked(
-            "Prompt Skill Injection",
-            segment,
-            "Enabled prompt-skill instructions",
-            PromptBaselineProvenance::new(
-                PromptBaselineKind::PromptSkillInjection,
-                "enabled-prompt-skills",
-            ),
-        ));
-    }
     let enabled_prompt_skill_names = vulcan_prompt_skills::enabled_skill_names(&prompt_skills);
     // prepared_prompt_skills freezes parsed instructions for the complete execution turn.
     // prepared_prompt_skills 为完整执行回合冻结已解析技能说明。
@@ -393,7 +382,24 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
             provider_tool_candidates.len()
         ),
     );
-    let tools_manager = build_vulcan_tools_manager(
+    // Freeze the opted-in identities from the same published plugin catalog as the tool bindings.
+    // 从工具绑定使用的同一已发布插件目录冻结声明为按需的身份。
+    let plugin_skill_actions = foundation
+        .vulcan_plugin_catalog()
+        .iter()
+        .flat_map(|catalog| catalog.enabled_tools.values())
+        .filter_map(|tool| {
+            tool.manifest.prompt_skill.as_ref().map(|skill| {
+                (
+                    (tool.plugin_id.clone(), tool.id.clone()),
+                    format!("{}:{skill}", tool.plugin_id),
+                )
+            })
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    // The manager retains executable skill actions after removing their public declarations.
+    // 移除公开声明后，管理器继续持有可执行的技能动作。
+    let mut tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),
         subagents_enabled,
         foundation.question_runtime(),
@@ -497,6 +503,63 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         }
         resolved_tools.descriptors.clear();
         resolved_tools.definitions.clear();
+    }
+    // Only tools surviving the same filters as the direct route may become skill actions.
+    // 只有通过直接入口原有筛选的工具才能成为技能动作。
+    let mut skill_actions = Vec::new();
+    let skill_route_visible = ["skill", PLUGIN_CALL_TOOL_ID]
+        .into_iter()
+        .all(|id| resolved_tools.descriptors.iter().any(|tool| tool.id == id));
+    resolved_tools.definitions.retain(|definition| {
+        let origin = definition.descriptor.origin();
+        if origin.source_kind() != VulcanToolSourceKind::VulcanPlugin {
+            return true;
+        }
+        let Some(skill) = plugin_skill_actions.get(&(
+            origin.namespace().to_owned(),
+            definition.descriptor.id.clone(),
+        )) else {
+            return true;
+        };
+        if skill_route_visible
+            && prompt_skills
+                .iter()
+                .any(|entry| entry.skill.name == *skill && entry.is_enabled())
+        {
+            skill_actions.push((skill.clone(), definition.clone()));
+        }
+        false
+    });
+    resolved_tools.descriptors.retain(|tool| {
+        let origin = tool.origin();
+        origin.source_kind() != VulcanToolSourceKind::VulcanPlugin
+            || !plugin_skill_actions.contains_key(&(origin.namespace().to_owned(), tool.id.clone()))
+    });
+    if skill_actions.is_empty() {
+        remove_resolved_tool(&mut resolved_tools, PLUGIN_CALL_TOOL_ID);
+    }
+    prompt_skills.retain(|entry| {
+        !plugin_skill_actions
+            .values()
+            .any(|skill| *skill == entry.skill.name)
+            || skill_actions
+                .iter()
+                .any(|(skill, _)| *skill == entry.skill.name)
+    });
+    tools_manager.set_skill_actions(skill_actions);
+    if render_prompt_skills_instructions(&prompt_skills).is_none() {
+        remove_resolved_tool(&mut resolved_tools, "skill");
+    }
+    if let Some(segment) = build_skill_developer_segment(request.prompt_purpose, &prompt_skills) {
+        additional_developer_segments.push(AdditionalPromptSegment::locked(
+            "Prompt Skill Injection",
+            segment,
+            "Enabled prompt-skill instructions",
+            PromptBaselineProvenance::new(
+                PromptBaselineKind::PromptSkillInjection,
+                "enabled-prompt-skills",
+            ),
+        ));
     }
     append_vulcan_plugin_prompt_contributions(
         &mut additional_developer_segments,

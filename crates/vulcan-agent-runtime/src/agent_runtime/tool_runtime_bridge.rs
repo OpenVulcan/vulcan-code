@@ -6,9 +6,12 @@ use crate::agent_runtime::tool_permission::{
     PermissionTexts, ToolPermissionHost, ToolPermissionVerdict, admit_tool_call,
 };
 use crate::model::SessionId;
+use crate::tooling::native::{
+    PLUGIN_CALL_TOOL_ID, PluginCallArguments, parse_prompt_skill_detail_tool_arguments,
+};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock, RwLock};
@@ -25,7 +28,7 @@ use vulcan_session_core::v1::event::ToolPayload;
 use vulcan_session_core::v1::ids::RequestStreamId;
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanToolInvocationContext,
-    VulcanToolInvocationResult, VulcanToolsManager,
+    VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
 
 /// One exact value removed from tool results, with the text that replaces it.
@@ -55,6 +58,9 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// Stable resolved tool definitions indexed by canonical tool identifier.
     /// 以规范工具标识建立索引的稳定已解析工具定义集合。
     definitions_by_id: HashMap<String, ResolvedToolDefinition>,
+    /// Skills whose action schemas have been read in this execution.
+    /// 已在本次执行中读取动作 Schema 的技能。
+    previewed_action_skills: Arc<Mutex<HashSet<String>>>,
     /// Workbench session identifier attached to every host-managed tool invocation.
     /// 附着到每一次宿主管理工具调用上的工作台会话标识。
     session_id: SessionId,
@@ -206,6 +212,7 @@ impl VulcanManagedToolRuntimeBridge {
         Self {
             manager,
             definitions_by_id,
+            previewed_action_skills: Default::default(),
             session_id,
             sensitive_tool_output_values: None,
             execution_mode: execution_mode.into(),
@@ -437,10 +444,146 @@ impl VulcanManagedToolRuntimeBridge {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<String, String> {
+        if let Some((_, action)) = self.resolve_skill_action(request) {
+            return resolved_tool_binding_fingerprint(action);
+        }
         match self.definitions_by_id.get(&request.tool_name) {
             Some(definition) => resolved_tool_binding_fingerprint(definition),
             None => unregistered_tool_binding_fingerprint(&request.tool_name),
         }
+    }
+
+    /// Resolves a valid dispatcher envelope to its frozen tool binding.
+    /// 将有效的调度封装解析到其冻结的工具绑定。
+    /// Returns no binding for an unavailable dispatcher, malformed envelope or unlisted action.
+    /// 调度入口不可用、封装无效或动作未列出时返回空。
+    pub(crate) fn resolve_skill_action(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Option<(PluginCallArguments, &ResolvedToolDefinition)> {
+        if request.tool_name != PLUGIN_CALL_TOOL_ID
+            || request.argument_parse_error.is_some()
+            || !self
+                .definitions_by_id
+                .get(PLUGIN_CALL_TOOL_ID)
+                .is_some_and(|definition| {
+                    definition.descriptor.source == VulcanToolSourceKind::Native
+                })
+        {
+            return None;
+        }
+        // The exact pair must exist in the same policy-filtered snapshot as the Provider catalog.
+        // 精确的技能和动作组合必须存在于 Provider 目录对应的策略筛选快照中。
+        let arguments =
+            serde_json::from_value::<PluginCallArguments>(request.arguments.clone()).ok()?;
+        // The action is the original plugin definition so its permission and generation remain valid.
+        // 动作为原始插件定义，以保留其权限与代次约束。
+        let action = self
+            .manager
+            .skill_action(&arguments.skill, &arguments.action)?;
+        Some((arguments, action))
+    }
+
+    /// Invokes a previewed action through its original permission and execution pipeline.
+    /// 经动作原有的权限与执行管线调用已预览的动作。
+    /// Uses the outer call's durable identity and returns the original tool result or a dispatch error.
+    /// 使用外层调用的可靠身份，返回原始工具结果或调度错误。
+    async fn invoke_skill_action(
+        &self,
+        request: &CoreToolInvocationRequest,
+        context: VulcanToolInvocationContext,
+    ) -> Result<VulcanToolInvocationResult, String> {
+        // Resolve the pair before approval so permission handling sees the original target identity.
+        // 审批前解析技能与动作组合，使权限处理使用原始目标身份。
+        let (call, action) = self.resolve_skill_action(request).ok_or_else(|| {
+            String::from("Invalid or unavailable skill action. Read an enabled skill and use an action and argument object from its preview.")
+        })?;
+        if !self
+            .previewed_action_skills
+            .lock()
+            .map_err(|_| String::from("Skill preview state is unavailable."))?
+            .contains(&call.skill)
+        {
+            return Err(format!(
+                "Read skill `{}` with `skill` before calling this action.",
+                call.skill
+            ));
+        }
+        // Permission and Lua receive only the inner arguments associated with the exact tool.
+        // 权限与 Lua 只接收精确工具对应的内部参数。
+        let arguments = Value::Object(call.arguments);
+        // Record the same argument object in approval text as in execution.
+        // 审批文本和执行使用同一个参数对象。
+        let raw_arguments = arguments.to_string();
+        self.invoke_definition(
+            action,
+            arguments,
+            PermissionTexts {
+                raw_arguments: Some(&raw_arguments),
+                user_request: request.user_request.text(),
+            },
+            context,
+        )
+        .await
+    }
+
+    /// Appends the admitted plugin action contracts to a successful skill preview and records that read.
+    /// 将已获准的插件动作契约附加到成功的技能预览，并记录本次读取。
+    /// Takes the original request and result, returning an error if preview state cannot be recorded.
+    /// 接收原始请求与结果，无法记录预览状态时返回错误。
+    fn append_skill_action_preview(
+        &self,
+        request: &CoreToolInvocationRequest,
+        result: &mut VulcanToolInvocationResult,
+    ) -> Result<(), String> {
+        // The native skill tool validates the same argument before returning its rendered preview.
+        // 原生技能工具在返回渲染后的预览前会校验同一个参数。
+        let args = parse_prompt_skill_detail_tool_arguments(request.arguments.clone())
+            .map_err(|error| error.to_string())?;
+        // The canonical plugin skill name is compared case-insensitively by the preview tool.
+        // 预览工具对规范插件技能名进行不区分大小写的比较。
+        let skill = args.name.trim().to_ascii_lowercase();
+        // Each preview schema is read from the same resolved definition used for execution.
+        // 每个预览 Schema 均来自执行时使用的同一份已解析定义。
+        let actions = self
+            .manager
+            .skill_actions(&skill)
+            .map(|action| {
+                json!({
+                    "action": action.descriptor.id,
+                    "description": action.descriptor.description,
+                    "input_schema": action.parameters_schema
+                })
+            })
+            .collect::<Vec<_>>();
+        if actions.is_empty() {
+            return Ok(());
+        }
+        // Only a rendered skill document unlocks actions; permission denials retain their original result.
+        // 只有渲染后的技能文档才解锁动作；权限拒绝保留原结果。
+        let Value::String(preview) = &mut result.model_output else {
+            return Ok(());
+        };
+        // Preserve the skill content envelope consumed by the existing skill card.
+        // 保留既有技能工具卡读取的技能内容封装。
+        let Some(content) = preview.strip_suffix("</skill_content>") else {
+            return Ok(());
+        };
+        // The insertion offset is directly before the closing skill tag.
+        // 插入位置紧贴技能结束标签之前。
+        let content_end = content.len();
+        preview.insert_str(
+            content_end,
+            &format!(
+                "\n## Available skill actions\n\n```json\n{}\n```\n",
+                Value::Array(actions)
+            ),
+        );
+        self.previewed_action_skills
+            .lock()
+            .map_err(|_| String::from("Skill preview state is unavailable."))?
+            .insert(skill);
+        Ok(())
     }
 }
 
@@ -1322,8 +1465,14 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             return self
                 .redact_sensitive_tool_result(self.execute_tool_chain(request, context).await);
         }
-        let mut result = match self
-            .invoke_definition(
+        // Dispatch the bound action directly through the existing invocation gates.
+        // 经现有调用闸门直接调度已绑定动作。
+        let invocation = if definition.descriptor.id == PLUGIN_CALL_TOOL_ID
+            && definition.descriptor.source == VulcanToolSourceKind::Native
+        {
+            self.invoke_skill_action(request, context).await
+        } else {
+            self.invoke_definition(
                 definition,
                 request.arguments.clone(),
                 PermissionTexts {
@@ -1333,7 +1482,8 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
                 context,
             )
             .await
-        {
+        };
+        let mut result = match invocation {
             Ok(result) => result,
             Err(message) => {
                 return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
@@ -1341,6 +1491,14 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
                 ));
             }
         };
+        if definition.descriptor.id == "skill"
+            && definition.descriptor.source == VulcanToolSourceKind::Native
+            && let Err(message) = self.append_skill_action_preview(request, &mut result)
+        {
+            return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
+                request, message,
+            ));
+        }
         // Image blocks become session-owned generated files; the model receives only their locators.
         // 图片块成为会话自有的生成文件；模型只收到其定位符。
         if crate::agent_runtime::tool_result_media::has_image_blocks(&result.model_output) {

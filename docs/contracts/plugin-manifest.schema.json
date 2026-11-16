@@ -1516,6 +1516,13 @@
         "parameters_file": {
           "description": "JSON Schema file relative to the package root.\n相对于插件包根目录的 JSON Schema 文件。",
           "type": "string"
+        },
+        "prompt_skill": {
+          "description": "Local prompt skill through which this tool is callable, when declared.\n声明此字段时，该工具通过插件内对应的提示词技能调用。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

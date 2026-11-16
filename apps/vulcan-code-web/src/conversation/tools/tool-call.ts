@@ -2,7 +2,7 @@
 // ended, and what the host reported. Cards read these facts only; they never parse transport shapes themselves.
 // 将一条可靠 V1 工具调用事件读取为每张工具卡所需的事实：谁运行、输入是什么、如何结束、宿主报告了什么。
 // 卡片只读取这些事实，从不自行解析传输结构。
-import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+import { projectSkillActionForDisplay, type ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { ToolRequest } from "./tool-request";
 
 // ToolCardState is the visual lifecycle of one card; absent means nothing worth flagging.
@@ -57,7 +57,10 @@ export interface ToolCall {
 
 // readToolCall reads one event; it never throws on unexpected payloads.
 // readToolCall 读取一条事件；遇到意外载荷时不会抛出。
-export function readToolCall(event: ToolCallEvent): ToolCall {
+export function readToolCall(rawEvent: ToolCallEvent): ToolCall {
+  // Use the original action shape for routing and rendering the Context7 tool card.
+  // 使用原动作的结构来路由和渲染 Context7 工具卡。
+  const event = projectSkillActionForDisplay(rawEvent);
   const output = event.output ?? null;
   const host = objectOf(output?.host_result);
   const hostPayload = host ? objectOf(host.payload) : null;

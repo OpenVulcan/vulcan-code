@@ -1016,6 +1016,20 @@ fn load_vulcan_plugin_package(
             descriptor.diagnostics.push(error);
             return descriptor;
         }
+        if let Some(skill) = &tool.prompt_skill
+            && !descriptor
+                .skills
+                .iter()
+                .any(|entry| entry.name == format!("{}:{skill}", manifest.id))
+        {
+            descriptor.availability = VulcanPluginAvailability::Unavailable;
+            descriptor.runtime_state = VulcanPluginRuntimeState::Unavailable;
+            descriptor.diagnostics.push(format!(
+                "Tool `{}` references unknown prompt skill `{skill}`.",
+                tool.id
+            ));
+            return descriptor;
+        }
         descriptor.tools.push(VulcanPluginToolDescriptor {
             plugin_id: manifest.id.clone(),
             plugin_generation: 0,

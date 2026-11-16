@@ -87,10 +87,13 @@ impl StreamingRuntimeToolExecutor {
     ) -> Option<String> {
         let reason = self.tool_request_rejection_reason.as_ref()?;
         let should_reject = self.tool_request_rejection_all_tools
-            || self
-                .tool_request_rejection_tool_ids
-                .iter()
-                .any(|tool_id| tool_id == &request.tool_name);
+            || self.tool_request_rejection_tool_ids.iter().any(|tool_id| {
+                tool_id == &request.tool_name
+                    || self
+                        .runtime_bridge
+                        .resolve_skill_action(request)
+                        .is_some_and(|(_, action)| action.descriptor.id == *tool_id)
+            });
         should_reject.then(|| reason.clone())
     }
 }

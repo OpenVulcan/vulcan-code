@@ -9,6 +9,20 @@ import { resolveV1ToolDomainPresentation as resolveWithLocale, v1ModelResult } f
 const zh = (key: TranslationKey) => readLocaleMessage("zh-CN", key);
 const resolveV1ToolDomainPresentation = (tool: ToolCallEvent) => resolveWithLocale(tool, zh);
 
+it("keeps the same Context7 details for a stored skill action", () => {
+  // Reuse the direct action contract for the displayed library and returned documentation.
+  // 复用直接动作契约来显示库和返回的文档。
+  const input = { libraryId: "/react/react", query: "How does useEffect work?" };
+  // The same result enters both the original card and the on-demand action card.
+  // 同一结果进入原工具卡与按需动作工具卡。
+  const result = "# Effects\nUse effects to synchronize with external systems.";
+  expect(resolveV1ToolDomainPresentation(event("plugin_call", {
+    skill: "context7:library-docs",
+    action: "context7_query_docs",
+    arguments: input,
+  }, result))).toEqual(resolveV1ToolDomainPresentation(event("context7_query_docs", input, result)));
+});
+
 /** Builds the exact bridge envelope, including JSON serialized inside model_output.
  * 构建精确桥接信封，包括 model_output 内序列化的 JSON。
  * Parameters name, input, result and host select fixture facts; returns a V1 tool event.

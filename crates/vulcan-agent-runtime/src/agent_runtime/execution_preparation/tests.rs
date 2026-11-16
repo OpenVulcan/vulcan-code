@@ -1028,17 +1028,309 @@ fn test_provider_config() -> ProviderConfigurationFile {
     ProviderConfigurationFile::default()
 }
 
+/// Verifies discovery and dispatch through the real Context7 package and Provider tool projection.
+/// 通过真实 Context7 包及 Provider 工具投影验证发现与调度。
+/// The test does not grant network access; a valid action reaches the plugin runtime boundary.
+/// 测试不访问网络；有效动作到达插件运行时边界。
+#[tokio::test]
+async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
+    use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
+    use crate::agent_runtime::question_runtime::{ApprovalAnswer, ToolApprovalPrompt};
+    use crate::agent_runtime::tool_permission::ToolPermissionHost;
+    use vulcan_core::tool::VulcanToolExecutor;
+    use vulcan_core::types::ToolInvocationRequest;
+    use vulcan_session_core::v1::config::{AccessConfig, PermissionMode};
+    use vulcan_session_core::v1::document::PreparedToolReceipt;
+    use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId, TurnId};
+    use vulcan_tools_manager::VulcanToolInvocationContext;
+
+    /// Permits reads under the actual permission gate and rejects unexpected approvals.
+    /// 通过真实权限闸门允许读取，并拒绝意外审批。
+    struct ReadOnlyHost;
+
+    #[async_trait::async_trait]
+    impl ToolPermissionHost for ReadOnlyHost {
+        /// Returns read-only mode for the fixture session.
+        /// 返回夹具会话的只读模式。
+        fn access(&self, _: Uuid) -> Result<AccessConfig, String> {
+            Ok(AccessConfig {
+                permission: PermissionMode::ReadOnly,
+                unattended: None,
+            })
+        }
+
+        /// Rejects any approval request because Context7 checks should classify it as a read.
+        /// 拒绝任何审批请求，因为 Context7 检查应将其归为读取。
+        async fn request_approval(
+            &self,
+            _: Uuid,
+            _: VulcanToolInvocationContext,
+            tool: String,
+            _: serde_json::Value,
+            _: ToolApprovalPrompt,
+        ) -> Result<ApprovalAnswer, String> {
+            Err(format!("Unexpected approval for {tool}."))
+        }
+    }
+
+    // Load the shipped manifests and skill without starting any plugin side effects.
+    // 加载发行包清单与技能，无需启动插件副作用。
+    let plugin_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    // The published catalog supplies the same tool definitions and SKILL.md as production.
+    // 发布目录提供与生产相同的工具定义与 SKILL.md。
+    let catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
+        &plugin_root,
+        None,
+        &Default::default(),
+        &Default::default(),
+        1,
+    );
+    // Expected actions identify the Context7 operations whose schemas must stay off the wire.
+    // 期望动作指明 Schema 不应进入请求的 Context7 操作。
+    let actions = ["context7_resolve_library_id", "context7_query_docs"];
+    assert!(
+        actions
+            .iter()
+            .all(|action| catalog.enabled_tools.contains_key(*action)),
+        "{:?}",
+        catalog.plugins["context7"].diagnostics
+    );
+    // The named skill must be available from the plugin's published snapshot.
+    // 命名技能必须存在于插件发布快照中。
+    let skill = "context7:library-docs";
+    assert!(catalog.enabled_skills.contains_key(skill));
+    // Reuse the real request fixture and its offline model route.
+    // 复用真实请求夹具及其离线模型路由。
+    let config = test_provider_config();
+    // The same catalog is used for a regular coding request and a documentation request.
+    // 普通编码请求与文档查询请求使用同一目录。
+    let foundation = test_runtime_foundation_with_plugins(&config, Some(Arc::new(catalog)));
+    // A distinct question ensures the test covers both task types.
+    // 不同问题确保测试覆盖两类任务。
+    let mut request = test_execution_preparation_request();
+    request.prompt = String::from("Rename a local variable in the current project.");
+    // The normal request goes through production preparation independently.
+    // 普通请求独立通过生产准备流程。
+    let ordinary =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    request.prompt = String::from("Look up the current React useEffect documentation.");
+    // Plan mode exercised here was already permitted for both original Context7 tools.
+    // 此处验证计划模式，两个原 Context7 工具原本均允许在该模式中使用。
+    request.execution_mode = String::from("Plan");
+    // Model discovery comes from the normal generated skills inventory.
+    // 模型通过正常生成的技能列表发现能力。
+    let docs = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    assert!(
+        docs.preparation
+            .additional_developer_segments
+            .iter()
+            .any(|segment| segment.body.contains(skill))
+    );
+    // Each preparation is projected with the same function used by the Provider transport.
+    // 每份准备结果都使用 Provider 传输路径的同一函数进行投影。
+    let runtime = [ordinary, docs].map(|prepared| {
+        prepare_host_tool_runtime_context(
+            prepared.tool_snapshot.tools_manager,
+            &prepared.tool_snapshot.resolved_tool_definitions,
+            request.session_id,
+            &prepared.preparation.execution_mode,
+            foundation.task_runtime(),
+        )
+    });
+    for round in &runtime {
+        assert!(
+            round
+                .provider_tool_definitions
+                .iter()
+                .any(|tool| tool.name == "skill")
+        );
+        assert!(
+            round
+                .provider_tool_definitions
+                .iter()
+                .any(|tool| tool.name == "plugin_call")
+        );
+        assert!(
+            round
+                .provider_tool_definitions
+                .iter()
+                .all(|tool| !actions.contains(&tool.name.as_str()))
+        );
+    }
+    // Execute the requests a model emits using the skill description and returned operation definitions.
+    // 执行模型根据技能简介与返回动作定义发出的请求。
+    let bridge = runtime[1]
+        .runtime_bridge
+        .as_ref()
+        .clone()
+        .with_tool_permission_host(Some(Arc::new(ReadOnlyHost)));
+    // Keep the same bridge across the preview and subsequent tool calls.
+    // 预览及后续工具调用继续使用同一桥接层。
+    let bridge = &bridge;
+    // The durable request receipt is installed before dispatch as it is in the streaming path.
+    // 与流式路径一致，在调度前安装可靠请求回执。
+    let invoke = |number, name: &str, arguments| {
+        // Each invocation receives a distinct durable identity and preserves its wire tool name.
+        // 每次调用获得独立的可靠身份，并保留线协议工具名。
+        let call = ToolInvocationRequest {
+            request_stream_id: format!("context7-skill-stream-{number}"),
+            tool_call_id: format!("context7-skill-call-{number}"),
+            tool_name: name.to_owned(),
+            arguments,
+            argument_parse_error: None,
+            raw_arguments: Default::default(),
+            user_request: Default::default(),
+        };
+        bridge
+            .install_prepared_invocation_identities(
+                std::slice::from_ref(&call),
+                vec![PreparedToolReceipt {
+                    turn_id: TurnId::try_new(1).unwrap(),
+                    api_call_id: ApiCallId::try_new(number).unwrap(),
+                    tool_call_id: ToolCallId::try_new(number).unwrap(),
+                    tool_seq: Seq::try_new(number).unwrap(),
+                    request_stream_id: RequestStreamId::try_new(call.request_stream_id.clone())
+                        .unwrap(),
+                }],
+            )
+            .unwrap();
+        async move { bridge.execute_tool(&call).await.unwrap() }
+    };
+    // Use a valid object whose fields belong to the original Context7 query schema.
+    // 使用字段符合原 Context7 查询 Schema 的对象。
+    let valid = json!({"skill": skill, "action": actions[1], "arguments": {"libraryId": "/react/react", "query": "How does useEffect work?"}});
+    assert!(invoke(1, "plugin_call", valid.clone()).await.is_error);
+    // The first accepted request needs only the skill's discovered canonical name.
+    // 首次获准的请求只需要发现的规范技能名。
+    let preview = invoke(2, "skill", json!({"name": skill})).await;
+    assert!(!preview.is_error);
+    assert!(
+        actions
+            .iter()
+            .all(|action| preview.model_output.contains(action))
+    );
+    assert!(preview.model_output.contains("input_schema"));
+    // Read the schema returned to the model and select the doc query by its declared input.
+    // 读取返回给模型的 Schema，按声明输入选择文档查询动作。
+    let (_, schema_section) = preview.model_output.rsplit_once("```json\n").unwrap();
+    // Decode the exact action declarations following the skill instructions.
+    // 解码技能说明后附带的精确动作声明。
+    let declared: Vec<serde_json::Value> =
+        serde_json::from_str(schema_section.split_once("\n```").unwrap().0).unwrap();
+    // The action accepting a library ID is the query route selected by the caller.
+    // 接收库 ID 的动作为调用方选择的查询入口。
+    let discovered = declared
+        .iter()
+        .find(|entry| entry["input_schema"]["properties"]["libraryId"].is_object())
+        .unwrap();
+    // The raw Context7 IDs stay unregistered even after discovery.
+    // 读取技能后，原始 Context7 ID 依旧未注册。
+    assert!(
+        invoke(
+            3,
+            actions[1],
+            json!({"libraryId": "/react/react", "query": "useEffect"})
+        )
+        .await
+        .is_error
+    );
+    // The original action schema rejects wrong parameters before runtime lookup.
+    // 原动作 Schema 在查询运行时前拒绝错误参数。
+    let invalid = invoke(
+        4,
+        "plugin_call",
+        json!({"skill": skill, "action": actions[1], "arguments": {"query": "useEffect"}}),
+    )
+    .await;
+    assert!(invalid.is_error);
+    assert!(invalid.model_output.contains("parameters schema"));
+    // The valid call reaches the original plugin boundary and retains its Provider call identity.
+    // 有效调用到达原插件边界并保留 Provider 调用身份。
+    let result = invoke(
+        5,
+        "plugin_call",
+        json!({
+            "skill": skill, "action": discovered["action"], "arguments": valid["arguments"],
+        }),
+    )
+    .await;
+    assert!(
+        result
+            .model_output
+            .contains("Vulcan Plugin runtime is unavailable")
+    );
+    assert_eq!(result.tool_name, "plugin_call");
+    // A known action cannot be selected through a different skill or another native tool name.
+    // 已知动作无法通过其他技能或另一原生工具名调用。
+    assert!(
+        invoke(
+            6,
+            "plugin_call",
+            json!({"skill": skill, "action": "shell_command", "arguments": {}})
+        )
+        .await
+        .is_error
+    );
+    // Hiding the source tools also removes their dispatcher and discovery entry.
+    // 隐藏来源工具也会移除其调度入口与发现条目。
+    request.tool_request_hidden_tool_ids = actions.into_iter().map(String::from).collect();
+    // Reprepare from the same catalog under the scoped tool restriction.
+    // 在限定工具限制下使用同一目录重新准备。
+    let hidden =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    assert!(
+        !hidden
+            .preparation
+            .tool_descriptors
+            .iter()
+            .any(|tool| tool.id == "plugin_call")
+    );
+    assert!(
+        !hidden
+            .preparation
+            .additional_developer_segments
+            .iter()
+            .any(|segment| segment.body.contains(skill))
+    );
+}
+
 /// Builds a runtime foundation with one explicit public-AI route and in-memory model catalog.
 /// 构建带有一条显式公共 AI 路由与内存模型目录的运行时基础。
 pub(in crate::agent_runtime) fn test_runtime_foundation(
     config: &ProviderConfigurationFile,
 ) -> RuntimeFoundation {
-    let mut foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        config,
-        &AgentProfileCatalog::default(),
+    test_runtime_foundation_with_plugins(config, None)
+}
+
+/// Builds the offline model fixture with an optional published plugin catalog.
+/// 使用可选的已发布插件目录构建离线模型夹具。
+/// Returns a foundation with the supplied configuration and no plugin executor.
+/// 返回使用给定配置且无插件执行器的运行时基础。
+fn test_runtime_foundation_with_plugins(
+    config: &ProviderConfigurationFile,
+    plugins: Option<Arc<VulcanPluginCatalogSnapshot>>,
+) -> RuntimeFoundation {
+    // Build the transport snapshot with the same producer used by normal agent requests.
+    // 使用正常代理请求采用的同一生产者构建传输快照。
+    let generation = Arc::new(crate::agent_runtime::ExtensionGeneration::new(
+        1,
+        plugins,
+        configured_mcp_runtime_access(config),
         None,
-        Some(configured_mcp_runtime_access(config)),
-    );
+    ));
+    // Keep the model fixture independent of any running host or network client.
+    // 使模型夹具独立于正在运行的宿主或网络客户端。
+    let mut foundation =
+        RuntimeFoundation::build_from_extension_generation_with_runtimes_and_plugins(
+            config,
+            &AgentProfileCatalog::default(),
+            None,
+            None,
+            generation,
+            Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+            Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+            Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        );
     let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable()
         .expect("test public AI runtime should initialize");
     let connection_id = String::from("test-openrouter");

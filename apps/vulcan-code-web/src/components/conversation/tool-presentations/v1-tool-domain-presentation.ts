@@ -1,6 +1,6 @@
 import { formatMessage, type TranslationKey } from "@/i18n";
 import { knowledgeChangeLabel } from "@/lib/knowledge-status-labels";
-import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+import { projectSkillActionForDisplay, type ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { ToolJsonValue, ToolPayload } from "@/service/conversation-event-window-store";
 import { modelExtensionToolTitleKey } from "./model-extension-tool-presentation";
 import { nativeMediaInputPreview } from "./native-media-input-preview";
@@ -130,7 +130,10 @@ function fields(object: ToolPayload | null, keys: readonly string[]): ToolPayloa
  * 将实际工具契约投影为可读区域，不执行工具或解析外部资源。
  * Parameters tool and t are one authoritative V1 event and the active-locale lookup; returns summary, sections and visible diagnostics.
  * 参数 tool 与 t 是一个权威 V1 事件与当前语言查询；返回摘要、区域与可见诊断。 */
-export function resolveV1ToolDomainPresentation(tool: ToolCallEvent, t: (key: TranslationKey) => string): V1ToolDomainPresentation {
+export function resolveV1ToolDomainPresentation(event: ToolCallEvent, t: (key: TranslationKey) => string): V1ToolDomainPresentation {
+  // Render the Context7 action and its original input in the existing details.
+  // 使用既有详情呈现 Context7 动作及原工具输入。
+  const tool = projectSkillActionForDisplay(event);
   // result is decoded only from the formal model output, never by polling candidate paths.
   // result 仅从正式模型输出解码，绝不轮询候选路径。
   const result = v1ModelResult(tool.output);
