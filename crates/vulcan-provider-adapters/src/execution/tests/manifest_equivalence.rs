@@ -340,6 +340,97 @@ fn alibaba_qwen4_token_plan_projects_schema_with_thinking_disabled() {
     }
 }
 
+/// Verifies the formal Qwen4 limits, thinking controls, and wire identity on Token Plan.
+/// 验证 Token Plan 正式版 Qwen4 的上限、思考控制和请求模型标识。
+///
+/// Takes no parameters and returns no value. Checks the compiled catalog and actual encoders.
+/// 无参数或返回值，检查已编译目录与实际编码器。
+#[test]
+fn alibaba_qwen4_max_formal_token_plan_resolves_and_encodes_official_efforts() {
+    // Load the bundled catalog used by the connection and the client used to encode requests.
+    // 加载连接使用的随包目录和用于编码请求的客户端。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    let manifest = manifests
+        .get("alibaba")
+        .expect("Alibaba manifest must exist");
+    let client = projection_test_client();
+    // The stable model ID must reach the wire independently of Preview.
+    // 正式版模型 ID 独立于预览版传入请求。
+    let mut request = minimal_request();
+    request.model_id = String::from("qwen4-max");
+
+    for entry_id in [
+        "token-plan-personal-cn",
+        "token-plan-personal-global",
+        "token-plan-team-cn",
+        "token-plan-team-global",
+    ] {
+        // Check the exact model is offered by each Token Plan connection.
+        // 检查每个 Token Plan 入口是否提供精确的正式版模型 ID。
+        let declared_model = manifest.catalog_models[entry_id]
+            .iter()
+            .find(|model| model.model_id == request.model_id)
+            .expect("the formal Qwen4 Token Plan entitlement may have changed upstream");
+        for (protocol, effort_path) in [
+            (OPENAI_CHAT_PROFILE_ID, "/reasoning_effort"),
+            (OPENAI_RESPONSES_PROFILE_ID, "/reasoning/effort"),
+            (ANTHROPIC_MESSAGES_PROFILE_ID, "/output_config/effort"),
+        ] {
+            // Resolve the capabilities for the exact entry and selected protocol.
+            // 按精确入口和所选协议解析能力。
+            let mut model = crate::ConnectionModel {
+                id: declared_model.model_id.clone(),
+                display_name: declared_model.display_name.clone(),
+                capabilities: Default::default(),
+                capability_evidence: Default::default(),
+                protocol_variants: Default::default(),
+                resolved_protocol_binding: None,
+            };
+            assert!(crate::discovery::apply_manifest_model_rule(
+                manifest, entry_id, None, protocol, &mut model,
+            ));
+            assert_eq!(model.capabilities.context_limit, Some(1_000_000));
+            assert_eq!(model.capabilities.output_limit, Some(262_144));
+            assert_eq!(
+                model.capabilities.reasoning_efforts,
+                [
+                    ReasoningEffort::None,
+                    ReasoningEffort::Low,
+                    ReasoningEffort::High,
+                    ReasoningEffort::XHigh
+                ],
+            );
+
+            // Confirm each canonical effort reaches the selected protocol field.
+            // 检查各标准思考档位是否写入所选协议的对应字段。
+            let route = bundled_manifest_route("alibaba", entry_id, protocol);
+            for (effort, wire_effort) in [
+                (ReasoningEffort::Low, "low"),
+                (ReasoningEffort::High, "high"),
+                (ReasoningEffort::XHigh, "xhigh"),
+            ] {
+                request.reasoning_effort = Some(effort);
+                let encoded = client.encode_request(&route, &request).unwrap();
+                assert_eq!(encoded.body["model"], "qwen4-max");
+                assert_eq!(
+                    encoded
+                        .body
+                        .pointer(effort_path)
+                        .and_then(serde_json::Value::as_str),
+                    Some(wire_effort)
+                );
+            }
+
+            // The existing route profile uses each protocol's explicit switch to disable thinking.
+            // 检查现有路由是否为各协议显式关闭思考。
+            request.reasoning_effort = Some(ReasoningEffort::None);
+            client
+                .encode_required_disabled_reasoning_request(&route, &request, false)
+                .expect("the formal model must preserve the explicit thinking-off switch");
+        }
+    }
+}
+
 /// Verifies the Model Studio inventory, snapshot default, and Qwen3.8 request projection.
 /// 验证 Model Studio 目录、快照默认状态以及 Qwen3.8 请求投影。
 ///

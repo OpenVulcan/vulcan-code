@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.core-models.v1",
-  "revision": 5,
-  "published_at": "2026-11-11T07:03:23Z",
+  "revision": 6,
+  "published_at": "2026-11-16T10:41:05Z",
   "models": [
     {
       "model_id": "beam-free",
@@ -2607,6 +2607,23 @@
       "provenance_ref": "builtin:core.seed.2026-11-08"
     },
     {
+      "model_id": "qwen4-max",
+      "display_name": "Qwen4 Max",
+      "vendor": "alibaba",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image", "video"],
+        "output_resources": [],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["none", "low", "high", "xhigh"],
+        "context_limit": 1000000,
+        "output_limit": 262144
+      },
+      "verification": "verified",
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen4-max"
+    },
+    {
       "model_id": "qwen4-max-preview",
       "display_name": "Qwen4.0 Max Preview",
       "vendor": "alibaba",
@@ -2911,6 +2928,10 @@
       {
         "url": "https://help.aliyun.com/zh/model-studio/text-generation-model",
         "note": "Qwen4 Max Preview supports text, image, and video input with a 1M-token context and a combined reasoning and answer output limit of 393,216 tokens."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/qwen4-max",
+        "note": "The formal Qwen4 Max has a 1M-token context, a combined thinking and answer limit of 262,144 tokens, and a non-thinking output limit of 131,072. Its canonical efforts are low, high, and xhigh, with high as the provider default."
       },
       {
         "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-2-4t-a95b",

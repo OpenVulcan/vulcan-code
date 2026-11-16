@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 34,
-  "published_at": "2026-11-14T08:55:47Z",
+  "revision": 35,
+  "published_at": "2026-11-16T10:41:05Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -67,6 +67,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max", "display_name": "Qwen4 Max" },
           { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.8-flash", "display_name": "Qwen3.8 Flash" },
@@ -182,6 +183,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max", "display_name": "Qwen4 Max" },
           { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.8-flash", "display_name": "Qwen3.8 Flash" },
@@ -297,6 +299,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max", "display_name": "Qwen4 Max" },
           { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
@@ -404,6 +407,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max", "display_name": "Qwen4 Max" },
           { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
@@ -1196,6 +1200,37 @@
           "evidence_revision": "model-core.alibaba.responses-harness.2026-07-30"
         }
       }
+    },
+    {
+      "rule_id": "alibaba-qwen4-max",
+      "scope": {
+        "service_entry_ids": [
+          "token-plan-personal-cn",
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "qwen4-max"
+      },
+      "core_model_ref": "qwen4-max",
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1",
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "structured_output": "json_schema"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "input_resources": ["image"],
+          "evidence_revision": "alibaba.token-plan.qwen4-max.2026-11-16"
+        }
+      },
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen4-max"
     },
     {
       "rule_id": "alibaba-qwen4-max-preview",
@@ -12648,6 +12683,10 @@
       {
         "url": "https://help.aliyun.com/zh/model-studio/deep-thinking",
         "note": "Beijing pay-as-you-go model discovery and inference confirmed the six non-realtime Qwen3.8 models on 2026-11-11. Max, Max 0902 and Flash enforced strict Schema on all three protocols. The 2.4T and 27B models returned JSON without reliably enforcing the supplied Schema, and 2.4T rejected disabled thinking. Singapore membership follows the official regional model documentation."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/qwen4-max",
+        "note": "The formal Qwen4 Max supports Chat Completions, Responses, and Messages. The official Personal and Team Token Plan inventories list qwen4-max beside Preview. The Responses API takes image input; its video input is limited to the explicitly documented Omni route."
       },
       {
         "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",

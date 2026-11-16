@@ -3131,6 +3131,28 @@
       ]
     },
     {
+      "key": "qwen4-max",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 262144,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
       "key": "qwen4-max-preview",
       "aliases": [
         "qwen4.0-max-preview"
