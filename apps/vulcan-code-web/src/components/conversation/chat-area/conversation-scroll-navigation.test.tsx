@@ -79,6 +79,66 @@ it("keeps the held track position as turns resize and reaches the new bottom", a
   }
 });
 
+// Verify upward wheel intent releases tail ownership before the native scroll event lands, so
+// queued geometry corrections cannot pull the reader back to the bottom.
+// 验证向上滚轮意图先于原生滚动事件释放尾部所有权，使排队几何校正无法把阅读者拉回底部。
+it("releases the tail on upward wheel intent before the scroll event lands", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // height models transcript growth while the reader's scroll event is still queued.
+  // height 模拟阅读者滚动事件仍在排队时的转录增长。
+  let height = 6_000;
+  const onFollowTailChange = vi.fn();
+  function Harness() {
+    // Share the scrollport between native listeners and the scroll owner.
+    // 让原生监听器与滚动所有者共用视口。
+    const scrollRef = React.useRef<HTMLDivElement>(null);
+    const controller = useConversationScrollController({
+      active: true, surfaceId: "wheel", scrollRef, onFollowTailChange,
+    });
+    return <div data-conversation-surface-id="wheel" onScroll={controller.handleScroll} ref={(element) => {
+      scrollRef.current = element;
+      if (element) Object.defineProperties(element, {
+        scrollHeight: { configurable: true, get: () => height },
+        clientHeight: { configurable: true, value: 500 },
+      });
+    }}>
+      <div className="vk-transcript-inner"><div className="vk-timeline">Latest reply</div></div>
+    </div>;
+  }
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  document.body.append(host);
+  try {
+    await React.act(async () => root.render(<Harness />));
+    const scrollport = host.querySelector<HTMLElement>("[data-conversation-surface-id]")!;
+    expect(scrollport.scrollTop).toBe(5_500);
+    // The wheel event alone must release ownership before any native scroll event is dispatched.
+    // 滚轮事件本身必须在任何原生滚动事件派发前释放所有权。
+    await React.act(async () => {
+      scrollport.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true }));
+    });
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
+    // Growth while the scroll event is still queued must not pull the viewport back to the tail.
+    // 滚动事件仍在排队期间的增长不得把视口拉回尾部。
+    await React.act(async () => {
+      scrollport.scrollTop = 5_200;
+      scrollport.dispatchEvent(new Event("scroll"));
+    });
+    height = 8_000;
+    await React.act(async () => {
+      scrollport.dispatchEvent(new CustomEvent<ConversationTurnWindowLayoutDetail>(
+        CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, { detail: { anchor: null } },
+      ));
+    });
+    expect(scrollport.scrollTop).toBe(5_200);
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
+  } finally {
+    await React.act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
 // Verify navigation to the latest content on reused scrollports and after a loading gap.
 // 验证复用滚动视口和经过加载间隙时，切换会话都会定位到最新内容。
 it.each([false, true])("starts each incoming session at the tail (loading gap: %s)", async (loadingGap) => {

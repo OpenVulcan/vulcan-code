@@ -686,6 +686,19 @@ export function useConversationScrollController(
         followTail: false,
       }));
     };
+    // Upward wheel intent releases tail ownership before the browser moves the viewport, so a
+    // queued mutation or resize correction cannot swallow the pending native scroll event.
+    // 向上滚轮意图在浏览器移动视口前释放尾部所有权，避免排队的修改或尺寸校正在原生滚动事件前吞掉位移。
+    const handleWheel = (event: WheelEvent): void => {
+      if (element.dataset.conversationSurfaceId !== surfaceId) return;
+      if (event.deltaY >= 0 || !followTailRef.current) return;
+      userRevisionRef.current += 1;
+      layoutTransactionRef.current = null;
+      pendingTurnRevealRef.current = null;
+      foldLimitRef.current = null;
+      cancelPendingFrame();
+      publishFollowTail(false);
+    };
     // Pointer movement takes ownership from reading restores until release.
     // 指针移动接管阅读位置恢复，直至松手。
     const handleScrollbarPosition = (event: Event): void => {
@@ -711,10 +724,12 @@ export function useConversationScrollController(
     };
     element.addEventListener(CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, handleWindowLayout);
     element.addEventListener(CONVERSATION_SCROLLBAR_POSITION_EVENT, handleScrollbarPosition);
+    element.addEventListener("wheel", handleWheel, { passive: true });
     return () => {
       scrollbarProgressRef.current = null;
       element.removeEventListener(CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, handleWindowLayout);
       element.removeEventListener(CONVERSATION_SCROLLBAR_POSITION_EVENT, handleScrollbarPosition);
+      element.removeEventListener("wheel", handleWheel);
     };
   }, [options.active, options.scrollRef, options.surfaceId, applyScrollbarPosition, cancelPendingFrame,
     publishFollowTail, reconcileTailReserve, syncTail, writeScrollTop]);
