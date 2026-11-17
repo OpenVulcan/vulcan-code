@@ -223,7 +223,6 @@ fn session_collaboration_continuation_dispatches_and_settles_preparation_failure
 /// A late result reaches real preparation without a new business turn; unavailable Provider failure settles it.
 /// 迟到结果进入真实准备且不新建业务回合；供应商不可用失败会结算该回合。
 async fn collaboration_continuation_dispatch_scenario() {
-    use crate::session_runtime_registry_v1::SuccessfulTurnSettlement;
     use vulcan_agent_runtime::workbench_prompt_turn::{
         SharedPromptTurnRuntimeBeginInput, begin_shared_prompt_turn_with_runtime_state,
     };
@@ -232,18 +231,6 @@ async fn collaboration_continuation_dispatch_scenario() {
     let delivery = finish_steered_target(&invocation, &target, context).await;
     close_requester_api(&invocation);
     finish_business_response(&invocation.source_handle);
-    reconcile_task_results_for_session(&invocation.state, target.session_id())
-        .await
-        .unwrap();
-    assert!(matches!(
-        invocation
-            .source_handle
-            .complete_successful_turn(10)
-            .await
-            .unwrap()
-            .value,
-        SuccessfulTurnSettlement::Collaboration
-    ));
     let before_inputs = invocation
         .source_handle
         .read(|document| {
@@ -331,16 +318,18 @@ async fn collaboration_continuation_dispatch_scenario() {
             .task_projects
             .push(project);
     }
-    let started = crate::webui_turn_chaining::start_exact_v1_collaboration_continuation(
-        &crate::ServiceEventEmitter::new(vec![]),
-        &invocation.state,
-        &invocation.controller_runtime,
-        &runtime,
-        invocation.source_session_id,
-    )
-    .await
-    .unwrap();
-    assert!(started);
+    // Live delivery must schedule the idle requester through the real dispatch path.
+    // 实时投递必须通过真实派发路径调度空闲请求方。
+    assert_eq!(
+        reconcile_live_task_results_for_session(
+            &crate::ServiceEventEmitter::new(vec![]),
+            &invocation.state,
+            target.session_id(),
+        )
+        .await
+        .unwrap(),
+        1,
+    );
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
             if invocation

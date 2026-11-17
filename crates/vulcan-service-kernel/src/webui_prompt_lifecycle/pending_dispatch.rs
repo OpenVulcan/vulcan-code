@@ -102,7 +102,9 @@ pub(crate) async fn insert_pending_prompt_for_session(
         }
     }
     let attachment_workspace_path = pending_prompt_attachment_workspace_path(&state, session_id)?;
-    handle
+    // Automatic queue dispatch can accept this action before the shortcut RPC arrives.
+    // 快捷键请求抵达前，队列自动派发可能已接纳同一动作。
+    let promotion = handle
         .promote_queued_input_to_pending_turn(identity, current_v1_goal_unix_millis()?)
         .map_err(|error| match error {
             crate::session_runtime_registry_v1::SessionRuntimeError::Domain(ref cause)
@@ -119,9 +121,22 @@ pub(crate) async fn insert_pending_prompt_for_session(
                 format!("Failed to insert the V1 pending message into the current turn: {error}")
             }
         })?;
-    // Wake waiters only after Core accepts the input; rejection must leave runtime work untouched.
-    // Core 接受输入后才唤醒等待者；拒绝准入不能改变运行时工作。
-    {
+    // Once the input is in the transcript, a retry must not interrupt the new request processing it.
+    // 输入已进入会话记录后，重试不能打断正在处理它的新请求。
+    let awaits_insertion = handle
+        .read(|document| {
+            document
+                .metadata
+                .input_state
+                .pending_in_turn_inputs
+                .iter()
+                .any(|pending| {
+                    pending.input_id == promotion.value.identity.input_id
+                        && pending.client_action_id == promotion.value.identity.client_action_id
+                })
+        })
+        .map_err(|error| format!("Failed to read the accepted V1 insertion: {error}"))?;
+    if awaits_insertion {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -130,15 +145,15 @@ pub(crate) async fn insert_pending_prompt_for_session(
             session_id,
             "user_interrupt_prompt",
         )?;
+        drop(guard);
+        // An unstreamed explicit insertion releases a foreground command so the model can answer.
+        // 尚未入流的显式插队会释放前台命令，使模型能够回复。
+        vulcan_host_tools::shell_job::ShellJobRuntime::global().notify_interjection(
+            &vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
+                &session_id.to_string(),
+            ),
+        );
     }
-    // An interjected message moves a running foreground command to the background so the model can answer;
-    // queueing a message, without inserting it, leaves the command in the foreground.
-    // 插队的消息会把运行中的前台命令转到后台，让模型能够回复；仅排队而不插入的消息不影响前台命令。
-    vulcan_host_tools::shell_job::ShellJobRuntime::global().notify_interjection(
-        &vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
-            &session_id.to_string(),
-        ),
-    );
     // The V1 promotion is already durable; later panel failures cannot retain its queue lease.
     // V1 提升已可靠提交；后续面板故障不能保留该队列租约。
     reconcile_pending_prompt_attachment_leases(
@@ -161,6 +176,13 @@ pub(crate) async fn insert_pending_prompt_for_session(
         &catalog,
     )?;
     emit_pending_prompts_changed_delta(&app, &state, session_id)?;
+    // A parent may already be between requests with only its children running.
+    // 父会话可能已处于两次请求之间，只剩子代理在运行。
+    if let Err(error) =
+        crate::webui_turn_chaining::schedule_waiting_business_continuation(&app, &state, session_id)
+    {
+        tracing::warn!(%session_id, %error, "Accepted insertion remains pending");
+    }
     Ok(true)
 }
 

@@ -222,7 +222,7 @@ async fn wake_session_task(
             CollaborationTaskMessageEffectKind::Failed { .. }
         ) {
             if let Err(error) =
-                reconcile_task_results_for_session(&invocation.state, target_id).await
+                reconcile_live_task_results_for_session(app, &invocation.state, target_id).await
             {
                 tracing::warn!(%target_id, %error, "Task application failure return remains pending");
             }
@@ -259,7 +259,7 @@ async fn wake_session_task(
             // Kernel-owned preparation failure may already have closed the turn even when our cleanup did not.
             // 内核持有的准备失败可能已闭合回合，即使本次清理没有再次修改。
             if let Err(delivery_error) =
-                reconcile_task_results_for_session(&invocation.state, target_id).await
+                reconcile_live_task_results_for_session(app, &invocation.state, target_id).await
             {
                 tracing::warn!(%target_id, %delivery_error, "Preparation failure result return remains pending");
             }

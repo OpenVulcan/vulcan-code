@@ -115,6 +115,30 @@ pub(crate) async fn reconcile_task_results_for_session(
     state: &SharedServiceBridgeState,
     session_id: Uuid,
 ) -> Result<usize, String> {
+    reconcile_task_results(state, session_id, None).await
+}
+
+/// Delivers results from live execution and schedules their original recipients after publication.
+/// 从实时执行投递结果，并在发布后调度原接收方。
+/// Returns the delivery count; a wakeup cannot undo an already committed receipt.
+/// 返回投递数量；唤醒不会撤销已提交的回执。
+pub(crate) async fn reconcile_live_task_results_for_session(
+    app: &crate::ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: Uuid,
+) -> Result<usize, String> {
+    reconcile_task_results(state, session_id, Some(app)).await
+}
+
+/// Reconciles exact outcomes and optionally publishes live receiver wakeups.
+/// 对账精确结果，并按需为实时接收方发布唤醒。
+/// `app` is provided by live paths that own dispatch. Recovery and request preparation only reconcile receipts.
+/// `app` 来自拥有分发的实时路径；恢复和请求准备只对账回执。
+async fn reconcile_task_results(
+    state: &SharedServiceBridgeState,
+    session_id: Uuid,
+    app: Option<&crate::ServiceEventEmitter>,
+) -> Result<usize, String> {
     let (runtime, registry) = {
         let guard = state.lock().map_err(|error| error.to_string())?;
         (
@@ -198,7 +222,19 @@ pub(crate) async fn reconcile_task_results_for_session(
     for result in pending {
         let delivery_id = result.effect.delivery_id.clone();
         match deliver_task_result(&invocation, &executor, result).await {
-            Ok(()) => delivered += 1,
+            Ok(requester_id) => {
+                delivered += 1;
+                if let Some(app) = app
+                    && let Err(error) =
+                        crate::webui_turn_chaining::schedule_waiting_business_continuation(
+                            app,
+                            state,
+                            requester_id,
+                        )
+                {
+                    tracing::warn!(%requester_id, %error, "Accepted task result remains pending");
+                }
+            }
             Err(error) => {
                 failed += 1;
                 tracing::warn!(session_id = %session_id, delivery_id = delivery_id.as_str(), %error, "Task result delivery remains pending");
@@ -289,10 +325,13 @@ async fn deliver_task_result(
     invocation: &ValidatedInvocation,
     executor: &Arc<SessionHandle>,
     result: CollaborationTaskResult,
-) -> Result<(), String> {
+) -> Result<Uuid, String> {
     let requester =
         participants::load_participant_handle(invocation, &result.acceptance.message.source)
             .await?;
+    // This exact receiver is returned only after acceptance and acknowledgement are durable.
+    // 只有接纳及确认已落盘后才返回此精确接收方。
+    let requester_id = requester.session_id();
     let requester_for_write = Arc::clone(&requester);
     let executor_for_write = Arc::clone(executor);
     lifecycle_write::with_canonical_handles(
@@ -433,5 +472,6 @@ async fn deliver_task_result(
             Ok(())
         },
     )
-    .await
+    .await?;
+    Ok(requester_id)
 }

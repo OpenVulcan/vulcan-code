@@ -1595,7 +1595,8 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
     // Delivery runs after releasing terminal ownership and keeps failed receipts available for retry.
     // 投递在释放终态归属后执行，失败回执仍可重试。
     if let Err(delivery_error) =
-        crate::agent_collaboration::reconcile_task_results_for_session(state, session_id).await
+        crate::agent_collaboration::reconcile_live_task_results_for_session(app, state, session_id)
+            .await
     {
         tracing::warn!(session_id = %session_id, %delivery_error, "Preparation failure task result return remains pending");
     }

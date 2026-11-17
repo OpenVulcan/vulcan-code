@@ -2,9 +2,13 @@
 //! WebUI 父级回合到达空闲点后的链式回合分发逻辑。
 
 use vulcan_service_api::ServiceEventEmitter;
+use vulcan_session_core::v1::QueuedInputIdentity;
+use vulcan_session_core::v1::collaboration::CollaborationRunControl;
 use vulcan_session_core::v1::document::{
-    ApiGroupCompletionReceipt, SubagentReturnReceipt, TurnCompletionTransition, TurnSuccessor,
+    ApiGroupCompletionReceipt, SessionDocument, SubagentReturnReceipt, TurnCompletionTransition,
+    TurnOrigin, TurnSuccessor,
 };
+use vulcan_session_core::v1::event::{ApiCallStatus, ApiPurposeKind, EventBody, UserInputSource};
 use vulcan_workbench_model::{PendingSessionPromptEntry, PendingSessionPromptSource, SessionId};
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 use vulcan_workspace_store::workspace_store::{
@@ -19,7 +23,10 @@ use super::session_goal_lifecycle::{
     conversation_attachments_from_resource_ids, session_goal_dispatch_authority_from_v1_handle,
     session_goal_summary_from_v1_handle, session_v1_handle_from_state,
 };
-use super::session_runtime_registry_v1::SessionMutationReceipt;
+use super::session_runtime_registry_v1::{
+    SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
+    SessionMutationReceipt,
+};
 use super::webui_prompt_lifecycle::{
     SessionQueuedDispatchAuthority, maybe_prepare_webui_goal_continuation,
     maybe_prepare_webui_pending_in_turn_continuation, maybe_prepare_webui_queued_successor,
@@ -32,6 +39,7 @@ use super::{
     current_unix_millis_text, current_unix_millis_value, webui_session_has_active_run,
     webui_session_kernel_has_active_turn, webui_trace, webui_trace_if_slow,
 };
+use std::sync::Arc;
 
 /// Starts one same-turn continuation selected from durable collaboration state after terminal admission opens.
 /// 终态准入开放后，从可靠协作状态选定并启动一次同回合续跑。
@@ -67,6 +75,255 @@ pub(crate) async fn start_exact_v1_collaboration_continuation(
         authority,
     )
     .await
+}
+
+/// Schedules the original business turn after a user message or a live result is accepted.
+/// 用户消息或实时结果接纳后，调度原业务回合。
+/// `app` publishes the new execution and `session_id` is the exact recipient. Work remains durable if busy.
+/// `app` 发布新执行，`session_id` 为精确接收方。占用时工作仍可靠保留。
+pub(crate) fn schedule_waiting_business_continuation(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // Count the wakeup from acceptance through admission so collaboration waits keep the recipient live.
+    // 从接纳到准入持续登记唤醒，使协作等待保持对接收方的观察。
+    let owner =
+        crate::agent_collaboration::dispatch_owner::DispatchOwner::acquire(state, session_id)?;
+    let app = app.clone();
+    let state = state.clone();
+    crate::spawn_service_task(async move {
+        let _owner = owner;
+        if let Err(error) = start_waiting_business_continuation(&app, &state, session_id).await {
+            tracing::warn!(%session_id, %error, "Accepted input or task result remains pending");
+        }
+    });
+    Ok(())
+}
+
+/// Returns whether the recipient began a same-turn continuation without displacing an active request.
+/// 返回接收方是否开始同回合续跑，同时避免替换活动请求。
+/// The service owner handles concurrent wakeups and the V1 ledger selects the actual pending work.
+/// 服务所有者处理并发唤醒，V1 账本选择实际待处理工作。
+pub(crate) async fn start_waiting_business_continuation(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    // The current process must own both dispatch runtimes and have released this session's physical execution.
+    // 当前进程必须拥有两个分发运行时，且已释放本会话的物理执行。
+    let (controller, agent) = {
+        let guard = state.lock().map_err(|error| error.to_string())?;
+        if guard.active_stream_tasks.contains_key(&session_id)
+            || webui_session_has_active_run(&guard, session_id)
+            || guard.workspace_snapshot.as_ref().is_some_and(|snapshot| {
+                crate::runtime_workspace_helpers::session_has_pending_plan_artifact(
+                    snapshot, session_id,
+                )
+            })
+        {
+            return Ok(false);
+        }
+        let Some(runtimes) = guard
+            .controller_runtime
+            .clone()
+            .zip(guard.agent_runtime.clone())
+        else {
+            return Ok(false);
+        };
+        runtimes
+    };
+    // Protect queue publication from a concurrent submission's attachment and acknowledgement handoff.
+    // 保护队列发布，避免与并发提交的附件和确认交接冲突。
+    let Some(admission) =
+        crate::project_conversation_services::try_begin_pending_prompt_dispatch_exclusion(
+            state, session_id,
+        )?
+    else {
+        return Ok(false);
+    };
+    // Read and promote through the canonical owner while the service reservation is held.
+    // 持有服务预留期间，通过规范所有者读取并提升输入。
+    let handle = session_v1_handle_from_state(state, session_id).await?;
+    let receipt = publish_waiting_user_inputs(
+        Arc::clone(&handle),
+        crate::session_goal_lifecycle::current_v1_goal_unix_millis()?,
+    )
+    .await?;
+    if let Some(receipt) = receipt {
+        if let Err(error) =
+            crate::pending_prompt_services::pending_prompt_attachment_workspace_path(
+                state, session_id,
+            )
+            .and_then(|workspace_path| {
+                crate::pending_prompt_services::reconcile_pending_prompt_attachment_leases(
+                    &handle,
+                    session_id,
+                    &workspace_path,
+                )
+            })
+        {
+            tracing::warn!(%session_id, %error, "Dispatched queue attachment release remains pending");
+        }
+        // An unavailable projection must not strand canonical inputs that are ready to dispatch.
+        // 投影不可用时，也不能搁置已可派发的规范输入。
+        if let Err(error) =
+            refresh_v1_pending_prompt_panel(app, state, &controller, session_id).await
+        {
+            tracing::warn!(%session_id, %error, "Pending prompt panel refresh failed");
+        }
+        // Request preparation takes its own exclusion and revalidates the exact receipt.
+        // 请求准备取得自身排他预留，并重新校验精确回执。
+        drop(admission);
+        return start_exact_v1_pending_in_turn(
+            app,
+            state,
+            &controller,
+            &agent,
+            session_id,
+            receipt,
+        )
+        .await;
+    }
+    drop(admission);
+    start_exact_v1_collaboration_continuation(app, state, &controller, &agent, session_id).await
+}
+
+/// Publishes inserted inputs or one eligible queue head under `handle` at `now_ms`.
+/// 在 `handle` 中以 `now_ms` 发布插队输入或一条符合条件的队首消息。
+/// A second wakeup reads the same durable events until a business API takes ownership.
+/// 第二次唤醒读取相同的可靠事件，直到业务 API 接管。
+pub(crate) async fn publish_waiting_user_inputs(
+    handle: Arc<SessionHandle>,
+    now_ms: i64,
+) -> Result<Option<ApiGroupCompletionReceipt>, String> {
+    let receipt = handle
+        .mutate_durable_if_changed_async(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::InputAccepted,
+            move |document| {
+                let Some(mut receipt) = waiting_insertion_boundary(document) else {
+                    return Ok(SessionMutationChange::Unchanged(None));
+                };
+                // Preserve the original input ids and ordered attachments through the existing transition.
+                // 经既有转换保留原始输入标识与有序附件。
+                let has_insertions = !document
+                    .metadata
+                    .input_state
+                    .pending_in_turn_inputs
+                    .is_empty();
+                // Reuse the previous selection on a second wakeup. Ordinary inputs are consumed one at a time.
+                // 重复唤醒复用先前的选择；普通排队每次只消费一条。
+                let queue_head = if has_insertions || !receipt.promoted_input_seqs.is_empty() {
+                    None
+                } else {
+                    waiting_queue_head(document, &receipt)
+                };
+                let changed = has_insertions || queue_head.is_some();
+                if changed {
+                    receipt
+                        .promoted_input_seqs
+                        .extend(document.apply_atomic_transition(|document| {
+                            if let Some(identity) = queue_head {
+                                document.promote_queued_input_to_pending_turn(identity, now_ms)?;
+                            }
+                            document.promote_pending_in_turn_inputs_after_api(now_ms)
+                        })?);
+                }
+                let receipt = (!receipt.promoted_input_seqs.is_empty()).then_some(receipt);
+                Ok(if changed {
+                    SessionMutationChange::Changed(receipt)
+                } else {
+                    SessionMutationChange::Unchanged(receipt)
+                })
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(receipt.value)
+}
+
+/// Returns the first ordinary queue entry when only a child obligation keeps the business open.
+/// 业务仅因子任务义务保持开放时，返回普通队列的第一条输入。
+/// `receipt` identifies the successful API whose tool-free completion authorizes FIFO admission.
+/// `receipt` 标识成功 API；该 API 无工具调用的终态授权按队列接纳。
+fn waiting_queue_head(
+    document: &SessionDocument,
+    receipt: &ApiGroupCompletionReceipt,
+) -> Option<QueuedInputIdentity> {
+    // Read only the winning entry and its API group. A tool-loop boundary cannot consume ordinary input.
+    // 只读取选中的队首及所属 API 组；工具循环边界不能消费普通输入。
+    let first = document.metadata.input_state.queued_inputs.first()?;
+    if document.completion_obligations(receipt.turn_id).open_child_task_ids.is_empty()
+        || document.events().iter().rev()
+            .skip_while(|event| event.seq >= receipt.stats_seq)
+            .take_while(|event| !matches!(&event.event, EventBody::ApiStarted(api) if api.api_call_id == receipt.api_call_id))
+            .any(|event| matches!(&event.event, EventBody::ToolCall(tool) if tool.api_call_id == receipt.api_call_id))
+    {
+        return None;
+    }
+    Some(QueuedInputIdentity {
+        input_id: first.input_id,
+        client_action_id: first.client_action_id.clone(),
+    })
+}
+
+/// Reads the last successful business API and any unsent insertions in its still-open turn.
+/// 读取仍开放回合的最后一次成功业务 API 及尚未发送的插队输入。
+/// Returns no boundary during an active API, an auxiliary turn, or after explicit stop.
+/// 活动 API、辅助回合或显式停止时不返回边界。
+fn waiting_insertion_boundary(document: &SessionDocument) -> Option<ApiGroupCompletionReceipt> {
+    // Only a running business turn that has reached a physical request boundary can accept this wakeup.
+    // 只有已到达物理请求边界且仍运行的业务回合才能接纳此唤醒。
+    let turn = document.active_turn().filter(|turn| {
+        !turn.closed
+            && !matches!(
+                turn.origin,
+                TurnOrigin::QuestionExecution | TurnOrigin::ContextMaintenance
+            )
+    })?;
+    if document.active_api().is_some()
+        || document.collaboration_run_control() != CollaborationRunControl::Running
+    {
+        return None;
+    }
+    // Use the last business terminal itself so an older success cannot mask a later failure.
+    // 使用最后一次业务终态本身，防止更早的成功掩盖较新的失败。
+    let (stats_seq, stats) = document.events().iter().rev().find_map(|event| {
+        let EventBody::ApiStats(stats) = &event.event else {
+            return None;
+        };
+        (event.turn_id == Some(turn.turn_id)
+            && !matches!(
+                stats.purpose,
+                ApiPurposeKind::QuestionExecution | ApiPurposeKind::Compaction
+            ))
+        .then_some((event.seq, stats))
+    })?;
+    if stats.status != ApiCallStatus::Completed {
+        return None;
+    }
+    // A previous wakeup can publish an input before admission. Its exact event still authorizes retry.
+    // 前一次唤醒可能先发布输入再准入，其精确事件仍可授权重试。
+    let mut promoted_input_seqs: Vec<_> = document
+        .events()
+        .iter()
+        .rev()
+        .take_while(|event| event.seq > stats_seq)
+        .filter(|event| {
+            event.turn_id == Some(turn.turn_id)
+                && matches!(&event.event, EventBody::UserInput(input) if input.input_source == UserInputSource::PendingInTurn)
+                && !document.business_input_dispatch_started(turn.turn_id, event.seq)
+        })
+        .map(|event| event.seq)
+        .collect();
+    promoted_input_seqs.reverse();
+    Some(ApiGroupCompletionReceipt {
+        api_call_id: stats.api_call_id,
+        turn_id: turn.turn_id,
+        stats_seq,
+        promoted_input_seqs,
+    })
 }
 
 /// Starts the next WebUI chained turn after one stream finishes.

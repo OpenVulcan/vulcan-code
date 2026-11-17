@@ -441,7 +441,8 @@ pub(super) async fn handle_finished_stream_event(
     // Return exact task results after terminal ownership is released; failures retain durable retry state.
     // 释放终态归属后回传精确任务结果；失败保留可靠重试状态。
     if terminal_authority_settled
-        && let Err(error) = crate::agent_collaboration::reconcile_task_results_for_session(
+        && let Err(error) = crate::agent_collaboration::reconcile_live_task_results_for_session(
+            app,
             task_state,
             finished_session_id,
         )
@@ -518,18 +519,16 @@ pub(super) async fn handle_finished_stream_event(
             }
         }
     } else if terminal_authority_settled {
-        match crate::webui_turn_chaining::start_exact_v1_collaboration_continuation(
+        match crate::webui_turn_chaining::start_waiting_business_continuation(
             app,
             task_state,
-            controller_runtime,
-            agent_runtime,
             finished_session_id,
         )
         .await
         {
             Ok(started) => started,
             Err(error) => {
-                tracing::warn!(session_id = %finished_session_id, %error, "Exact collaboration continuation remains pending");
+                tracing::warn!(session_id = %finished_session_id, %error, "Same-turn input or collaboration continuation remains pending");
                 false
             }
         }

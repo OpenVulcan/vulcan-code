@@ -714,9 +714,12 @@ async fn service_stop_conversation_run_owned(
     drop(stop_admission_guard);
     // The stop can strand already accepted task messages before their next legal API boundary.
     // 停止可能让已接纳任务消息在下一合法 API 边界之前悬空。
-    if let Err(error) =
-        crate::agent_collaboration::reconcile_task_results_for_session(&state, target_session_id)
-            .await
+    if let Err(error) = crate::agent_collaboration::reconcile_live_task_results_for_session(
+        &app,
+        &state,
+        target_session_id,
+    )
+    .await
     {
         tracing::warn!(%target_session_id, %error, "Stopped task message return remains pending");
     }

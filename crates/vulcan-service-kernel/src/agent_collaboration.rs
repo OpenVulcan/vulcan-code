@@ -90,7 +90,9 @@ pub(crate) use question_failures::reconcile_stopped_question_deliveries_for_sess
 pub(crate) use startup_recovery::native_results::reconcile_child_predecessor_returns;
 pub(crate) use startup_recovery::start_collaboration_recovery;
 pub(crate) use task_launch::wake_session_tasks_if_idle;
-pub(crate) use task_results::reconcile_task_results_for_session;
+pub(crate) use task_results::{
+    reconcile_live_task_results_for_session, reconcile_task_results_for_session,
+};
 
 /// Service-owned native collaboration runtime that never owns the shared service state.
 /// 服务持有的原生协作运行时，绝不拥有共享服务状态的强引用。

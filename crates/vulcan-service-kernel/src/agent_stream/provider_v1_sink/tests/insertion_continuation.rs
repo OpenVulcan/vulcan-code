@@ -269,9 +269,22 @@ async fn child_return_continuation_preserves_insertion_batch() {
 /// 待完成子任务保留插队续跑，而不是忽略指引等待子任务结果。
 #[tokio::test]
 async fn running_child_keeps_insertion_batch_in_original_turn() {
+    running_child_insertion_scenario(false).await;
+}
+
+/// Inserts after the main API closes while its exact child execution remains active.
+/// 主 API 关闭后插队，精确子执行保持活动。
+#[tokio::test]
+async fn running_child_allows_insertion_after_parent_api_finishes() {
+    running_child_insertion_scenario(true).await;
+}
+
+/// Builds an isolated stored parent and a live child; returns the storage guard, handle and owner Turn.
+/// 创建隔离的持久父会话及活动子任务，返回存储守卫、句柄与所属回合。
+fn stored_parent_with_running_child() -> (tempfile::TempDir, Arc<SessionHandle>, TurnId) {
     // Use actual storage and stable parent ownership.
     // 使用实际存储及稳定父级归属。
-    let (_directory, parent) = published_stored_open_turn();
+    let (directory, parent) = published_stored_open_turn();
     // Read the declared project from the authoritative storage locator.
     // 从权威存储定位器读取声明的项目。
     let project = parent.storage_locator().unwrap().project_id().to_owned();
@@ -323,6 +336,17 @@ async fn running_child_keeps_insertion_batch_in_original_turn() {
             },
         )
         .unwrap();
+    (directory, parent, turn)
+}
+
+/// Exercises early and late insertion admission against the same open business with a live child.
+/// 使用同一仍有活动子任务的开放业务，验证提前和迟到的插队准入。
+/// `after_terminal` selects the order; both orders preserve the same child obligation.
+/// `after_terminal` 选择时序；两种时序均保留同一子任务义务。
+async fn running_child_insertion_scenario(after_terminal: bool) {
+    // Use the same durable ownership fixture for either insertion ordering.
+    // 两种插队时序使用同一可靠归属夹具。
+    let (_directory, parent, turn) = stored_parent_with_running_child();
     // The parent can answer without making its owned child disappear.
     // 父级可以返回正文，但所属子任务仍存在。
     let mut sink = ProviderV1StreamSink::new(
@@ -332,7 +356,7 @@ async fn running_child_keeps_insertion_batch_in_original_turn() {
     prepare_sink_request(&parent, &mut sink);
     // User steering must be admitted even while the child is still running.
     // 子任务仍在运行时也必须接纳用户指引。
-    let identities = admit_insertion_batch(&parent);
+    let early_insertions = (!after_terminal).then(|| admit_insertion_batch(&parent));
     sink.append_assistant_delta("waiting-child-marker", 9)
         .unwrap();
     sink.accept_terminal(terminal_facts(0)).await.unwrap();
@@ -340,9 +364,30 @@ async fn running_child_keeps_insertion_batch_in_original_turn() {
     // 同回合回执授权请求，同时不错误声明业务完成。
     let durability = sink.take_finished_durability();
     assert!(durability.turn_completion.is_none());
+    // The late path has no inputs in the original API receipt and must reconstruct its own durable boundary.
+    // 迟到路径在原 API 回执中没有输入，必须重建自身的可靠边界。
+    let original_receipt = durability.api_terminal.unwrap().value;
+    let (identities, receipt) = if let Some(early_insertions) = early_insertions {
+        (early_insertions, original_receipt)
+    } else {
+        assert!(original_receipt.promoted_input_seqs.is_empty());
+        let late_insertions = admit_insertion_batch(&parent);
+        let receipt =
+            crate::webui_turn_chaining::publish_waiting_user_inputs(Arc::clone(&parent), 34)
+                .await
+                .unwrap()
+                .expect("a late insertion must authorize the waiting business turn");
+        assert_eq!(receipt.stats_seq, original_receipt.stats_seq);
+        assert_eq!(
+            crate::webui_turn_chaining::publish_waiting_user_inputs(Arc::clone(&parent), 35)
+                .await
+                .unwrap(),
+            Some(receipt.clone()),
+        );
+        (late_insertions, receipt)
+    };
     crate::webui_prompt_lifecycle::pending_in_turn_dispatch_authority_from_v1_handle(
-        &parent,
-        &durability.api_terminal.unwrap().value,
+        &parent, &receipt,
     )
     .unwrap();
     assert_insertions_ready(&parent, turn, &identities);
@@ -354,6 +399,130 @@ async fn running_child_keeps_insertion_batch_in_original_turn() {
                 .len())
             .unwrap(),
         1
+    );
+}
+
+/// Queues during the running parent request and dispatches after the parent finishes with a live child.
+/// 主请求执行时排队，主请求完成且子任务仍运行时分发。
+#[tokio::test]
+async fn running_child_dispatches_existing_ordinary_queue_head() {
+    running_child_ordinary_queue_scenario(false).await;
+}
+
+/// Wakes the waiting parent when an ordinary input arrives after its last response.
+/// 普通输入在最近一次答复后到达时唤醒等待中的父会话。
+#[tokio::test]
+async fn running_child_dispatches_late_ordinary_queue_head() {
+    running_child_ordinary_queue_scenario(true).await;
+}
+
+/// Checks persistent FIFO and repeat dispatch for ordinary input submitted before or after terminal.
+/// 检查在终态之前或之后提交普通输入时的持久先进先出及重复派发行为。
+/// `after_terminal` selects the order. The test finishes with its original business and child still open.
+/// `after_terminal` 选择时序。测试结束时原有业务回合及子任务仍开放。
+async fn running_child_ordinary_queue_scenario(after_terminal: bool) {
+    // Seed a real owner and active API before admitting the test inputs.
+    // 接纳测试输入之前建立真实所有者及活动 API。
+    let (_directory, parent, turn) = stored_parent_with_running_child();
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&parent),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    prepare_sink_request(&parent, &mut sink);
+    // Queue two entries to prove the first selection cannot consume the next one prematurely.
+    // 排入两条输入，以验证首次选中队首时不会提前消费下一条。
+    let enqueue_both = || {
+        ["queue-head", "queue-next"].map(|action| {
+            parent
+                .enqueue_input(
+                    ClientInputSubmission::new(
+                        ClientActionId::try_new(action).unwrap(),
+                        action,
+                        Vec::new(),
+                    ),
+                    if after_terminal { 30 } else { 7 },
+                )
+                .unwrap()
+                .value
+                .input_id
+        })
+    };
+    let early = (!after_terminal).then(enqueue_both);
+    assert_eq!(
+        crate::webui_turn_chaining::publish_waiting_user_inputs(Arc::clone(&parent), 8)
+            .await
+            .unwrap(),
+        None
+    );
+    sink.append_assistant_delta("ordinary queue owner answered", 9)
+        .unwrap();
+    sink.accept_terminal(terminal_facts(0)).await.unwrap();
+    assert!(sink.take_finished_durability().turn_completion.is_none());
+    // The exact same-turn dispatch reads only the released head, once, after the completed response.
+    // 精确同回合派发在完成答复后仅读取已释放的队首，且只读入一次。
+    let [head, next] = early.unwrap_or_else(enqueue_both);
+    let receipt = crate::webui_turn_chaining::publish_waiting_user_inputs(Arc::clone(&parent), 34)
+        .await
+        .unwrap()
+        .expect("the queue head can run while the child remains live");
+    let authority =
+        crate::webui_prompt_lifecycle::pending_in_turn_dispatch_authority_from_v1_handle(
+            &parent, &receipt,
+        )
+        .unwrap();
+    assert_eq!(authority.turn_id, turn);
+    assert_eq!(
+        authority
+            .inputs
+            .iter()
+            .map(|input| input.input_id)
+            .collect::<Vec<_>>(),
+        vec![head]
+    );
+    // A shortcut can arrive after the queue worker consumed its exact browser action.
+    // 队列工作器消费精确浏览器动作之后，仍可能收到该动作的插队快捷键请求。
+    assert!(
+        !parent
+            .promote_queued_input_to_pending_turn(
+                QueuedInputIdentity {
+                    input_id: head,
+                    client_action_id: ClientActionId::try_new("queue-head").unwrap(),
+                },
+                35,
+            )
+            .unwrap()
+            .changed
+    );
+    assert_eq!(
+        crate::webui_turn_chaining::publish_waiting_user_inputs(Arc::clone(&parent), 35)
+            .await
+            .unwrap(),
+        Some(receipt)
+    );
+    // Reload the durable state to verify the outstanding child and second queue item survive.
+    // 重新加载持久状态，验证未完成的子任务及第二条排队输入仍保留。
+    let loaded = vulcan_workspace_store::workspace_store::load_session_v1_full(
+        &parent.storage_locator().unwrap(),
+    )
+    .unwrap()
+    .document;
+    assert!(!loaded.active_turn().unwrap().closed);
+    assert_eq!(
+        loaded
+            .completion_obligations(turn)
+            .open_child_task_ids
+            .len(),
+        1
+    );
+    assert_eq!(
+        loaded
+            .metadata
+            .input_state
+            .queued_inputs
+            .iter()
+            .map(|input| input.input_id)
+            .collect::<Vec<_>>(),
+        vec![next]
     );
 }
 

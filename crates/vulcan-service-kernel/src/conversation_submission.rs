@@ -3267,6 +3267,18 @@ async fn service_start_conversation_execution(
             }
         } else {
             reconciliation?;
+            if acknowledgement.queued {
+                // Queue intake may finish after the main execution has already yielded to a child.
+                // 排队接纳可能发生在主执行已让出、仅剩子任务运行之后。
+                drop(turn_admission);
+                if let Err(error) =
+                    crate::webui_turn_chaining::schedule_waiting_business_continuation(
+                        &app, &state, session_id,
+                    )
+                {
+                    tracing::warn!(%session_id, %error, "Accepted queued input remains pending");
+                }
+            }
         }
         return Ok(acknowledgement);
     }
