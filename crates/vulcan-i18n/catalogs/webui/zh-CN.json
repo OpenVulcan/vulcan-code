@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "展开",
   "composer.slash.panel": "快捷指令",
   "composer.mention.panel": "此项目中的文件",
+  "composer.mention.references": "技能和工作区文件",
   "composer.slash.model": "选择当前模型",
   "composer.slash.reasoning": "选择思考级别",
   "composer.slash.compact": "立即压缩会话上下文",

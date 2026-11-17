@@ -305,6 +305,9 @@ pub struct TauriLuaSkillSummary {
     /// Human-facing skill display name.
     /// 面向用户的技能显示名称。
     pub display_name: String,
+    /// Package-owned registration and presentation metadata.
+    /// 包声明的注册和展示元数据。
+    pub registration: Option<luaskills::SkillRegistration>,
     /// Skill package version.
     /// 技能包版本。
     pub version: String,
@@ -1504,6 +1507,7 @@ fn build_luaskills_catalog(
         skills.push(TauriLuaSkillSummary {
             skill_id: resolved.skill_id,
             display_name: meta.name,
+            registration: meta.registration,
             version,
             root_name: resolved.root_name,
             skill_dir: vulcan_runtime_assets::native_host_path(&resolved.actual_dir),

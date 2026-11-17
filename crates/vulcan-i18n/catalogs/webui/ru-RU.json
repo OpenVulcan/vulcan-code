@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "Развернуть",
   "composer.slash.panel": "Слэш-команды",
   "composer.mention.panel": "Файлы этого проекта",
+  "composer.mention.references": "Навыки и файлы рабочей области",
   "composer.slash.model": "Выбрать текущую модель",
   "composer.slash.reasoning": "Выбрать уровень рассуждений",
   "composer.slash.compact": "Сжать контекст разговора сейчас",

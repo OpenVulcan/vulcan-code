@@ -1,6 +1,6 @@
 import React from "react";
 
-import { useComposerPathMention, type ComposerPathMention } from "./use-composer-path-mention";
+import { useComposerPathMention, type ComposerPathMention, type ComposerShortcut } from "./use-composer-path-mention";
 import { usePromptRecall } from "./use-composer-prompt-recall";
 
 // ComposerListboxIds names the slash and path lists so the textarea can point at them.
@@ -31,9 +31,14 @@ export function useComposerTextareaKeys(options: {
   // recallScope 为召回的提示词分组；slotKey 在输入区切换草稿时改变。
   recallScope: string;
   slotKey: string;
-  workspacePath: string | null;
-  projectId: string | null;
-  conversationId: string | null;
+  // The source carries the current project, conversation and reference catalog.
+  // source 携带当前项目、会话与引用目录。
+  source: {
+    workspacePath?: string | null;
+    shortcuts?: readonly ComposerShortcut[];
+    projectId: string | null;
+    conversationId: string | null;
+  };
   slashPanelVisible: boolean;
   // slashActiveIndex is the highlighted slash row.
   // slashActiveIndex 是高亮的 slash 行。
@@ -47,15 +52,16 @@ export function useComposerTextareaKeys(options: {
 } {
   const { input, setInput, textareaRef } = options;
   const recallPrompt = usePromptRecall({
-    scope: options.recallScope, conversationId: options.conversationId, slotKey: options.slotKey, input, setInput, textareaRef,
+    scope: options.recallScope, conversationId: options.source.conversationId, slotKey: options.slotKey, input, setInput, textareaRef,
   });
   const pathMention = useComposerPathMention({
     input,
     setInput,
     textareaRef,
-    workspacePath: options.workspacePath,
-    projectId: options.projectId,
-    conversationId: options.conversationId,
+    workspacePath: options.source.workspacePath ?? null,
+    shortcuts: options.source.shortcuts,
+    projectId: options.source.projectId,
+    conversationId: options.source.conversationId,
   });
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (pathMention.handleKeyDown(event)) return;

@@ -7,7 +7,7 @@ use crate::agent_runtime::vulcan_plugin_hooks::prepare_vulcan_plugin_tool_candid
 use crate::luaskills_runtime::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
     PWD_PARAMETER_NAME, build_luaskills_tool_invocation_context, build_runlua_tool_candidates,
-    call_luaskills_tool_entry, luaskills_entry_args_schema,
+    call_implicit_luaskills_tool_entry, call_luaskills_tool_entry, luaskills_entry_args_schema,
     render_luaskills_invocation_result_text,
 };
 use crate::mcp::McpRuntimeToolBinding;
@@ -16,8 +16,7 @@ use crate::tooling::collaboration::{
 };
 use crate::tooling::{
     NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest,
-    allocate_unique_public_tool_name, build_direct_public_tool_name,
-    build_prefixed_public_tool_name,
+    allocate_unique_public_tool_name, build_prefixed_public_tool_name,
 };
 use crate::workspace_path::native_workspace_path_text_from_path;
 use luaskills::RuntimeEntryDescriptor;
@@ -26,17 +25,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
-use vulcan_luaskills_prompt::{
-    LUASKILL_HELP_TOOL_NAME, LuaSkillPackageHelp, luaskill_help_args_schema,
-    parse_luaskill_help_request, render_luaskill_help_output,
-};
 use vulcan_plugin_runtime::{
     VulcanPluginInvocationRequest, VulcanPluginRuntimeManager, VulcanPluginToolDescriptor,
 };
+#[cfg(test)]
 use vulcan_tools_luaskills_call::{
     CALL_LUASKILL_TOOL_NAME, CALL_LUASKILL_USAGE_MD, LuaSkillCallEntryView,
-    call_luaskill_args_schema, parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
-    restore_call_luaskill_args_for_entry,
+    call_luaskill_args_schema, parse_call_luaskill_request, restore_call_luaskill_args_for_entry,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -55,7 +50,6 @@ pub(crate) use descriptors::{native_tool_id_is_knowledge_tool, native_tool_id_is
 #[cfg(test)]
 use luaskills_dispatch::luaskills_entry_to_call_view;
 use luaskills_dispatch::{
-    build_luaskills_dispatch_candidate, build_luaskills_help_candidate,
     inject_host_managed_luaskill_sid_if_needed, inject_host_managed_pwd_if_needed,
     luaskills_invocation_failure,
 };
@@ -191,7 +185,6 @@ pub fn build_vulcan_tools_manager(
     enabled_prompt_skill_names: Vec<String>,
     prepared_prompt_skills: Vec<vulcan_prompt_skills::PromptSkill>,
     prompt_skill_user_root: Option<PathBuf>,
-    luaskill_help_packages: Vec<LuaSkillPackageHelp>,
     project_vmm: vulcan_vmm::VmmConfigLayer,
     session_vmm: vulcan_vmm::VmmConfigLayer,
     vmm_runtime_ready: bool,
@@ -496,25 +489,21 @@ pub fn build_vulcan_tools_manager(
         }
     }
 
-    if !luaskill_help_packages.is_empty() {
-        let luaskill_help_candidate = build_luaskills_help_candidate(luaskill_help_packages);
-        occupied_public_tool_ids.insert(luaskill_help_candidate.descriptor.id.clone());
-        candidates.push(luaskill_help_candidate);
-    }
-    if !candidate_luaskills_dispatch_tools.is_empty() {
-        let dispatcher_candidate = build_luaskills_dispatch_candidate(
-            luaskills_runtime.clone(),
-            workspace_root.clone(),
-            candidate_luaskills_dispatch_tools,
-        );
-        occupied_public_tool_ids.insert(dispatcher_candidate.descriptor.id.clone());
-        candidates.push(dispatcher_candidate);
-    }
+    // Implicit entries retain their own definitions for permission checks and dispatch.
+    // 隐式入口保留自己的定义，以供权限检查和分发使用。
+    let mut candidate_luaskills_tools = candidate_luaskills_tools
+        .into_iter()
+        .map(|entry| (entry, false))
+        .chain(
+            candidate_luaskills_dispatch_tools
+                .into_iter()
+                .map(|entry| (entry, true)),
+        )
+        .collect::<Vec<_>>();
+    candidate_luaskills_tools
+        .sort_by(|(left, _), (right, _)| left.canonical_name.cmp(&right.canonical_name));
 
-    let mut candidate_luaskills_tools = candidate_luaskills_tools;
-    candidate_luaskills_tools.sort_by(|left, right| left.canonical_name.cmp(&right.canonical_name));
-
-    for entry in candidate_luaskills_tools {
+    for (entry, implicit) in candidate_luaskills_tools {
         let descriptor = luaskills_descriptor_to_vulcan(&entry, &mut occupied_public_tool_ids);
         let host_managed_pwd_available = workspace_root
             .as_deref()
@@ -546,6 +535,9 @@ pub fn build_vulcan_tools_manager(
                 let canonical_name = canonical_name.clone();
                 let skill_id = skill_id.clone();
                 let workspace_root = workspace_root.clone();
+                // Keep the implicit entry's runtime registration fingerprint for delayed calls.
+                // 为延迟调用保留隐式入口的运行时注册指纹。
+                let implicit_entry = implicit.then(|| entry.clone());
                 Box::pin(async move {
                     let Some(handle) = runtime else {
                         return Err(format!(
@@ -571,15 +563,18 @@ pub fn build_vulcan_tools_manager(
                         "host-tool",
                         &canonical_name,
                     );
-                    let call_handle = handle.clone();
-                    let result = match call_luaskills_tool_entry(
-                        call_handle,
-                        canonical_name.clone(),
-                        args,
-                        Some(invocation_context),
-                    )
-                    .await
-                    {
+                    // Implicit calls revalidate the original registration before entering Lua.
+                    // 隐式调用进入 Lua 前重新校验原始注册。
+                    let result = if let Some(entry) = implicit_entry {
+                        call_implicit_luaskills_tool_entry(
+                            handle.clone(), entry, args, Some(invocation_context),
+                        ).await
+                    } else {
+                        call_luaskills_tool_entry(
+                            handle.clone(), canonical_name.clone(), args, Some(invocation_context),
+                        ).await
+                    };
+                    let result = match result {
                         Ok(result) => result,
                         Err(error) => return Ok(luaskills_invocation_failure(&canonical_name, error)),
                     };

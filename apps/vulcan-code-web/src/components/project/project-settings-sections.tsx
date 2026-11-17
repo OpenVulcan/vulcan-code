@@ -525,11 +525,11 @@ export function ProjectAgentSkillsSection(props: {
         <StreamPlaceholder className="project-settings-skill-list" label={t("projectSettings.agentLoading")} shape="rows" count={4} />
         ) : !props.agentLoaded || props.agentError ? (
         <p className="project-settings-muted">{t("project.settings.projectSkillSettingsHave")}</p>
-        ) : props.workbench.agentSkills.records.filter((skill) => skill.effective).length === 0 ? (
+        ) : props.workbench.agentSkills.records.filter((skill) => skill.effective && skill.canToggle).length === 0 ? (
         <p className="project-settings-muted">{t("projectSettings.agentEmpty")}</p>
       ) : (
         <div className="project-settings-skill-list">
-            {props.workbench.agentSkills.records.filter((skill) => skill.effective).map((skill) => {
+            {props.workbench.agentSkills.records.filter((skill) => skill.effective && skill.canToggle).map((skill) => {
             const projectState = projectAgentSkillCurrentState(props.agentOverrides[skill.name]);
             return (
               <article className="project-settings-skill-row" data-overridden={projectState === "inherit" ? undefined : "true"} key={skill.name}>

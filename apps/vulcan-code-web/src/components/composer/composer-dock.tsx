@@ -1,4 +1,5 @@
 import React from "react";
+import type { ComposerShortcut } from "@/components/composer/composer-panel/use-composer-path-mention";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
@@ -126,6 +127,9 @@ export function ComposerDock(props: {
   // Slash commands projected by the shared workbench service.
   // 共享工作台服务投影出的 slash 指令。
   slashCommands: ComposerSlashCommandSummary[];
+  // Catalog references available in the input shortcut menu.
+  // 输入区快捷菜单中的目录引用。
+  shortcuts?: readonly ComposerShortcut[];
   // Visible pending prompts retained for the selected conversation.
   // 当前选中会话保留的可见待发送提示词。
   pendingPrompts: PendingPromptSummary[];
@@ -395,6 +399,7 @@ export function ComposerDock(props: {
         sessionContextWindowSelection={props.sessionContextWindowSelection}
         customContextWindowMinTokens={props.customContextWindowMinTokens}
         slashCommands={props.slashCommands}
+        shortcuts={props.shortcuts}
         pendingPrompts={visiblePendingPrompts}
         sessionGoal={props.sessionGoal}
         sessionTodolist={props.sessionTodolist}

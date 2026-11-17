@@ -63,11 +63,11 @@ fn prepared_browser_call_retains_its_original_selection_fingerprint() {
     // 复用现有夹具闭包作为调度器的注册。
     let mut dispatcher = definitions.first().unwrap().clone();
     dispatcher.descriptor = VulcanToolDescriptor::new(
-        "plugin_call",
-        "plugin_call",
+        "tool_call",
+        "tool_call",
         "Call a plugin",
         None,
-        VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", "plugin_call"),
+        VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", "tool_call"),
     );
     definitions.push(dispatcher);
     manager.set_skill_actions([(
@@ -85,7 +85,7 @@ fn prepared_browser_call_retains_its_original_selection_fingerprint() {
     let request = ToolInvocationRequest {
         request_stream_id: String::from("browser-page-call"),
         tool_call_id: String::from("browser-call"),
-        tool_name: String::from("plugin_call"),
+        tool_name: String::from("tool_call"),
         arguments: json!({"skill": "vulcan-browser:browser-workflow", "action": "navigate", "arguments": {"url": "https://example.test/"}}),
         argument_parse_error: None,
         raw_arguments: Default::default(),

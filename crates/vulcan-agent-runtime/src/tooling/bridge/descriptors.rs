@@ -45,7 +45,7 @@ pub(super) fn luaskills_descriptor_to_vulcan(
     entry: &RuntimeEntryDescriptor,
     occupied_public_tool_ids: &mut BTreeSet<String>,
 ) -> VulcanToolDescriptor {
-    let preferred_public_id = build_direct_public_tool_name(&entry.canonical_name);
+    let preferred_public_id = entry.public_tool_name();
     let public_id = if occupied_public_tool_ids.contains(&preferred_public_id) {
         allocate_unique_public_tool_name(
             &build_prefixed_public_tool_name("ls", &[&entry.canonical_name]),

@@ -28,6 +28,8 @@ import {
 } from "@/ui-kit/primitives/dropdown-menu";
 import { formatSkillText } from "@/components/features/featureText";
 import { useI18n } from "@/i18n";
+import { matchLocaleTag } from "@/i18n-locales";
+import type { LuaSkillIntroduction } from "@/types/composer-skills";
 import type { LuaSkillSummary, LuaSkillToolSummary, LuaSkillUpdateCheck } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
@@ -41,6 +43,19 @@ const SKILL_SOURCE_TYPE_NAMES: Readonly<Record<string, string>> = { github: "Git
 function skillSourceTypeLabel(sourceType: string | null | undefined): string | null {
   const kind = sourceType?.trim();
   return kind ? SKILL_SOURCE_TYPE_NAMES[kind.toLowerCase()] ?? kind : null;
+}
+
+// localizeIntroduction selects the shared interface language or the package default.
+// localizeIntroduction 选择共享界面语言或包声明的默认语言。
+function localizeIntroduction(
+  translations: Record<string, LuaSkillIntroduction>,
+  locale: string,
+  defaultLocale: string,
+): LuaSkillIntroduction | undefined {
+  // Sort-equivalent language tags arrive in manifest order from the service.
+  // 等价语言标签按服务清单的顺序到达。
+  const match = Object.keys(translations).find((tag) => matchLocaleTag(tag) === locale);
+  return translations[locale] ?? (match ? translations[match] : undefined) ?? translations[defaultLocale];
 }
 
 // hasLuaSkillConfigOptions determines whether one catalog row exposes actual package configuration options.
@@ -89,7 +104,13 @@ export function LuaSkillCard(props: {
   // 当前卡片渲染的 Lua Skill 行。
   skill: LuaSkillSummary;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  // The package summary updates whenever the interface locale changes.
+  // 界面语言切换时同步更新包概要。
+  const registration = props.skill.registration;
+  // Unregistered legacy packages have no package-owned introduction.
+  // 未注册的旧包没有自带介绍。
+  const introduction = registration && localizeIntroduction(registration.locales, locale, registration.defaultLocale);
   // source is the compact source description shown below the unified label line.
   // source 是统一标签行下方显示的紧凑来源说明。
   const source = props.skill.sourceLocator ?? t("skills.source.unknown");
@@ -127,7 +148,7 @@ export function LuaSkillCard(props: {
             title={t("skills.action.details")}
             type="button"
           >
-            {props.skill.displayName}
+            {introduction?.title ?? props.skill.displayName}
           </button>
           <div className="agent-definition-row-badges">
             {sourceTypeLabel ? <Badge variant="outline">{sourceTypeLabel}</Badge> : null}
@@ -150,6 +171,7 @@ export function LuaSkillCard(props: {
             ) : null}
           </div>
         </div>
+        {introduction ? <p>{introduction.description}</p> : null}
         <p>{source}</p>
         <span className="agent-definition-row-path">{props.skill.skillDir}</span>
       </div>
@@ -231,18 +253,36 @@ export function LuaSkillDetailDialog(props: {
   // 更新详情弹窗打开状态。
   onOpenChange: (open: boolean) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const skill = props.skill;
+  // Localize package overview and guide introductions independently.
+  // 分别本地化包概要和指南介绍。
+  const registration = skill?.registration;
+  // Missing translations use the same declared default for both kinds of description.
+  // 两类说明缺少译文时均使用同一个包声明默认语言。
+  const introduction = registration && localizeIntroduction(registration.locales, locale, registration.defaultLocale);
   const source = skill?.sourceLocator ? [skillSourceTypeLabel(skill.sourceType), skill.sourceLocator].filter(Boolean).join(" · ") : t("skills.source.unknown");
   return (
     <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
       <DialogContent className="lua-skill-detail-dialog" size="md" scrollMode="body-scroll">
         <DialogHeader>
-          <DialogTitle>{skill?.displayName ?? t("skills.lua.detailsTitle")}</DialogTitle>
+          <DialogTitle>{introduction?.title ?? skill?.displayName ?? t("skills.lua.detailsTitle")}</DialogTitle>
           <DialogDescription>{skill ? `${skill.skillId} · v${skill.version}` : t("skills.lua.detailsDescription")}</DialogDescription>
         </DialogHeader>
         {skill ? (
           <div className="lua-skill-detail-grid">
+            {introduction ? <div className="wide"><p>{introduction.description}</p></div> : null}
+            {registration && Object.entries(registration.promptSkills).map(([name, translations]) => {
+              // Resolve the guide in the same locale as the enclosing package card.
+              // 以包卡片所用的同一语言解析指南。
+              const guide = localizeIntroduction(translations, locale, registration.defaultLocale);
+              return guide ? (
+                <div className="wide" key={name}>
+                  <strong>{guide.title}</strong>
+                  <p>{guide.description}</p>
+                </div>
+              ) : null;
+            })}
             <div>
               <span>{t("skills.label.currentStatus")}</span>
               <strong>{skill.enabled ? t("skills.status.enabled") : t("skills.status.stopped")}</strong>
@@ -317,6 +357,7 @@ export function LuaSkillToolsDialog(props: {
             <LuaSkillToolRow
               actions={props.actions}
               busy={props.busy || writing}
+              supportsImplicit={skill.registration?.defaultImplicit === true}
               onWritingChange={onWritingChange}
               key={`${skill.skillId}-${tool.localName}`}
               skillId={skill.skillId}
@@ -338,6 +379,9 @@ function LuaSkillToolRow(props: {
   // Whether another skill action is running.
   // 是否已有其他技能动作正在运行。
   busy: boolean;
+  // Whether the package declares native implicit registration.
+  // 包是否声明原生隐式注册。
+  supportsImplicit: boolean;
   // Parent Lua Skill identifier.
   // 父级 Lua Skill 标识。
   skillId: string;
@@ -397,7 +441,7 @@ function LuaSkillToolRow(props: {
       <div className="skill-tool-row-header">
         <div>
           <strong>{props.tool.localName}</strong>
-          <span>{props.tool.canonicalName}</span>
+          <span>{props.tool.publicName ?? props.tool.canonicalName}</span>
         </div>
         <div className="skill-tool-control">
           <SegmentedControl
@@ -413,9 +457,11 @@ function LuaSkillToolRow(props: {
             <SegmentedControlItem value="explicit">
               {t("skills.lua.toolExplicit")}
             </SegmentedControlItem>
-            <SegmentedControlItem value="implicit">
-              {t("skills.lua.toolImplicit")}
-            </SegmentedControlItem>
+            {props.supportsImplicit ? (
+              <SegmentedControlItem value="implicit">
+                {t("skills.lua.toolImplicit")}
+              </SegmentedControlItem>
+            ) : null}
             <SegmentedControlItem value="disabled">
               {t("skills.lua.toolDisabled")}
             </SegmentedControlItem>

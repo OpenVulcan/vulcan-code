@@ -1,7 +1,6 @@
 use super::{
-    RuntimeFoundation, filter_luaskills_entries_by_explicit_registration,
-    filter_luaskills_entries_by_host_dispatch, resolve_agent_native_tools,
-    resolve_agent_vulcan_plugin_tool_ids,
+    RuntimeFoundation, resolve_agent_native_tools, resolve_agent_vulcan_plugin_tool_ids,
+    resolve_luaskills_registrations,
 };
 use crate::agent_runtime::config::{
     RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
@@ -214,77 +213,33 @@ fn explicit_native_tool_list_keeps_universal_goal_and_todolist_tools() {
     assert!(warnings.is_empty());
 }
 
-/// Verifies that only explicitly registered LuaSkills tools enter provider-visible schemas while implicit tools remain host-dispatchable later.
-/// 验证只有显式注册的 LuaSkills 工具会进入 Provider 可见 Schema，而隐式工具保留给后续宿主调度。
+/// Verifies an old package remains direct even with a stale implicit preference.
+/// 验证存在旧的隐式偏好时，旧包仍然采用直接注册。
 #[test]
-fn luaskills_registration_filters_only_explicit_tools() {
-    let entries = vec![
-        build_test_luaskills_entry("skill-a", "tool-a"),
-        build_test_luaskills_entry("skill-a", "tool-b"),
-        build_test_luaskills_entry("skill-b", "tool-a"),
-    ];
-    let mut registration = PersistedLuaSkillsConfiguration::default();
-    assert!(registration.set_tool_registration_state(
-        "skill-a",
-        "tool-a",
-        crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit,
-    ));
-
-    let filtered = filter_luaskills_entries_by_explicit_registration(entries, &registration);
-    let remaining = filtered
-        .iter()
-        .map(|entry| entry.canonical_name.as_str())
-        .collect::<BTreeSet<_>>();
-
-    assert_eq!(
-        remaining,
-        BTreeSet::from(["skill-a-tool-b", "skill-b-tool-a"])
+fn legacy_luaskills_are_direct_without_a_manifest_declaration() {
+    // The saved setting predates package-owned registration.
+    // 该保存设置早于包级注册声明。
+    let settings = PersistedLuaSkillsConfiguration {
+        tool_registration_by_skill: std::collections::BTreeMap::from([(
+            "vulcan-work".into(),
+            std::collections::BTreeMap::from([(
+                "pdf-inspect".into(),
+                crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit,
+            )]),
+        )]),
+        ..Default::default()
+    };
+    // Resolve the actual exposure routes rather than reading the stored preference.
+    // 解析实际暴露入口。
+    let (direct, implicit, guides) = resolve_luaskills_registrations(
+        vec![build_test_luaskills_entry("vulcan-work", "pdf-inspect")],
+        Vec::new(),
+        &settings,
+        &mut Vec::new(),
     );
-}
-
-/// Verifies only implicit LuaSkills tools are callable through the host-side dispatcher.
-/// 验证只有隐式 LuaSkills 工具能通过宿主侧调度器调用。
-#[test]
-fn luaskills_dispatch_filters_only_implicit_tools() {
-    let entries = vec![
-        build_test_luaskills_entry("skill-a", "tool-a"),
-        build_test_luaskills_entry("skill-a", "tool-b"),
-        build_test_luaskills_entry("skill-b", "tool-a"),
-        build_test_luaskills_entry("vulcan-work", "pdf-inspect"),
-    ];
-    let mut registration = PersistedLuaSkillsConfiguration::default();
-    assert!(registration.set_tool_registration_state(
-        "skill-a",
-        "tool-a",
-        crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit,
-    ));
-    assert!(registration.set_tool_registration_state(
-        "skill-b",
-        "tool-a",
-        crate::provider_config::PersistedLuaSkillToolRegistrationState::Disabled,
-    ));
-
-    // A built-in implicit entry is callable through dispatch without a saved registration override.
-    // 内置隐式入口无需保存注册覆盖即可通过调度调用。
-    let explicit =
-        filter_luaskills_entries_by_explicit_registration(entries.clone(), &registration);
-    assert_eq!(
-        explicit
-            .iter()
-            .map(|entry| entry.canonical_name.as_str())
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["skill-a-tool-b"]),
-    );
-    let filtered = filter_luaskills_entries_by_host_dispatch(entries, &registration);
-    let remaining = filtered
-        .iter()
-        .map(|entry| entry.canonical_name.as_str())
-        .collect::<BTreeSet<_>>();
-
-    assert_eq!(
-        remaining,
-        BTreeSet::from(["skill-a-tool-a", "vulcan-work-pdf-inspect"])
-    );
+    assert!(implicit.is_empty());
+    assert!(guides.is_empty());
+    assert_eq!(direct[0].public_tool_name(), "vulcan_work_pdf_inspect");
 }
 
 /// Builds one minimal LuaSkills runtime entry descriptor used by the runtime visibility tests.

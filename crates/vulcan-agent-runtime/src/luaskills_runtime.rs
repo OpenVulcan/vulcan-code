@@ -17,7 +17,7 @@ use luaskills::{
     RuntimeInvocationResult, RuntimeRequestContext, RuntimeSkillRoot, SkillManagementAuthority,
 };
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -202,127 +202,75 @@ where
     .await
 }
 
-/// List every LuaSkills runtime entry currently visible to the host tool surface.
-/// 列出当前对宿主工具表面可见的全部 LuaSkills 运行时入口。
-pub fn list_luaskills_tool_entries(
+/// Read tools and package registrations from the same immutable engine generation.
+/// 从同一个不可变引擎加载代读取工具及包注册。
+pub fn list_luaskills_registration_snapshot(
     handle: &LuaSkillsRuntimeHandle,
-) -> Result<Vec<RuntimeEntryDescriptor>, String> {
-    handle
-        .tool_entries
-        .lock()
-        .map(|entries| entries.clone())
-        .map_err(|_| {
-            String::from(
-                "LuaSkills tool entry cache lock is poisoned; the tool table cannot be read",
+) -> Result<
+    (
+        Vec<RuntimeEntryDescriptor>,
+        Vec<luaskills::RuntimeSkillRegistration>,
+    ),
+    String,
+> {
+    // Hold the same read guard for both queries to prevent a refresh mixing their generations.
+    // 两次查询使用同一个读锁，避免刷新造成加载代混用。
+    let engine = lock_runtime_engine(handle)?;
+    Ok((
+        engine.list_entries_for_authority(SkillManagementAuthority::System)?,
+        engine.list_skill_registrations(SkillManagementAuthority::System),
+    ))
+}
+
+/// Materialize a bundled guide in the managed Agent Skills catalog.
+/// 将随包指南加入托管提示词技能目录。
+pub fn load_luaskills_prompt_skill(
+    package: &luaskills::RuntimeSkillRegistration,
+    guide: &luaskills::BundledPromptSkill,
+) -> Result<vulcan_prompt_skills::PromptSkill, String> {
+    use vulcan_prompt_skills::{
+        PLUGIN_CATEGORY_ID, PromptSkillActivation, PromptSkillLocaleMetadata, PromptSkillScope,
+        parse_prompt_skill_file_with_scope,
+    };
+    // Parse exactly the file selected by the runtime manifest using the normal Agent Skills reader.
+    // 使用标准提示词技能读取器解析运行时清单选定的文件。
+    let mut skill = parse_prompt_skill_file_with_scope(
+        &guide.path_in(&package.skill_dir)?,
+        PromptSkillScope::Plugin,
+    )
+    .map_err(|error| error.message)?;
+    if skill.name != guide.name {
+        return Err(format!(
+            "LuaSkills prompt skill {} must match its registered name {}",
+            skill.name, guide.name
+        ));
+    }
+    // Both catalog surfaces use package authors' localized guide metadata.
+    // 两个目录界面均使用包作者提供的本地化指南元数据。
+    let default = &guide.locales[&package.declaration.default_locale];
+    skill.name = format!("luaskills-{}:{}", package.skill_id, guide.name);
+    skill.description.clone_from(&default.description);
+    skill.interface.display_name = Some(default.title.clone());
+    skill.interface.short_description = Some(default.description.clone());
+    skill.interface.locales = guide
+        .locales
+        .iter()
+        .map(|(locale, text)| {
+            (
+                locale.clone(),
+                PromptSkillLocaleMetadata {
+                    display_name: Some(text.title.clone()),
+                    short_description: Some(text.description.clone()),
+                },
             )
         })
-}
-
-/// One rendered help node of a LuaSkills package.
-/// LuaSkills 包中一个已渲染的帮助节点。
-#[derive(Debug, Clone)]
-pub struct LuaSkillsHelpNode {
-    /// Help flow name: the main flow or one declared topic.
-    /// 帮助流程名：主流程或一个已声明主题。
-    pub flow_name: String,
-    /// One-line node description declared by the package.
-    /// 包声明的单行节点说明。
-    pub description: String,
-    /// Rendered Markdown body.
-    /// 已渲染的 Markdown 正文。
-    pub content: String,
-}
-
-/// Rendered help tree of one LuaSkills package.
-/// 单个 LuaSkills 包的已渲染帮助树。
-#[derive(Debug, Clone)]
-pub struct LuaSkillsHelpTree {
-    /// Stable skill identifier.
-    /// 稳定技能标识。
-    pub skill_id: String,
-    /// Main help node; its content is empty when rendering failed.
-    /// 主帮助节点；渲染失败时正文为空。
-    pub main: LuaSkillsHelpNode,
-    /// Successfully rendered topics in declaration order.
-    /// 按声明顺序排列的已成功渲染主题。
-    pub topics: Vec<LuaSkillsHelpNode>,
-    /// Rendered topic name keyed by canonical entry name; absent entries are covered by main help.
-    /// 以 canonical 入口名为键的已渲染主题名；未出现的入口由主帮助覆盖。
-    pub entry_topics: BTreeMap<String, String>,
-}
-
-/// Render the help trees of the given LuaSkills packages.
-/// 渲染指定 LuaSkills 包的帮助树。
-///
-/// # Parameters
-/// 参数
-/// - `handle`: Shared LuaSkills runtime handle.
-/// - `handle`：共享 LuaSkills 运行时句柄。
-/// - `skill_ids`: Packages whose help is needed.
-/// - `skill_ids`：需要帮助的包。
-///
-/// # Returns
-/// 返回值
-/// Help trees plus one warning per help node that failed to render, or the help listing failure.
-/// 帮助树以及每个渲染失败帮助节点的一条警告；帮助列表失败时返回错误。
-pub fn render_luaskills_help_trees(
-    handle: &LuaSkillsRuntimeHandle,
-    skill_ids: &BTreeSet<String>,
-) -> Result<(Vec<LuaSkillsHelpTree>, Vec<String>), String> {
-    let engine = lock_runtime_engine(handle)?;
-    let descriptors = engine.list_skill_help_for_authority(SkillManagementAuthority::System)?;
-    let mut warnings = Vec::new();
-    let mut render_node = |skill_id: &str, flow_name: &str| -> Option<String> {
-        match engine.render_skill_help_detail_for_authority(
-            SkillManagementAuthority::System,
-            skill_id,
-            flow_name,
-            None,
-        ) {
-            Ok(Some(detail)) => Some(detail.content),
-            Ok(None) => None,
-            Err(error) => {
-                warnings.push(format!(
-                    "Failed to render help `{flow_name}` of LuaSkills package `{skill_id}`: {error}"
-                ));
-                None
-            }
-        }
-    };
-    let mut trees = Vec::new();
-    for descriptor in descriptors
-        .into_iter()
-        .filter(|descriptor| skill_ids.contains(&descriptor.skill_id))
-    {
-        let skill_id = descriptor.skill_id;
-        let main_content = render_node(&skill_id, &descriptor.main.flow_name).unwrap_or_default();
-        let mut topics = Vec::new();
-        let mut entry_topics = BTreeMap::new();
-        for flow in descriptor.flows {
-            let Some(content) = render_node(&skill_id, &flow.flow_name) else {
-                continue;
-            };
-            for entry in flow.related_entries {
-                entry_topics.insert(entry, flow.flow_name.clone());
-            }
-            topics.push(LuaSkillsHelpNode {
-                flow_name: flow.flow_name,
-                description: flow.description,
-                content,
-            });
-        }
-        trees.push(LuaSkillsHelpTree {
-            skill_id,
-            main: LuaSkillsHelpNode {
-                flow_name: descriptor.main.flow_name,
-                description: descriptor.main.description,
-                content: main_content,
-            },
-            topics,
-            entry_topics,
-        });
-    }
-    Ok((trees, warnings))
+        .collect();
+    skill.catalog.category_id = PLUGIN_CATEGORY_ID.into();
+    skill.origin.kind = "luaskills".into();
+    skill.origin.label = Some(package.skill_id.clone());
+    skill.origin.managed = true;
+    skill.activation = PromptSkillActivation::Always;
+    Ok(skill)
 }
 
 /// Call one LuaSkills runtime entry on a dedicated blocking thread and return the structured result.
@@ -332,6 +280,33 @@ pub async fn call_luaskills_tool_entry(
     tool_name: String,
     args: Value,
     invocation_context: Option<LuaInvocationContext>,
+) -> Result<RuntimeInvocationResult, String> {
+    invoke_luaskills_on_worker(handle, tool_name.clone(), move |engine| {
+        engine.call_skill(&tool_name, &args, invocation_context.as_ref())
+    })
+    .await
+}
+
+/// Revalidate and dispatch one implicit entry in the live LuaSkills engine.
+/// 在生效的 LuaSkills 引擎中重新校验并调度单个隐式入口。
+pub async fn call_implicit_luaskills_tool_entry(
+    handle: LuaSkillsRuntimeHandle,
+    entry: RuntimeEntryDescriptor,
+    args: Value,
+    invocation_context: Option<LuaInvocationContext>,
+) -> Result<RuntimeInvocationResult, String> {
+    invoke_luaskills_on_worker(handle, entry.public_tool_name(), move |engine| {
+        engine.call_implicit_skill(&entry, &args, invocation_context.as_ref())
+    })
+    .await
+}
+
+/// Run an invocation on the bounded worker under the same read generation used for validation.
+/// 在用于校验的同一读取加载代内，通过有界工作线程执行调用。
+async fn invoke_luaskills_on_worker(
+    handle: LuaSkillsRuntimeHandle,
+    tool_name: String,
+    invoke: impl FnOnce(&LuaEngine) -> Result<RuntimeInvocationResult, String> + Send + 'static,
 ) -> Result<RuntimeInvocationResult, String> {
     let operation_label = tool_name.clone();
     let admission = Arc::clone(&handle.skill_call_admission);
@@ -354,7 +329,7 @@ pub async fn call_luaskills_tool_entry(
         // invocation_started_at separates engine contention from time spent inside Lua or one host call.
         // invocation_started_at 将引擎竞争耗时与 Lua 或宿主调用内部耗时分离。
         let invocation_started_at = Instant::now();
-        let result = engine.call_skill(&tool_name, &args, invocation_context.as_ref());
+        let result = invoke(&engine);
         let invocation_elapsed_ms = invocation_started_at.elapsed().as_millis();
         if invocation_elapsed_ms >= 1_000 {
                 eprintln!(

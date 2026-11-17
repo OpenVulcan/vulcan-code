@@ -185,26 +185,23 @@ LuaSkills 技能列表仅对声明了配置的技能显示配置入口，并显�
 
 宿主固定使用 `mode=effective` 和 `include_values=false`。AI 不能通过该工具执行 `get`、`list`、`set`、`delete`、`refresh`，也不能读取敏感或非敏感的当前配置值。
 
-### 6.1 技能包帮助与调用说明
+### 6.1 包注册、介绍与随包提示词 Skill
 
-契约归属：帮助树形状以上游 `list_skill_help` / `render_skill_help_detail` 为准；宿主实现位于
-`luaskills_runtime.rs`（`render_luaskills_help_trees`）、`vulcan-luaskills-prompt` 与
-`tooling/bridge/luaskills_dispatch.rs`。上游帮助接口变化时回读源码同步本节。
+包注册的权威实现是上游 LuaSkills 的注册清单和加载代。已声明注册的包为工具指定显式或隐式默认方式，
+并声明默认语言、各语言的包介绍和随包指南。包介绍用于管理卡片，指南介绍用于包详情与提示词 Skill
+发现。语言选择复用共享语言匹配，缺译回退到包声明的默认语言。工具和指南标识与语言无关。
 
-- 入口到帮助主题的映射只取上游帮助节点的 `related_entries`，不得用入口名猜测主题；没有专属主题的
-  入口由 `main` 覆盖。帮助渲染失败作为基础架构警告暴露，不得静默吞掉。
-- 只要包内存在显式或隐式启用入口，就向开发者提示词注入该包的锁定片段：`main` 正文（超过
-  `LUASKILL_MAIN_HELP_INLINE_LIMIT_BYTES` 时只注入说明并指向 `luaskill_help`）、宿主生成的调用说明
-  （canonical 名到直接函数工具名的映射，以及经 `call_luaskill` 调用的隐式入口）和主题索引。调用说明
-  依据最终可见工具集生成。
-- 模型可见帮助工具只有 `luaskill_help`，不保留 `luaskill` 别名：`{skill}` 返回 `main` 与主题索引，
-  `{skill, topic}` 返回单个主题，`{name}` 返回入口的主题；隐式入口另附隐藏宿主管理字段后的参数 Schema。
-  参数帮助直接列出 Schema 的顶层属性，与 `call_luaskill` 的具名参数逐项对应；对象和数组内部仍按原层级展示。
-- 技能包作者编写的 `main` 与主题必须与调用方式无关：使用 canonical 入口名，不写宿主工具名、调度器
-  或注册方式，这些由宿主调用说明负责。
-- 随包引导配置 `config/luaskills_root_skills.yaml` 通过生效的 LuaSkills Hub 安装 `vulcan-work` 到 ROOT 层。
-  `PersistedLuaSkillsConfiguration::tool_registration_state` 按包标识为 `vulcan-work` 提供隐式注册默认值。
-  工具目录、直接注册和隐式调度共用该状态。缺省在内存中解析，已保存的显式注册或停用选择优先。
+开发联调使用包含包注册 API 的本地 LuaSkills 源码。当前登记的正式 0.9.0 尚无这些接口，正式构建须在上游发布后更新依赖版本与锁文件。
+
+- 旧包可以继续作为直接工具使用，旧帮助字段只为读取旧清单而接受。Vulcan Code 不注册
+  `luaskill_help`，也不将包正文或参数 Schema 注入开发者提示词。
+- 新包由运行时导出公开工具名和声明。包内入口保留连字符，对外用下划线。只有明确声明隐式的包才能走
+  `tool_call`。该入口使用随包指南名、动作名和 JSON 参数对象，沿用原 LuaSkills 权限及工具身份。参数经过宿主管理字段注入后，由上游在进入 Lua 前校验。
+- 随包指南从已声明的 `skills/<name>/SKILL.md` 注册到提示词 Skill 目录。请求只携带发现描述，
+  模型通过 `skill` 按需读取正文、示例和具体说明。
+
+本地联调可通过 Cargo `--config` 为注册表依赖指定上游工作区覆盖。公开版本号保持原样，联调通过后
+再决定版本和发布方式。
 
 ## 7. 配置缺失处理
 

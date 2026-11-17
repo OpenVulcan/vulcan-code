@@ -20,9 +20,11 @@ Hook 字段直接引用 `vulcan-hooks` 的生产枚举，运行时枚举直接�
 - [无状态工具复用声明](plugin-tool-reuse.schema.json)；
 - [声明式设置版面](plugin-settings-layout.schema.json)，即 `kind: settings` 挂载入口文件的结构。
 
-Lua 工具可用 `prompt_skill` 指向本包 `skills/` 下的技能名。声明后，工具仍按原有插件组、会话工具策略与计划模式约束解析，模型通过 `skill` 查看允许的动作及输入 Schema，再用 `plugin_call` 调用。调用执行原始插件工具的权限检查和参数校验。当前内置 Context7 使用这条路径。
+Lua 工具可用 `prompt_skill` 指向本包 `skills/` 下的技能名。声明后，工具仍按原有插件组、会话工具策略与计划模式约束解析，模型通过 `skill` 查看允许的动作及输入 Schema，再用 `tool_call` 调用。调用执行原始插件工具的权限检查和参数校验。当前内置 Context7 使用这条路径。
 
 内置浏览器的会话 MCP 使用 `mcp.servers[].prompt_tools`。其中 `actions` 与 `core_actions` 声明技能内短名和精确原工具名，`schema_file` 引用固定 Playwright 版本的原始 `tools/list` 快照。升级 Playwright 时同步生成快照，运行时校验固定包版本与实际连接上的 Schema。普通请求与读取技能都不启动 Playwright。页面动作在工具批次准备时绑定会话当前浏览器选择，切换后旧调用被拒绝。注册与执行 Hook、权限和工具卡仍使用原始工具身份。
+
+浏览器技能有可执行动作时，当前请求的动态指引说明先读技能，再用 `tool_call` 调用短动作。继续旧会话时沿用已锁定的系统前缀，同时同步这条当前指引。Playwright 连接由宿主按需管理，会话临时 MCP 列表不承担浏览器发现。
 
 这些文件描述全部字段、枚举、字段存在性、类型及版本组合，不是插件激活许可。
 跨字段数值关系、唯一身份、支持的后端、资源文件、授权、宿主预算及实时回调仍由生产 Rust 校验。

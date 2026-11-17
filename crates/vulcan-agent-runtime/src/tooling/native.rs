@@ -594,7 +594,7 @@ pub fn build_native_tool_catalog(
         build_memory_search_tool(),
         build_memory_write_tool(),
         build_prompt_skill_detail_tool(),
-        build_plugin_call_tool(),
+        build_tool_call_tool(),
         build_shell_command_tool(shell_support.clone(), plugin_runtime, rtk.clone()),
         build_shell_job_tool(),
         build_terminal_session_tool(

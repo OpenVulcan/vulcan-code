@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "展開",
   "composer.slash.panel": "スラッシュコマンド",
   "composer.mention.panel": "このプロジェクトのファイル",
+  "composer.mention.references": "スキルとワークスペースのファイル",
   "composer.slash.model": "現在のモデルを選択",
   "composer.slash.reasoning": "思考レベルを選択",
   "composer.slash.compact": "会話コンテキストを今すぐ圧縮",

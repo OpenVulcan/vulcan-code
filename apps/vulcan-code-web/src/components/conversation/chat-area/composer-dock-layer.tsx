@@ -1,4 +1,7 @@
 import React from "react";
+import { useI18n } from "@/i18n";
+import { localizedPluginText } from "@/components/features/skills/plugin-localized-text";
+import type { ComposerShortcut } from "@/components/composer/composer-panel/use-composer-path-mention";
 import {
   ComposerDock,
   composerAttachmentMedia,
@@ -85,6 +88,9 @@ function composerDockInputs(props: ChatAreaComposerDockLayerProps) {
     voiceInput: workbench.voiceInput,
     projects: workbench.projects,
     slashCommands: workbench.composerSlashCommands,
+    shortcutAgentSkills: workbench.agentSkills?.records,
+    shortcutLuaSkills: workbench.luaSkills?.skills,
+    shortcutPlugins: workbench.plugins,
     contextUsage: workbench.contextUsage,
     sessionProviderUsage: workbench.sessionProviderUsage,
     contextCompactionWindowNodes: workbench.contextCompactionWindowNodes,
@@ -146,6 +152,29 @@ export function composerDockLayerPropsEqual(previous: ChatAreaComposerDockLayerP
 function ChatAreaComposerDockLayerView(props: ChatAreaComposerDockLayerProps) {
   const inputs = composerDockInputs(props);
   const draft = inputs.draft;
+  // The workbench provides enabled identities; labels only help the user find them.
+  // 工作台提供已启用标识，显示名称只用于帮助用户查找。
+  const { locale } = useI18n();
+  const shortcuts = React.useMemo(() => {
+    const rows: ComposerShortcut[] = [];
+    for (const skill of inputs.shortcutAgentSkills ?? []) {
+      if (!skill.effective || !skill.enabled) continue;
+      rows.push({ kind: "skill", name: skill.name, label: skill.locales[locale]?.displayName ?? skill.displayName });
+    }
+    for (const skill of inputs.shortcutLuaSkills ?? []) {
+      if (!skill.enabled || !skill.registration) continue;
+      const registration = skill.registration;
+      for (const [guide, locales] of Object.entries(registration.promptSkills)) {
+        const name = `luaskills-${skill.skillId}:${guide}`;
+        rows.push({ kind: "skill", name, label: locales[locale]?.title ?? locales[registration.defaultLocale]?.title ?? guide });
+      }
+    }
+    for (const plugin of inputs.shortcutPlugins ?? []) {
+      if (!plugin.enabled || !plugin.available) continue;
+      rows.push({ kind: "plugin", name: plugin.id, label: localizedPluginText(plugin.nameByLocale, locale, plugin.name) });
+    }
+    return rows;
+  }, [inputs.shortcutAgentSkills, inputs.shortcutLuaSkills, inputs.shortcutPlugins, locale]);
   // Resolve visibility from the local session/project; another client may own the shared snapshot selection.
   // 从本地会话/项目解析可见性；共享快照的选择可能由另一客户端持有。
   const memoryEnabled = props.conversationId
@@ -168,6 +197,7 @@ function ChatAreaComposerDockLayerView(props: ChatAreaComposerDockLayerProps) {
       conversationId={props.conversationId}
       workspacePath={inputs.projects.find((project) => project.id === props.projectId)?.path ?? null}
       slashCommands={inputs.slashCommands ?? []}
+      shortcuts={shortcuts}
       contextUsage={props.isEmptyConversation ? null : inputs.contextUsage ?? null}
       sessionProviderUsage={props.isEmptyConversation ? null : inputs.sessionProviderUsage ?? null}
       contextCompactionWindowNodes={inputs.contextCompactionWindowNodes ?? []}

@@ -2168,6 +2168,36 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
     // 使工具注册与生命周期目录变更保持有序，让每个响应都投影同一个一致领域。
     run_luaskills_management_owned("set skill tool registration", move || async move {
         let next_state = parse_luaskill_tool_registration_state(&registration_state)?;
+        // Use the active catalog to confirm the entry and its owning package declaration.
+        // 使用生效目录确认入口及其所属包声明。
+        let default_implicit = {
+            let guard = state.lock().map_err(|error| error.to_string())?;
+            let catalog =
+                crate::workspace_persistence_versions::cached_luaskills_catalog_from_state(&guard);
+            let package = catalog
+                .skills
+                .iter()
+                .find(|item| item.skill_id == skill_id)
+                .ok_or_else(|| format!("Unknown LuaSkills package {skill_id}"))?;
+            if !package
+                .tools
+                .iter()
+                .any(|entry| entry.local_name == local_name)
+            {
+                return Err(format!("Unknown LuaSkills entry {skill_id}/{local_name}"));
+            }
+            package
+                .registration
+                .as_ref()
+                .is_some_and(|value| value.mode == luaskills::SkillRegistrationMode::Implicit)
+        };
+        if next_state == crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit
+            && !default_implicit
+        {
+            return Err(format!(
+                "LuaSkills package {skill_id} does not declare implicit registration."
+            ));
+        }
         mutate_provider_configuration(
             &state,
             "Failed to save the LuaSkills tool registration",
@@ -2176,6 +2206,7 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
                     &skill_id,
                     &local_name,
                     next_state,
+                    default_implicit,
                 );
                 Ok(())
             },
@@ -2235,6 +2266,11 @@ pub(crate) async fn service_save_agent_skill(
     }
     let (user_root, system_root) = configured_agent_skill_roots(&state)?;
     let name = require_canonical_agent_skill_name(&request.name)?.to_string();
+    if name == vulcan_prompt_skills::SESSION_MCP_SKILL_NAME {
+        return Err(String::from(
+            "The session-mcp name is reserved for a core Agent Skill.",
+        ));
+    }
     let original_name = request
         .original_name
         .as_deref()
@@ -3135,6 +3171,17 @@ fn reject_plugin_skill_mutation(
     state: &SharedServiceBridgeState,
     skill_identity: &str,
 ) -> Result<(), String> {
+    // Protect the reserved core guide from configuration and source mutations.
+    // 保护保留的核心指南，防止配置或来源变更。
+    if skill_identity
+        .strip_prefix("system:")
+        .unwrap_or(skill_identity)
+        == vulcan_prompt_skills::SESSION_MCP_SKILL_NAME
+    {
+        return Err(String::from(
+            "The session-mcp Agent Skill is managed by the core runtime.",
+        ));
+    }
     // Plugin skill names always contain the manifest-defined namespace separator after any source-key prefix.
     // 插件技能名称在可选来源键前缀之后始终包含清单定义的命名空间分隔符。
     let canonical_name = skill_identity

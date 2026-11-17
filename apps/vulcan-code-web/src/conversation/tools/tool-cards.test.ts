@@ -404,3 +404,19 @@ describe("tool requests still being written", () => {
   });
 });
 
+
+// Unified call cards keep the original connection and Office tool identities.
+// 统一调用卡保留原连接工具与 Office 工具身份。
+it("projects unified connection and Office calls to the original cards", () => {
+  const connection = readToolCall(toolEvent("tool_call", {
+    skill: "session-mcp", action: "mcp_connect", arguments: { action: "status" },
+  }));
+  expect(connection.name).toBe("mcp_connect");
+  expect(connection.input).toEqual({ action: "status" });
+  const office = readToolCall(toolEvent("tool_call", {
+    skill: "luaskills-vulcan-work:office-workflow",
+    action: "vulcan_work_pdf_inspect", arguments: { path: "doc.pdf" },
+  }));
+  expect(office.name).toBe("vulcan_work_pdf_inspect");
+  expect(office.input).toEqual({ path: "doc.pdf" });
+});

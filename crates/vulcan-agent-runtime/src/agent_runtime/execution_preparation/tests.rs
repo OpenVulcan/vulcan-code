@@ -1,7 +1,7 @@
 use super::tool_exposure::{
     ExecutionToolExposureSelection, ToolExposureSelectorState, filter_luaskills_entries,
     filter_native_tool_ids, filter_resolved_tool_set_by_tool_exposure,
-    retain_visible_luaskill_help_packages, vulcan_tool_descriptor_is_visible,
+    vulcan_tool_descriptor_is_visible,
 };
 use super::{append_vulcan_plugin_prompt_contributions, prepare_execution_with_tool_snapshot};
 use crate::agent_profile::AgentProfileCatalog;
@@ -15,6 +15,7 @@ use crate::mcp::configured_mcp_runtime_access;
 use crate::provider_config::{
     ProjectPromptSkillsConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
 };
+use crate::tooling::native::TOOL_CALL_TOOL_ID;
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, KNOWLEDGE_LIST_TOOL_ID, KNOWLEDGE_READ_TOOL_ID,
     KNOWLEDGE_SEARCH_TOOL_ID, KNOWLEDGE_WRITE_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
@@ -26,14 +27,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_hooks::{SystemPromptHookBlock, SystemPromptHookPhase};
-use vulcan_luaskills_prompt::{LuaSkillPackageHelp, LuaSkillPromptEntry, LuaSkillRegistration};
 use vulcan_plugin_runtime::{VulcanPluginCatalogSnapshot, VulcanPluginPromptContribution};
 use vulcan_prompt_composer::PromptBaselineKind;
 use vulcan_session_core::{
     CapabilityPolicyMode, CapabilityPolicySnapshot, ExecutionRuntimePolicy, ExecutionScope,
     SessionNodeId, ToolExposureSnapshot,
 };
-use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
     ResolvedToolDefinition, ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolDescriptor,
     VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
@@ -118,55 +117,6 @@ fn subagent_policy_controls_registration_and_model_availability() {
                 .any(|descriptor| descriptor.id == "ask")
         );
     }
-}
-
-/// Verifies visible CodeKit entries inject the package main help with its stable provenance; returns no value.
-/// 验证可见的 CodeKit 入口按稳定来源标识注入包主帮助；无参数与返回值。
-#[test]
-fn visible_codekit_injects_package_main_help() {
-    // A fixture marker proves the main-help payload reaches the prompt without freezing published wording.
-    // 夹具标识证明主帮助载荷进入提示词，不绑定已发布文案。
-    let package = LuaSkillPackageHelp::new(
-        "vulcan-codekit",
-        "",
-        "codekit_main_help_fixture",
-        Vec::new(),
-        vec![LuaSkillPromptEntry::new(
-            "vulcan-codekit-rg",
-            "",
-            LuaSkillRegistration::Direct,
-        )],
-    );
-    // The descriptor uses the same LuaSkills origin identity as real registered entries.
-    // 描述符使用真实注册入口相同的 LuaSkills 来源身份。
-    let visible = test_resolved_tool("vulcan-codekit-rg", VulcanToolSourceKind::LuaSkills);
-    // Collect only the package contribution produced by the request assembly helper.
-    // 仅收集请求组装辅助函数产生的包贡献。
-    let mut segments = Vec::new();
-    super::append_luaskill_package_segments(
-        &mut segments,
-        std::slice::from_ref(&package),
-        &[visible.descriptor],
-    );
-    // Locate by producer identity so unrelated future contributions cannot shift the assertion.
-    // 按生产者身份定位，防止后续无关贡献增删导致断言位置漂移。
-    let injected = segments
-        .iter()
-        .find(|segment| {
-            segment
-                .baseline_provenance
-                .as_ref()
-                .is_some_and(|provenance| {
-                    provenance.kind == PromptBaselineKind::PromptSkillInjection
-                        && provenance.source_id == "luaskills/vulcan-codekit"
-                })
-        })
-        .expect("visible CodeKit must inject its package main help");
-    assert!(injected.body.contains(&package.main_content));
-
-    segments.clear();
-    super::append_luaskill_package_segments(&mut segments, &[package], &[]);
-    assert!(segments.is_empty());
 }
 
 /// Plugin prompt contributions retain one producer identity per contribution.
@@ -301,7 +251,7 @@ fn execution_prompt_skill_policy_blocks_unselected_global_skills() {
             .preparation
             .tool_descriptors
             .iter()
-            .all(|descriptor| descriptor.id != "skill")
+            .any(|descriptor| descriptor.id == "skill")
     );
 }
 
@@ -473,64 +423,6 @@ fn execution_tool_exposure_keeps_luaskills_file_tools_before_migration_gate() {
     assert_eq!(filtered[5].canonical_name, "vulcan-file-tools-readme");
 }
 
-/// Verifies LuaSkills family overrides limit package help trees to the visible entries.
-/// 验证 LuaSkills 族覆盖会将包帮助树限定为可见入口。
-#[test]
-fn execution_tool_exposure_limits_luaskill_help_packages_to_visible_entries() {
-    let snapshot = ToolExposureSnapshot {
-        luaskills_overrides: json!({
-            "enabled": ["vulcan-codekit-rg"],
-            "disabled": ["ast-detail"]
-        }),
-        ..ToolExposureSnapshot::default()
-    };
-    let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
-    let visible = filter_luaskills_entries(
-        vec![
-            test_luaskills_entry("vulcan-codekit", "rg"),
-            test_luaskills_entry("vulcan-codekit", "ast-detail"),
-            test_luaskills_entry("vulcan-curl", "get"),
-        ],
-        &selectors,
-    );
-    let package = |skill_id: &str, local_names: &[&str]| {
-        LuaSkillPackageHelp::new(
-            skill_id,
-            "",
-            "",
-            Vec::new(),
-            local_names
-                .iter()
-                .map(|local_name| {
-                    LuaSkillPromptEntry::new(
-                        format!("{skill_id}-{local_name}"),
-                        "",
-                        LuaSkillRegistration::Direct,
-                    )
-                })
-                .collect(),
-        )
-    };
-
-    let retained = retain_visible_luaskill_help_packages(
-        vec![
-            package("vulcan-codekit", &["rg", "ast-detail"]),
-            package("vulcan-curl", &["get"]),
-        ],
-        &visible,
-        &[],
-    );
-
-    assert_eq!(retained.len(), 1);
-    assert_eq!(retained[0].skill_id, "vulcan-codekit");
-    let names = retained[0]
-        .entries
-        .iter()
-        .map(|entry| entry.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(names, vec!["vulcan-codekit-rg"]);
-}
-
 /// Verifies legacy global tool allow-lists do not hide configured AI fallback tools.
 /// 验证旧版全局工具白名单不会隐藏已配置的 AI 回退工具。
 #[test]
@@ -575,8 +467,7 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
     let shell_tool = test_resolved_tool("shell_command", VulcanToolSourceKind::Native);
     // Candidate LuaSkills dispatcher expected to survive because the family allow-list needs it.
     // 由于 LuaSkills 族允许列表需要调度器，预期在过滤后保留的调度工具候选。
-    let luaskills_dispatcher =
-        test_resolved_tool(CALL_LUASKILL_TOOL_NAME, VulcanToolSourceKind::Native);
+    let luaskills_dispatcher = test_resolved_tool(TOOL_CALL_TOOL_ID, VulcanToolSourceKind::Native);
     // Candidate ask tool expected to be removed by the legacy global allow-list.
     // 预期会被旧版全局允许列表移除的 ask 工具候选。
     let ask_tool = test_resolved_tool("ask", VulcanToolSourceKind::Native);
@@ -592,7 +483,6 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
         native_tool_ids: Vec::new(),
         luaskills_tools: Vec::new(),
         luaskills_dispatch_tools: vec![test_luaskills_entry("vulcan-codekit", "rg")],
-        luaskill_help_packages: Vec::new(),
         mcp_tools: Vec::new(),
         selectors,
         native_tool_warnings: Vec::new(),
@@ -605,7 +495,7 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
         .iter()
         .map(|definition| definition.descriptor.id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(remaining, vec!["shell_command", CALL_LUASKILL_TOOL_NAME]);
+    assert_eq!(remaining, vec!["shell_command", TOOL_CALL_TOOL_ID]);
     let remaining_descriptors = resolved
         .descriptors
         .iter()
@@ -613,7 +503,7 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
         .collect::<Vec<_>>();
     assert_eq!(
         remaining_descriptors,
-        vec!["shell_command", CALL_LUASKILL_TOOL_NAME]
+        vec!["shell_command", TOOL_CALL_TOOL_ID]
     );
 }
 
@@ -1120,6 +1010,7 @@ fn test_provider_config() -> ProviderConfigurationFile {
 /// 验证已启用的浏览器在普通准备中仅发布技能入口。
 #[test]
 fn browser_uses_packaged_skill_actions_without_mcp_discovery() {
+    use crate::agent_runtime::provider_runtime_context::build_runtime_prompt_layers_for_agent;
     use crate::tooling::native::{NativeBrowserRuntime, NativeBrowserSnapshot};
 
     /// A browser runtime that must stay idle throughout ordinary request preparation.
@@ -1187,7 +1078,7 @@ fn browser_uses_packaged_skill_actions_without_mcp_discovery() {
     assert!(
         published
             .iter()
-            .any(|tool| tool.descriptor.id == "plugin_call")
+            .any(|tool| tool.descriptor.id == "tool_call")
     );
     assert!(
         published
@@ -1213,6 +1104,47 @@ fn browser_uses_packaged_skill_actions_without_mcp_discovery() {
     assert!(
         manager
             .skill_action(skill, "browser_take_screenshot")
+            .is_none()
+    );
+
+    // Continued sessions consume dynamic instructions even when their original prefix is frozen.
+    // 续聊即便保留原来锁定的提示词前缀，也会收到动态指引。
+    let layers = build_runtime_prompt_layers_for_agent(&prepared.preparation, None).unwrap();
+    assert!(layers.dynamic_prompt_layers.developer.contains(skill));
+    assert!(layers.dynamic_prompt_layers.developer.contains("tool_call"));
+    assert!(
+        layers
+            .dynamic_prompt_layers
+            .developer
+            .contains("mcp_connect")
+    );
+    assert!(
+        !layers
+            .fixed_instruction_layers
+            .developer
+            .contains("tool_call")
+    );
+
+    // A request that filters the dispatcher must not advertise an unusable browser route.
+    // 请求过滤调度入口后，不能公布不可执行的浏览器入口。
+    request
+        .tool_request_hidden_tool_ids
+        .push(String::from("tool_call"));
+    let restricted =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    let restricted_layers =
+        build_runtime_prompt_layers_for_agent(&restricted.preparation, None).unwrap();
+    assert!(
+        !restricted_layers
+            .dynamic_prompt_layers
+            .developer
+            .contains(skill)
+    );
+    assert!(
+        restricted
+            .tool_snapshot
+            .tools_manager
+            .skill_action(skill, "open")
             .is_none()
     );
 }
@@ -1337,7 +1269,7 @@ async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
             round
                 .provider_tool_definitions
                 .iter()
-                .any(|tool| tool.name == "plugin_call")
+                .any(|tool| tool.name == "tool_call")
         );
         assert!(
             round
@@ -1388,7 +1320,7 @@ async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
     // Use a valid object whose fields belong to the original Context7 query schema.
     // 使用字段符合原 Context7 查询 Schema 的对象。
     let valid = json!({"skill": skill, "action": actions[1], "arguments": {"libraryId": "/react/react", "query": "How does useEffect work?"}});
-    assert!(invoke(1, "plugin_call", valid.clone()).await.is_error);
+    assert!(invoke(1, "tool_call", valid.clone()).await.is_error);
     // The first accepted request needs only the skill's discovered canonical name.
     // 首次获准的请求只需要发现的规范技能名。
     let preview = invoke(2, "skill", json!({"name": skill})).await;
@@ -1427,7 +1359,7 @@ async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
     // 原动作 Schema 在查询运行时前拒绝错误参数。
     let invalid = invoke(
         4,
-        "plugin_call",
+        "tool_call",
         json!({"skill": skill, "action": actions[1], "arguments": {"query": "useEffect"}}),
     )
     .await;
@@ -1437,7 +1369,7 @@ async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
     // 有效调用到达原插件边界并保留 Provider 调用身份。
     let result = invoke(
         5,
-        "plugin_call",
+        "tool_call",
         json!({
             "skill": skill, "action": discovered["action"], "arguments": valid["arguments"],
         }),
@@ -1448,32 +1380,32 @@ async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
             .model_output
             .contains("Vulcan Plugin runtime is unavailable")
     );
-    assert_eq!(result.tool_name, "plugin_call");
+    assert_eq!(result.tool_name, "tool_call");
     // A known action cannot be selected through a different skill or another native tool name.
     // 已知动作无法通过其他技能或另一原生工具名调用。
     assert!(
         invoke(
             6,
-            "plugin_call",
+            "tool_call",
             json!({"skill": skill, "action": "shell_command", "arguments": {}})
         )
         .await
         .is_error
     );
-    // Hiding the source tools also removes their dispatcher and discovery entry.
-    // 隐藏来源工具也会移除其调度入口与发现条目。
+    // Hiding the source tools removes only that package's actions and discovery entry.
+    // 隐藏来源工具只移除该包的动作与发现条目。
     request.tool_request_hidden_tool_ids = actions.into_iter().map(String::from).collect();
     // Reprepare from the same catalog under the scoped tool restriction.
     // 在限定工具限制下使用同一目录重新准备。
     let hidden =
         prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
-    assert!(
-        !hidden
-            .preparation
-            .tool_descriptors
-            .iter()
-            .any(|tool| tool.id == "plugin_call")
-    );
+    assert!(actions.iter().all(|action| {
+        hidden
+            .tool_snapshot
+            .tools_manager
+            .skill_action(skill, action)
+            .is_none()
+    }));
     assert!(
         !hidden
             .preparation
@@ -1499,13 +1431,24 @@ fn test_runtime_foundation_with_plugins(
     config: &ProviderConfigurationFile,
     plugins: Option<Arc<VulcanPluginCatalogSnapshot>>,
 ) -> RuntimeFoundation {
+    test_runtime_foundation_with_extensions(config, plugins, None, None)
+}
+
+/// Prepare an offline provider fixture with the supplied extension runtimes.
+/// 使用指定扩展运行时准备离线供应商测试夹具。
+fn test_runtime_foundation_with_extensions(
+    config: &ProviderConfigurationFile,
+    plugins: Option<Arc<VulcanPluginCatalogSnapshot>>,
+    luaskills: Option<crate::luaskills_runtime::LuaSkillsRuntimeHandle>,
+    skills: Option<Arc<vulcan_prompt_skills::PromptSkillCatalog>>,
+) -> RuntimeFoundation {
     // Build the transport snapshot with the same producer used by normal agent requests.
     // 使用正常代理请求采用的同一生产者构建传输快照。
     let generation = Arc::new(crate::agent_runtime::ExtensionGeneration::new(
         1,
         plugins,
         configured_mcp_runtime_access(config),
-        None,
+        skills,
     ));
     // Keep the model fixture independent of any running host or network client.
     // 使模型夹具独立于正在运行的宿主或网络客户端。
@@ -1513,7 +1456,7 @@ fn test_runtime_foundation_with_plugins(
         RuntimeFoundation::build_from_extension_generation_with_runtimes_and_plugins(
             config,
             &AgentProfileCatalog::default(),
-            None,
+            luaskills,
             None,
             generation,
             Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
@@ -1594,7 +1537,6 @@ fn test_exposure_with_selectors(
         native_tool_ids: Vec::new(),
         luaskills_tools: Vec::new(),
         luaskills_dispatch_tools: Vec::new(),
-        luaskill_help_packages: Vec::new(),
         mcp_tools: Vec::new(),
         selectors,
         native_tool_warnings: Vec::new(),
@@ -1752,4 +1694,232 @@ fn request_context_tool_preview_matches_prepared_tools_without_leasing() {
         assert_eq!(tool["name"], definition.descriptor.id);
         assert_eq!(tool["parameters"], definition.parameters_schema);
     }
+}
+
+/// Verifies the production request and tool invocation paths for one implicit package.
+/// 验证隐式包的生产请求和实际工具调用链路。
+#[tokio::test]
+async fn implicit_luaskills_registers_guide_and_dispatches_without_provider_schema() {
+    use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
+    use luaskills::{
+        LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig, RuntimeSkillRoot,
+    };
+    use std::{fs, sync::RwLock};
+    use vulcan_core::tool::VulcanToolExecutor;
+    use vulcan_core::types::ToolInvocationRequest;
+    use vulcan_session_core::v1::document::PreparedToolReceipt;
+    use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId, TurnId};
+    // The package is loaded through LuaSkills and has a real Lua handler.
+    // 包通过 LuaSkills 加载，并具有真实 Lua 处理器。
+    let temp = tempfile::tempdir().unwrap();
+    let roots = temp.path().join("skills");
+    let package = roots.join("vulcan-work");
+    fs::create_dir_all(package.join("runtime")).unwrap();
+    fs::create_dir_all(package.join("skills/office-workflow")).unwrap();
+    fs::write(
+        package.join("skill.yaml"),
+        r#"name: vulcan-work
+version: 0.1.0
+registration:
+  mode: implicit
+  default_locale: en-US
+  locales:
+    en-US: {title: Office, description: Office package}
+  prompt_skills:
+    - name: office-workflow
+      file: skills/office-workflow/SKILL.md
+      locales:
+        en-US: {title: Office guide, description: office_fixture_discovery}
+entries:
+  - name: pdf-inspect
+    description: Investigate a PDF.
+    lua_entry: runtime/ping.lua
+    lua_module: fixture.ping
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        fixture_path: {type: string}
+      required: [fixture_path]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        package.join("runtime/ping.lua"),
+        "return function(args) return args.fixture_path end",
+    )
+    .unwrap();
+    fs::write(package.join("skills/office-workflow/SKILL.md"),
+        "---\nname: office-workflow\ndescription: Fixture guide\n---\nfixture_guide_body vulcan_work_pdf_inspect",
+    ).unwrap();
+    // Load the root without relying on the installed desktop profile or an external provider.
+    // 加载根目录，无需已安装的桌面配置或外部供应商。
+    let mut engine = LuaEngine::new(LuaEngineOptions::new(
+        LuaVmPoolConfig {
+            min_size: 1,
+            max_size: 1,
+            idle_ttl_secs: 60,
+        },
+        LuaRuntimeHostOptions::default(),
+    ))
+    .unwrap();
+    let skill_roots = vec![RuntimeSkillRoot {
+        name: "ROOT".into(),
+        skills_dir: roots,
+    }];
+    engine.load_from_roots(&skill_roots).unwrap();
+    let handle = crate::luaskills_runtime::LuaSkillsRuntimeHandle::from_shared_engine(
+        Arc::new(RwLock::new(engine)),
+        temp.path().to_path_buf(),
+        skill_roots,
+        1,
+        Vec::new(),
+        false,
+        false,
+        1,
+        1,
+    );
+    let config = test_provider_config();
+    let foundation =
+        test_runtime_foundation_with_extensions(&config, None, Some(handle.clone()), None);
+    let request = test_execution_preparation_request();
+    let prepared =
+        prepare_execution_with_tool_snapshot(&foundation, Some(handle), &config, &request).unwrap();
+    // The ordinary request exposes one discovery description and no tool-specific schema or guide text.
+    // 普通请求只暴露一份发现说明，不携带工具专属 Schema 或指南正文。
+    let developer = prepared
+        .preparation
+        .additional_developer_segments
+        .iter()
+        .map(|segment| segment.body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(developer.matches("office_fixture_discovery").count(), 1);
+    assert!(!developer.contains("fixture_guide_body"));
+    let definitions = &prepared.tool_snapshot.resolved_tool_definitions;
+    assert!(
+        !definitions
+            .iter()
+            .any(|tool| tool.descriptor.id == "vulcan_work_pdf_inspect"
+                || tool.descriptor.id == "luaskill_help"
+                || tool.parameters_schema.to_string().contains("fixture_path"))
+    );
+    assert!(
+        definitions
+            .iter()
+            .any(|tool| tool.descriptor.id == TOOL_CALL_TOOL_ID)
+    );
+    assert!(
+        !definitions
+            .iter()
+            .any(|tool| tool.descriptor.id == "call_luaskill")
+    );
+    let runtime = prepare_host_tool_runtime_context(
+        prepared.tool_snapshot.tools_manager,
+        definitions,
+        request.session_id,
+        &prepared.preparation.execution_mode,
+        foundation.task_runtime(),
+    );
+    // Use the model executor so both skill discovery and target identity are exercised.
+    // 使用模型执行器，验证技能发现与目标身份。
+    let invoke = |number, name: &str, arguments| {
+        let bridge = runtime.runtime_bridge.as_ref();
+        let call = ToolInvocationRequest {
+            request_stream_id: format!("office-skill-stream-{number}"),
+            tool_call_id: format!("office-skill-call-{number}"),
+            tool_name: name.to_owned(),
+            arguments,
+            argument_parse_error: None,
+            raw_arguments: Default::default(),
+            user_request: Default::default(),
+        };
+        bridge
+            .install_prepared_invocation_identities(
+                std::slice::from_ref(&call),
+                vec![PreparedToolReceipt {
+                    turn_id: TurnId::try_new(1).unwrap(),
+                    api_call_id: ApiCallId::try_new(number).unwrap(),
+                    tool_call_id: ToolCallId::try_new(number).unwrap(),
+                    tool_seq: Seq::try_new(number).unwrap(),
+                    request_stream_id: RequestStreamId::try_new(call.request_stream_id.clone())
+                        .unwrap(),
+                }],
+            )
+            .unwrap();
+        async move { bridge.execute_tool(&call).await.unwrap() }
+    };
+    let call = json!({
+        "skill": "luaskills-vulcan-work:office-workflow",
+        "action": "vulcan_work_pdf_inspect",
+        "arguments": {"fixture_path": "office_fixture_pdf"}
+    });
+    assert!(invoke(1, TOOL_CALL_TOOL_ID, call.clone()).await.is_error);
+    let guide = invoke(
+        2,
+        "skill",
+        json!({"name":"luaskills-vulcan-work:office-workflow"}),
+    )
+    .await;
+    assert!(guide.model_output.contains("fixture_guide_body"));
+    assert!(guide.model_output.contains("vulcan_work_pdf_inspect"));
+    assert!(!guide.model_output.contains("input_schema"));
+    let output = invoke(3, TOOL_CALL_TOOL_ID, call).await;
+    assert!(!output.is_error, "{}", output.model_output);
+    assert!(output.model_output.contains("office_fixture_pdf"));
+}
+
+/// Verifies the core Skill and hidden native MCP connection keep their original policies.
+/// 验证核心 Skill 和隐藏原生 MCP 连接保留原有策略。
+#[test]
+fn session_mcp_connection_uses_core_skill_and_original_plan_policy() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vulcan-prompt-skills/src/assets/system");
+    let user = tempfile::tempdir().unwrap();
+    let catalog = vulcan_prompt_skills::load_prompt_skills_from_roots(path, user.path().to_owned());
+    let config = test_provider_config();
+    let foundation =
+        test_runtime_foundation_with_extensions(&config, None, None, Some(Arc::new(catalog)));
+    let mut request = test_execution_preparation_request();
+    request.execution_mode = "Plan".to_owned();
+    request.prompt = "Inspect @session-mcp before deciding.".to_owned();
+    request
+        .tool_request_hidden_tool_ids
+        .push("skill".to_owned());
+    let result =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    let ids = result
+        .tool_snapshot
+        .resolved_tool_definitions
+        .iter()
+        .map(|definition| definition.descriptor.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"skill"));
+    assert!(ids.contains(&TOOL_CALL_TOOL_ID));
+    assert!(!ids.contains(&"mcp_connect"));
+    let action = result
+        .tool_snapshot
+        .tools_manager
+        .skill_action("session-mcp", "mcp_connect")
+        .unwrap();
+    assert_eq!(action.descriptor.id, "mcp_connect");
+    assert!(vulcan_tools_manager::VulcanToolsManager::plan_mode_blocks(
+        action,
+        &json!({"action":"connect", "transport":"stdio", "command":"fixture"}),
+        "Plan"
+    ));
+    assert!(!vulcan_tools_manager::VulcanToolsManager::plan_mode_blocks(
+        action,
+        &json!({"action":"status"}),
+        "Plan"
+    ));
+    assert!(
+        result
+            .preparation
+            .additional_developer_segments
+            .iter()
+            .any(|segment| segment
+                .body
+                .contains("The user referenced these enabled skills: session-mcp."))
+    );
 }

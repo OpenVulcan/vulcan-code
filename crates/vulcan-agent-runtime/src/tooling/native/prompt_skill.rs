@@ -1,21 +1,21 @@
 use super::*;
 
-/// Stable model-facing name for the plugin action dispatcher.
-/// 插件动作调度入口的稳定模型工具名。
-pub(crate) const PLUGIN_CALL_TOOL_ID: &str = "plugin_call";
+/// Stable model-facing name for the skill action dispatcher.
+/// 技能动作调度入口的稳定模型工具名。
+pub(crate) const TOOL_CALL_TOOL_ID: &str = "tool_call";
 
-/// Builds the shared declaration for calling a plugin tool listed by `skill`.
-/// 构建调用 `skill` 所列插件工具的共享声明。
+/// Builds the shared declaration for calling a tool listed by `skill`.
+/// 构建调用 `skill` 所列工具的共享声明。
 /// The returned definition is executed by the bridge to apply the target tool's own policy.
 /// 返回的定义由桥接层执行，以便使用目标工具自身的策略。
-pub(crate) fn build_plugin_call_tool() -> Arc<NativeToolDefinition> {
+pub(crate) fn build_tool_call_tool() -> Arc<NativeToolDefinition> {
     // The bridge resolves the concrete action before approval and dispatch.
     // 桥接层在审批与调度前解析具体动作。
     let descriptor = NativeToolDescriptor {
-        id: String::from(PLUGIN_CALL_TOOL_ID),
-        name: String::from(PLUGIN_CALL_TOOL_ID),
+        id: String::from(TOOL_CALL_TOOL_ID),
+        name: String::from(TOOL_CALL_TOOL_ID),
         description: String::from(
-            "Call a plugin action advertised by an enabled prompt skill. First read the skill with `skill` and use the exact action name and argument schema returned by it.",
+            "Call an action advertised by an enabled skill. First read the skill with `skill` and use the exact action name and argument schema returned by it.",
         ),
         help_text: None,
         ai_visible: true,
@@ -33,21 +33,15 @@ pub(crate) fn build_plugin_call_tool() -> Arc<NativeToolDefinition> {
             "required": ["skill", "action", "arguments"],
             "additionalProperties": false
         }),
-        |_| {
-            Box::pin(async {
-                Err(NativeToolError::new(
-                    "Plugin actions require host dispatch.",
-                ))
-            })
-        },
+        |_| Box::pin(async { Err(NativeToolError::new("Skill actions require host dispatch.")) }),
     )
 }
 
-/// Envelope from the model naming one plugin action and its exact argument object.
-/// 模型用于指明单个插件动作和精确参数对象的调用封装。
+/// Envelope from the model naming one skill action and its exact argument object.
+/// 模型用于指明单个技能动作和精确参数对象的调用封装。
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PluginCallArguments {
+pub(crate) struct ToolCallArguments {
     /// Namespaced skill name from the enabled skill catalog.
     /// 已启用技能目录中的命名空间技能名。
     pub skill: String,
@@ -66,7 +60,7 @@ pub(crate) fn build_prompt_skill_detail_tool() -> Arc<NativeToolDefinition> {
         id: String::from("skill"),
         name: String::from("skill"),
         description: String::from(
-            "Load the full SKILL.md instructions for one enabled prompt skill by name. Use this before applying a listed prompt skill.",
+            "Load an enabled prompt skill by its exact name from the available skills list. Call this before choosing generic tools when a listed skill matches the task.",
         ),
         help_text: None,
         ai_visible: true,

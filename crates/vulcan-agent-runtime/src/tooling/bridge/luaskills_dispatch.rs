@@ -3,39 +3,9 @@
 
 use super::*;
 
-/// Builds the AI-visible LuaSkills help tool over the help trees of every enabled package.
-/// 基于每个已启用包的帮助树构建 AI 可见的 LuaSkills 帮助工具。
-pub(super) fn build_luaskills_help_candidate(
-    packages: Vec<LuaSkillPackageHelp>,
-) -> VulcanToolCandidate {
-    let packages = Arc::new(packages);
-    VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor::new(
-            LUASKILL_HELP_TOOL_NAME,
-            LUASKILL_HELP_TOOL_NAME,
-            String::from(
-                "Read help for enabled LuaSkills packages. {skill} returns the package guide and topic index; {skill, topic} returns one topic; {name} returns the help of one entry by complete canonical name, plus its argument schema when the entry is implicit and called through call_luaskill.",
-            ),
-            None,
-            VulcanToolOrigin::new(
-                VulcanToolSourceKind::Native,
-                "native",
-                LUASKILL_HELP_TOOL_NAME,
-            ),
-        ),
-        parameters_schema: luaskill_help_args_schema(),
-        ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::Visible,
-        request_streaming: None,
-        invoke: Arc::new(move |args, _session_id| {
-            let packages = Arc::clone(&packages);
-            Box::pin(async move { execute_luaskills_help_tool(packages, args).await })
-        }),
-    }
-}
-
 /// Builds the AI-visible LuaSkills dispatcher used for host-side implicit entry calls.
 /// 构建 AI 可见的 LuaSkills 调度器，用于宿主侧隐式入口调用。
+#[cfg(test)]
 pub(super) fn build_luaskills_dispatch_candidate(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
@@ -52,11 +22,12 @@ pub(super) fn build_luaskills_dispatch_candidate(
     // 计划模式放行一次调度，当且仅当同一入口被直接调用时也会放行：内置只读入口，以及名称表现为只读的入口。
     let plan_readable_entries = dispatch_entries
         .iter()
-        .map(|entry| entry.canonical_name.clone())
-        .filter(|name| {
-            crate::agent_runtime::tool_permission::builtin_luaskills::is_read_only_entry(name)
-                || vulcan_tools_manager::text_looks_read_only(name)
+        .filter(|entry| {
+            crate::agent_runtime::tool_permission::builtin_luaskills::is_read_only_entry(
+                &entry.canonical_name,
+            ) || vulcan_tools_manager::text_looks_read_only(&entry.canonical_name)
         })
+        .map(RuntimeEntryDescriptor::public_tool_name)
         .collect::<Vec<_>>();
     let dispatch_entries = Arc::new(dispatch_entries);
     VulcanToolCandidate {
@@ -64,7 +35,7 @@ pub(super) fn build_luaskills_dispatch_candidate(
             CALL_LUASKILL_TOOL_NAME,
             CALL_LUASKILL_TOOL_NAME,
             String::from(
-                "Call one enabled LuaSkills entry by its complete canonical tool name with compact argument pairs. Use this dispatcher for implicit LuaSkills entries that are not registered as direct function tools.",
+                "Call an implicit LuaSkills tool by the public name and argument pairs from its bundled prompt skill. Read the prompt skill before calling.",
             ),
             Some(CALL_LUASKILL_USAGE_MD.trim().to_string()),
             VulcanToolOrigin::new(
@@ -98,21 +69,9 @@ pub(super) fn build_luaskills_dispatch_candidate(
     }
 }
 
-/// Executes the LuaSkills help tool over one request-scoped package snapshot.
-/// 基于单份请求级包快照执行 LuaSkills 帮助工具。
-async fn execute_luaskills_help_tool(
-    packages: Arc<Vec<LuaSkillPackageHelp>>,
-    args: Value,
-) -> Result<VulcanToolInvocationResult, String> {
-    let request = parse_luaskill_help_request(&args)?;
-    let output = render_luaskill_help_output(&request, &packages)?;
-    Ok(VulcanToolInvocationResult::from_model_output(
-        Value::String(output),
-    ))
-}
-
 /// Executes one LuaSkills entry through the compact host-side dispatcher.
 /// 通过紧凑的宿主侧调度器执行单个 LuaSkills 入口。
+#[cfg(test)]
 async fn execute_luaskills_dispatch_tool(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
@@ -126,26 +85,20 @@ async fn execute_luaskills_dispatch_tool(
         ));
     };
     let request = parse_call_luaskill_request(args)?;
-    let entry_views = dispatch_entries
+    // Resolve the public name only against targets retained for this specific request.
+    // 仅在当前请求保留的目标中解析公开名称。
+    let entry = dispatch_entries
         .iter()
-        .map(luaskills_entry_to_call_view)
-        .collect::<Vec<_>>();
-    let Some(entry_view) = resolve_call_luaskill_entry_by_name(&entry_views, &request.name) else {
-        return Err(format!(
-            "LuaSkills entry `{}` is not available for host dispatch. It may be disabled, not installed, or not enabled in the current runtime.",
-            request.name
-        ));
-    };
-    let Some(entry) = dispatch_entries
-        .iter()
-        .find(|entry| entry.canonical_name == entry_view.canonical_name)
-    else {
-        return Err(format!(
-            "LuaSkills entry `{}` disappeared from the dispatch snapshot.",
-            request.name
-        ));
-    };
-
+        .find(|entry| entry.public_tool_name() == request.name)
+        .ok_or_else(|| {
+            format!(
+                "LuaSkills entry {} is not available for implicit dispatch.",
+                request.name
+            )
+        })?;
+    // Keep the canonical identity for host injection, permissions and the actual Lua invocation.
+    // 主机参数注入、权限与实际 Lua 调用继续使用规范标识。
+    let entry_view = luaskills_entry_to_call_view(entry);
     let request_args = restore_call_luaskill_args_for_entry(request.args, entry_view)?;
     let entry_declares_luaskill_sid = entry_declares_luaskill_sid(entry);
     let entry_declares_pwd = entry_declares_pwd(entry);
@@ -169,9 +122,9 @@ async fn execute_luaskills_dispatch_tool(
         "call-luaskill",
         &entry.canonical_name,
     );
-    let result = match call_luaskills_tool_entry(
+    let result = match crate::luaskills_runtime::call_implicit_luaskills_tool_entry(
         handle.clone(),
-        entry.canonical_name.clone(),
+        entry.clone(),
         call_args,
         Some(invocation_context),
     )
@@ -202,6 +155,7 @@ async fn execute_luaskills_dispatch_tool(
 
 /// Converts one LuaSkills runtime entry into the shared dispatcher entry view.
 /// 将单个 LuaSkills 运行时入口转换为共享调度器入口视图。
+#[cfg(test)]
 pub(super) fn luaskills_entry_to_call_view(
     entry: &RuntimeEntryDescriptor,
 ) -> LuaSkillCallEntryView<'_> {

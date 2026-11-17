@@ -639,3 +639,37 @@ it("keeps a new conversation's pending stop locked when the old conversation fin
   await act(async () => finishB(true));
   expect(host.querySelector<HTMLButtonElement>('[aria-label="composer.aria.stop"]')?.disabled).toBe(false);
 });
+
+// Keyboard and pointer selection insert stable references into the actual composer draft.
+// 键盘和鼠标选择把稳定引用插入实际输入草稿。
+it("offers skill and plugin shortcuts and inserts references without sending", async () => {
+  const props = composerProps({
+    isConversationRunning: false,
+    workspacePath: null,
+    shortcuts: [
+      { kind: "skill", name: "session-mcp", label: "Session MCP" },
+      { kind: "plugin", name: "context7", label: "Context7 Docs" },
+    ],
+  });
+  await mount(props);
+  const field = host.querySelector<HTMLTextAreaElement>("textarea")!;
+  // Typing through a native setter triggers React's input event and caret tracking.
+  // 通过原生 setter 输入，触发 React 的输入事件与光标跟踪。
+  const type = async (text: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
+      field.setSelectionRange(text.length, text.length);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  await type("use @");
+  expect(host.querySelector('[role="option"]')?.textContent).toContain("Session MCP");
+  await pressEnter();
+  expect(field.value).toBe("use @session-mcp ");
+  await type("use @session-mcp#con");
+  const option = host.querySelector<HTMLButtonElement>('[role="option"]')!;
+  expect(option.textContent).toContain("Context7 Docs");
+  await act(async () => option.click());
+  expect(field.value).toBe("use @session-mcp#context7 ");
+  expect(props.onStopConversationRun).not.toHaveBeenCalled();
+});

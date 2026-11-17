@@ -631,7 +631,6 @@ fn classify_native(tool_id: &str, args: &Value) -> Option<PermissionSubject> {
         | "browser_close"
         | "ask"
         | vulcan_tool_chain::TOOL_CHAIN_TOOL_ID
-        | vulcan_luaskills_prompt::LUASKILL_HELP_TOOL_NAME
         | vulcan_subagent_core::SPAWN_AGENT_TOOL
         | vulcan_subagent_core::AGENT_ORCHESTRATION_INFO_TOOL
         | vulcan_subagent_core::SEND_MESSAGE_TOOL
@@ -649,7 +648,7 @@ fn classify_native(tool_id: &str, args: &Value) -> Option<PermissionSubject> {
         | "send_notification" => PermissionSubject::Ungoverned,
         // The bridge classifies the resolved action itself; an unresolved envelope grants no access.
         // 桥接层按解析后的动作本身分类；未解析的封装不授予权限。
-        crate::tooling::native::PLUGIN_CALL_TOOL_ID => PermissionSubject::Opaque,
+        crate::tooling::native::TOOL_CALL_TOOL_ID => PermissionSubject::Opaque,
         FILE_TOOL_ID => {
             let action = args.get("action").and_then(Value::as_str);
             if action.is_some_and(|action| FILE_READ_ACTIONS.contains(&action)) {

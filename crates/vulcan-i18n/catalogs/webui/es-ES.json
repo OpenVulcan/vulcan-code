@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "Expandir",
   "composer.slash.panel": "Comandos de barra",
   "composer.mention.panel": "Archivos de este proyecto",
+  "composer.mention.references": "Habilidades y archivos del espacio de trabajo",
   "composer.slash.model": "Elegir el modelo actual",
   "composer.slash.reasoning": "Elegir el nivel de razonamiento",
   "composer.slash.compact": "Compactar ahora el contexto de la conversación",

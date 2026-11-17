@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "Expand",
   "composer.slash.panel": "Slash commands",
   "composer.mention.panel": "Files in this project",
+  "composer.mention.references": "Skills and workspace files",
   "composer.slash.model": "Choose the current model",
   "composer.slash.reasoning": "Choose the reasoning effort",
   "composer.slash.compact": "Compact the conversation context now",

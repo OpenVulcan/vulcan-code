@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "Déplier",
   "composer.slash.panel": "Commandes slash",
   "composer.mention.panel": "Fichiers de ce projet",
+  "composer.mention.references": "Compétences et fichiers de l’espace de travail",
   "composer.slash.model": "Choisir le modèle actuel",
   "composer.slash.reasoning": "Choisir le niveau de réflexion",
   "composer.slash.compact": "Compacter maintenant le contexte de la conversation",

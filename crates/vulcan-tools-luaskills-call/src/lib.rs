@@ -44,7 +44,7 @@ pub fn call_luaskill_args_schema() -> Value {
         "properties": {
             "name": {
                 "type": "string",
-                "description": "Complete LuaSkills canonical tool name to call, such as vulcan-codekit-ast-tree."
+                "description": "Public LuaSkills tool name from the bundled prompt skill, using underscores."
             },
             "args": {
                 "type": "array",

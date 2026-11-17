@@ -5,7 +5,7 @@ description: Use Context7 for current or version-specific library documentation,
 
 # Context7 documentation workflow
 
-- Call `plugin_call` with `skill` set to `context7:library-docs`, `action` set to the action ID, and `arguments` set to an object matching the supplied input schema.
+- Call `tool_call` with `skill` set to `context7:library-docs`, `action` set to the action ID, and `arguments` set to an object matching the supplied input schema.
 - If the exact Context7 `libraryId` is already known, use the `context7_query_docs` action.
 - Otherwise use `context7_resolve_library_id`, then choose the best match using the name, official source, requested version, trust score, and benchmark score.
 - Keep each documentation query focused on one concept. Split unrelated concepts into separate calls.

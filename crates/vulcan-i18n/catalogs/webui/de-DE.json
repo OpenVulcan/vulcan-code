@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "Aufklappen",
   "composer.slash.panel": "Slash-Befehle",
   "composer.mention.panel": "Dateien in diesem Projekt",
+  "composer.mention.references": "Skills und Arbeitsbereichsdateien",
   "composer.slash.model": "Aktuelles Modell wählen",
   "composer.slash.reasoning": "Denkstufe wählen",
   "composer.slash.compact": "Gesprächskontext jetzt komprimieren",

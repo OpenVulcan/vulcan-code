@@ -55,7 +55,6 @@ vulcan-feedback.workspace = true
 vulcan-session-boundary.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-hooks.workspace = true
-vulcan-luaskills-prompt.workspace = true
 vulcan-markdown-memory.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-permission-judge.workspace = true

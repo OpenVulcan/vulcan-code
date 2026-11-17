@@ -15,7 +15,12 @@ it("blocks dismissal during a tool write and restores current host authority on 
   const save = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
   const close = vi.fn();
   const tool = { localName: "search", canonicalName: "fixture.search", description: "Fixture", registrationHelp: "Fixture", registrationLabel: "Explicit", registrationState: "explicit" as const };
-  const skill = { skillId: "fixture", displayName: "Fixture", tools: [tool] } as LuaSkillSummary;
+  // The implicit action is reserved for packages declaring native implicit registration.
+  // 只有声明原生隐式注册的包才显示隐式操作。
+  const skill = {
+    skillId: "fixture", displayName: "Fixture", tools: [tool],
+    registration: { defaultImplicit: true, defaultLocale: "en-US", locales: {}, promptSkills: {} },
+  } as LuaSkillSummary;
   const actions = { onSetLuaSkillToolRegistrationState: save } as unknown as SkillActionProps;
   try {
     await act(async () => root.render(<LuaSkillToolsDialog open busy={false} skill={skill} actions={actions} onOpenChange={close} />));

@@ -12,12 +12,10 @@ use crate::tooling::native::{
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPackageHelp};
 use vulcan_plugin_runtime::VulcanPluginToolDescriptor;
 use vulcan_session_core::{
     CapabilityPolicyMode, ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
 };
-use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind};
 
 /// Request-effective tool exposure selected before building the unified tools manager.
@@ -33,9 +31,6 @@ pub(crate) struct ExecutionToolExposureSelection {
     /// Implicit LuaSkills dispatcher entries visible to the current request.
     /// 当前请求可见的隐式 LuaSkills 调度入口集合。
     pub luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
-    /// Help trees limited to the request-visible direct and implicit LuaSkills entries.
-    /// 限定为请求可见直接与隐式 LuaSkills 入口的帮助树。
-    pub luaskill_help_packages: Vec<LuaSkillPackageHelp>,
     /// MCP tool bindings visible to the current request.
     /// 当前请求可见的 MCP 工具绑定集合。
     pub mcp_tools: Vec<McpRuntimeToolBinding>,
@@ -70,11 +65,6 @@ pub(crate) fn resolve_execution_tool_exposure(
         foundation.resolved_luaskills_dispatch_tools_for_agent(agent_id),
         &selectors,
     );
-    let luaskill_help_packages = retain_visible_luaskill_help_packages(
-        foundation.resolved_luaskill_help_packages_for_agent(agent_id),
-        &luaskills_tools,
-        &luaskills_dispatch_tools,
-    );
     // Merge pre-discovered owner-scoped bindings before applying the same MCP selector gate.
     // 在应用相同的 MCP 选择器闸门前合并预先发现的所有者范围绑定。
     let mut mcp_bindings = foundation.resolved_mcp_tools_for_agent(agent_id);
@@ -90,7 +80,6 @@ pub(crate) fn resolve_execution_tool_exposure(
         native_tool_ids,
         luaskills_tools,
         luaskills_dispatch_tools,
-        luaskill_help_packages,
         mcp_tools,
         selectors,
         native_tool_warnings,
@@ -423,43 +412,6 @@ pub(crate) fn filter_luaskills_entries(
         .collect()
 }
 
-/// Limits package help trees to request-visible entries and drops packages left without entries.
-/// 将包帮助树限定为请求可见入口，并移除不再含有入口的包。
-///
-/// # Parameters
-/// 参数
-/// - `packages`: Foundation help trees of every package with enabled entries.
-/// - `packages`：拥有已启用入口的每个包的基础架构帮助树。
-/// - `luaskills_tools`: Request-visible direct LuaSkills entries.
-/// - `luaskills_tools`：请求可见的直接 LuaSkills 入口。
-/// - `luaskills_dispatch_tools`: Request-visible implicit LuaSkills entries.
-/// - `luaskills_dispatch_tools`：请求可见的隐式 LuaSkills 入口。
-///
-/// # Returns
-/// 返回值
-/// Help trees that still contain at least one visible entry.
-/// 仍至少含有一个可见入口的帮助树。
-pub(crate) fn retain_visible_luaskill_help_packages(
-    packages: Vec<LuaSkillPackageHelp>,
-    luaskills_tools: &[RuntimeEntryDescriptor],
-    luaskills_dispatch_tools: &[RuntimeEntryDescriptor],
-) -> Vec<LuaSkillPackageHelp> {
-    let visible = luaskills_tools
-        .iter()
-        .chain(luaskills_dispatch_tools)
-        .map(|entry| entry.canonical_name.as_str())
-        .collect::<BTreeSet<_>>();
-    packages
-        .into_iter()
-        .filter_map(|mut package| {
-            package
-                .entries
-                .retain(|entry| visible.contains(entry.name.as_str()));
-            (!package.entries.is_empty()).then_some(package)
-        })
-        .collect()
-}
-
 /// Filters MCP bindings with global, MCP-tool, and MCP-server selectors.
 /// 使用全局、MCP 工具与 MCP 服务选择器过滤 MCP 绑定。
 fn filter_mcp_tool_bindings(
@@ -600,11 +552,7 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
         VulcanToolSourceKind::VulcanPlugin => false,
         VulcanToolSourceKind::LuaSkills => selectors.has_luaskills_allow(),
         VulcanToolSourceKind::Mcp => selectors.has_mcp_allow(),
-        VulcanToolSourceKind::Native => {
-            (id == LUASKILL_HELP_TOOL_NAME && !tool_exposure.luaskill_help_packages.is_empty())
-                || (id == CALL_LUASKILL_TOOL_NAME
-                    && !tool_exposure.luaskills_dispatch_tools.is_empty())
-        }
+        VulcanToolSourceKind::Native => false,
     }
 }
 
@@ -623,7 +571,9 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
 fn native_tool_id_is_universal(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        TODOLIST_TOOL_ID
+        "skill"
+            | crate::tooling::native::TOOL_CALL_TOOL_ID
+            | TODOLIST_TOOL_ID
             | GET_GOAL_TOOL_ID
             | CREATE_GOAL_TOOL_ID
             | UPDATE_GOAL_TOOL_ID

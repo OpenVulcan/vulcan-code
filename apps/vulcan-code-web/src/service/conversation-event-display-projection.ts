@@ -12,7 +12,7 @@ export type ToolCallEvent = Extract<ConversationEventBody, { kind: "tool_call" }
  * Accepts the durable call event and returns the view used by card renderers.
  * 接收可靠调用事件，返回供工具卡渲染器使用的视图。 */
 export function projectSkillActionForDisplay(event: ToolCallEvent): ToolCallEvent {
-  if (event.tool_name !== "plugin_call") return event;
+  if (event.tool_name !== "plugin_call" && event.tool_name !== "tool_call") return event;
   // The short action is mapped through its exact plugin skill identity.
   // 短动作通过精确的插件技能身份映射。
   const action = event.input.action;
@@ -28,6 +28,11 @@ export function projectSkillActionForDisplay(event: ToolCallEvent): ToolCallEven
   if (event.input.skill === __VULCAN_BROWSER_ACTION_DISPLAY__.skill
     && Object.hasOwn(__VULCAN_BROWSER_ACTION_DISPLAY__.actions, action)) {
     return { ...event, tool_name: __VULCAN_BROWSER_ACTION_DISPLAY__.actions[action], input: args };
+  }
+  // Unified routes use the original public action ID except for the separately mapped browser aliases.
+  // 除单独映射的浏览器别名外，统一入口使用原公开动作标识。
+  if (event.tool_name === "tool_call" && /^[A-Za-z0-9_]+$/u.test(action)) {
+    return { ...event, tool_name: action, input: args };
   }
   return event;
 }

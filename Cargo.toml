@@ -49,7 +49,6 @@ members = [
     "crates/vulcan-tool-chain",
     "crates/vulcan-core",
     "crates/vulcan-tools-luaskills-call",
-    "crates/vulcan-luaskills-prompt",
     "crates/vulcan-luaskills-config",
     "crates/vulcan-ai-contract",
     "crates/vulcan-memorymesh-core-contracts",
@@ -126,7 +125,6 @@ vulcan-install-core = { path = "crates/vulcan-install-core" }
 vulcan-app-update = { path = "crates/vulcan-app-update" }
 vulcan-feedback = { path = "crates/vulcan-feedback" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
-vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }
 vulcan-ai-contract = { path = "crates/vulcan-ai-contract" }
 vulcan-memorymesh-core-contracts = { path = "crates/vulcan-memorymesh-core-contracts" }

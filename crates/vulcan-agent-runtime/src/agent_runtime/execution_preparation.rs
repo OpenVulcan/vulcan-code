@@ -19,16 +19,12 @@ use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::provider_tool_bridge::build_provider_tool_candidates;
 use crate::tooling::collaboration::ASK_PARENT_TOOL_ID;
-use crate::tooling::native::{BROWSER_MCP_ORIGIN, PLUGIN_CALL_TOOL_ID, SUBMIT_PLAN_TOOL_ID};
+use crate::tooling::native::{BROWSER_MCP_ORIGIN, SUBMIT_PLAN_TOOL_ID, TOOL_CALL_TOOL_ID};
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
 use std::sync::Arc;
 use vulcan_core::types::ConversationPayload as CoreConversationPayload;
-use vulcan_luaskills_prompt::{
-    LUASKILL_HELP_TOOL_NAME, LuaSkillInvocationRoutes, LuaSkillPackageHelp,
-    render_luaskill_package_segment,
-};
 use vulcan_prompt_composer::{
     AdditionalPromptSegment, PromptBaselineKind, PromptBaselineProvenance,
 };
@@ -37,10 +33,7 @@ use vulcan_prompt_skills::{
     resolve_prompt_skills,
 };
 use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot, ExecutionScope};
-use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
-use vulcan_tools_manager::{
-    ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
-};
+use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolSourceKind, VulcanToolsManager};
 
 mod browser_skill;
 pub(crate) mod captured_child_tool_admission;
@@ -275,6 +268,14 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
             .merge_plugin_skills(plugin_catalog.enabled_skills.values().cloned())
             .map_err(|error| format!("Failed to merge plugin skill directories: {error}"))?;
     }
+    // Route bundled LuaSkills guides through the standard skill tool.
+    // 通过标准 skill 工具提供 LuaSkills 随包指南。
+    prompt_skill_catalog
+        .merge_plugin_skills(foundation.resolved_luaskills_prompt_skills(
+            &tool_exposure.luaskills_tools,
+            &tool_exposure.luaskills_dispatch_tools,
+        ))
+        .map_err(|error| format!("Failed to register LuaSkills prompt skills: {error}"))?;
     for error in &prompt_skill_catalog.errors {
         warnings.push(format!(
             "Failed to load prompt skill `{}`: {}",
@@ -311,7 +312,14 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         // 未开放通用工具时，提示词技能没有调用途径，因此不作描述。
         prompt_skills.clear();
     }
-    let implicit_luaskills = tool_exposure.luaskills_dispatch_tools.clone();
+    // Freeze ownership for every implicit entry using the same package snapshot as execution.
+    // 使用与执行一致的包快照冻结每个隐式入口的归属。
+    let implicit_luaskills = &tool_exposure.luaskills_dispatch_tools;
+    let implicit_guides = foundation.resolved_luaskills_prompt_skills(&[], implicit_luaskills);
+    // The session connection manager is exposed through its system skill only.
+    // 会话连接管理器只通过对应系统技能暴露。
+    const SESSION_MCP_SKILL: &str = vulcan_prompt_skills::SESSION_MCP_SKILL_NAME;
+    const SESSION_MCP_TOOL: &str = crate::tooling::native::MCP_CONNECT_TOOL_ID;
     let mut additional_developer_segments = Vec::new();
     let enabled_prompt_skill_names = vulcan_prompt_skills::enabled_skill_names(&prompt_skills);
     // prepared_prompt_skills freezes parsed instructions for the complete execution turn.
@@ -405,7 +413,7 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         .collect::<std::collections::HashMap<_, _>>();
     // Browser aliases refer to the original Core and MCP tool identities.
     // 浏览器别名指向原始 Core 与 MCP 工具身份。
-    if let Some(runtime) = request.native_browser_runtime.as_ref()
+    let browser_skill_name = if let Some(runtime) = request.native_browser_runtime.as_ref()
         && let Some(server) = plugin_catalog
             .as_ref()
             .and_then(|catalog| catalog.enabled_mcp_servers.get(BROWSER_MCP_ORIGIN))
@@ -434,7 +442,10 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
             runtime,
             &tool_exposure.selectors,
         ));
-    }
+        Some(skill)
+    } else {
+        None
+    };
     // The manager retains executable skill actions after removing their public declarations.
     // 移除公开声明后，管理器继续持有可执行的技能动作。
     let mut tools_manager = build_vulcan_tools_manager(
@@ -456,12 +467,11 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         request.knowledge_access.clone(),
         tool_exposure.native_tool_ids.clone(),
         tool_exposure.luaskills_tools.clone(),
-        implicit_luaskills,
+        implicit_luaskills.clone(),
         tool_exposure.mcp_tools.clone(),
         enabled_prompt_skill_names,
         prepared_prompt_skills,
         prompt_skill_user_root.clone(),
-        tool_exposure.luaskill_help_packages.clone(),
         project_vmm.clone(),
         session_vmm.clone(),
         request.vmm_runtime_ready,
@@ -538,8 +548,7 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         request.captured_child_tool_admission.as_ref(),
     );
     dedicated_session::filter_tools(&mut resolved_tools, request.dedicated_session.as_ref());
-    let prompt_skill_tool_available = request.prompt_purpose.supports_user_turn_tooling()
-        && render_prompt_skills_instructions(&prompt_skills).is_some();
+    let prompt_skill_tool_available = request.prompt_purpose.supports_user_turn_tooling();
     if !prompt_skill_tool_available {
         remove_resolved_tool(&mut resolved_tools, "skill");
     }
@@ -557,11 +566,53 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
     // Only tools surviving the same filters as the direct route may become skill actions.
     // 只有通过直接入口原有筛选的工具才能成为技能动作。
     let mut skill_actions = Vec::new();
-    let skill_route_visible = ["skill", PLUGIN_CALL_TOOL_ID]
+    let skill_route_visible = ["skill", TOOL_CALL_TOOL_ID]
         .into_iter()
         .all(|id| resolved_tools.descriptors.iter().any(|tool| tool.id == id));
+    // Resolve optional native and implicit LuaSkills routes before removing their direct entries.
+    // 在移除直接入口前解析按需原生工具与隐式 LuaSkills 路由。
+    let hidden_skill_target = |tool: &vulcan_tools_manager::VulcanToolDescriptor| {
+        let origin = tool.origin();
+        (origin.source_kind() == VulcanToolSourceKind::Native && tool.id == SESSION_MCP_TOOL)
+            || (origin.source_kind() == VulcanToolSourceKind::LuaSkills
+                && implicit_luaskills
+                    .iter()
+                    .any(|entry| entry.canonical_name == origin.original_name()))
+    };
     resolved_tools.definitions.retain(|definition| {
         let origin = definition.descriptor.origin();
+        if hidden_skill_target(&definition.descriptor) {
+            if skill_route_visible {
+                if origin.source_kind() == VulcanToolSourceKind::Native {
+                    if prompt_skills.iter().any(|entry| {
+                        entry.skill.name == SESSION_MCP_SKILL
+                            && entry.skill.scope == vulcan_prompt_skills::PromptSkillScope::System
+                            && entry.is_enabled()
+                    }) {
+                        skill_actions.push((
+                            SESSION_MCP_SKILL.to_owned(),
+                            SESSION_MCP_TOOL.to_owned(),
+                            definition.clone(),
+                        ));
+                    }
+                } else {
+                    for guide in &implicit_guides {
+                        if guide.origin.label.as_deref() == Some(origin.namespace())
+                            && prompt_skills
+                                .iter()
+                                .any(|entry| entry.skill.name == guide.name && entry.is_enabled())
+                        {
+                            skill_actions.push((
+                                guide.name.clone(),
+                                definition.descriptor.id.clone(),
+                                definition.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+            return false;
+        }
         let Some((skill, alias)) = plugin_skill_actions.get(&(
             origin.source_kind(),
             origin.namespace().to_owned(),
@@ -580,14 +631,15 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
     });
     resolved_tools.descriptors.retain(|tool| {
         let origin = tool.origin();
-        !plugin_skill_actions.contains_key(&(
-            origin.source_kind(),
-            origin.namespace().to_owned(),
-            origin.original_name().to_owned(),
-        ))
+        !hidden_skill_target(tool)
+            && !plugin_skill_actions.contains_key(&(
+                origin.source_kind(),
+                origin.namespace().to_owned(),
+                origin.original_name().to_owned(),
+            ))
     });
     if skill_actions.is_empty() {
-        remove_resolved_tool(&mut resolved_tools, PLUGIN_CALL_TOOL_ID);
+        remove_resolved_tool(&mut resolved_tools, TOOL_CALL_TOOL_ID);
     }
     prompt_skills.retain(|entry| {
         !plugin_skill_actions
@@ -597,10 +649,44 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
                 .iter()
                 .any(|(skill, _, _)| *skill == entry.skill.name)
     });
-    tools_manager.set_skill_actions(skill_actions);
-    if render_prompt_skills_instructions(&prompt_skills).is_none() {
-        remove_resolved_tool(&mut resolved_tools, "skill");
+    if let Some(skill) = browser_skill_name
+        && skill_actions.iter().any(|(name, _, _)| *name == skill)
+    {
+        // Existing conversations can retain direct browser calls in locked context or history.
+        // 既有会话的锁定上下文或历史可能仍含直接浏览器调用。
+        // Advertise the current route through dynamic instructions only when it is callable.
+        // 仅当当前入口可调用时通过动态指引公布它。
+        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
+            "Vulcan Browser routing",
+            format!(
+                "When the user asks about or wants to use the browser, call `skill` with {{\"name\":\"{skill}\"}} first. Use `tool_call` with the short actions it lists, even if earlier messages show direct browser tool calls. The host connects to Playwright automatically when needed. An empty session MCP list says nothing about Vulcan Browser availability; do not use `mcp_connect` or `mcp_tools` to find it."
+            ),
+            "Current Vulcan Browser action binding",
+        ));
     }
+    if !skill_actions.is_empty() {
+        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
+            "Current skill action routing",
+            "For an on-demand action, read its enabled skill with `skill` and use `tool_call` with the exact skill, action and JSON arguments it provides. This is the current route for plugin actions, implicit LuaSkills and the session MCP connection manager.",
+            "Current skill action routing",
+        ));
+    }
+    // Reference hints only name actions and skills actually available in this turn.
+    // 引用指引只列出本回合实际可用的动作与技能。
+    if prompt_skill_tool_available
+        && resolved_tools
+            .descriptors
+            .iter()
+            .any(|tool| tool.id == "skill")
+    {
+        append_user_tool_references(
+            &mut additional_developer_segments,
+            &request.prompt,
+            &prompt_skills,
+            &resolved_tools.descriptors,
+        );
+    }
+    tools_manager.set_skill_actions(skill_actions);
     if let Some(segment) = build_skill_developer_segment(request.prompt_purpose, &prompt_skills) {
         additional_developer_segments.push(AdditionalPromptSegment::locked(
             "Prompt Skill Injection",
@@ -617,14 +703,6 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         foundation.vulcan_plugin_catalog().as_deref(),
         &resolved_tools.descriptors,
     );
-    if request.prompt_purpose.supports_user_turn_tooling() {
-        append_luaskill_package_segments(
-            &mut additional_developer_segments,
-            &tool_exposure.luaskill_help_packages,
-            &resolved_tools.descriptors,
-        );
-    }
-
     if workspace_path.is_empty() {
         warnings.push(String::from(
             "The workspace path is empty; native tools may not have full context.",
@@ -819,60 +897,6 @@ fn build_skill_developer_segment(
     render_prompt_skills_instructions(prompt_skills)
 }
 
-/// Appends one locked developer segment per LuaSkills package that keeps an invocable entry.
-/// 为每个仍含可调用入口的 LuaSkills 包追加一条锁定开发者片段。
-///
-/// # Parameters
-/// 参数
-/// - `developer_segments`: Developer segments of the prepared request.
-/// - `developer_segments`：已准备请求的开发者片段。
-/// - `packages`: Help trees limited to request-visible entries.
-/// - `packages`：限定为请求可见入口的帮助树。
-/// - `visible_tools`: Tool descriptors remaining after all host and model filters.
-/// - `visible_tools`：经过全部宿主与模型过滤后保留的工具描述。
-fn append_luaskill_package_segments(
-    developer_segments: &mut Vec<AdditionalPromptSegment>,
-    packages: &[LuaSkillPackageHelp],
-    visible_tools: &[VulcanToolDescriptor],
-) {
-    if packages.is_empty() {
-        return;
-    }
-    let native_visible = |tool_id: &str| {
-        visible_tools.iter().any(|descriptor| {
-            descriptor.id == tool_id && descriptor.source == VulcanToolSourceKind::Native
-        })
-    };
-    let routes = LuaSkillInvocationRoutes {
-        function_tools: visible_tools
-            .iter()
-            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::LuaSkills)
-            .map(|descriptor| {
-                (
-                    descriptor.origin().original_name().to_string(),
-                    descriptor.id.clone(),
-                )
-            })
-            .collect(),
-        dispatcher_visible: native_visible(CALL_LUASKILL_TOOL_NAME),
-        help_tool_visible: native_visible(LUASKILL_HELP_TOOL_NAME),
-    };
-    for package in packages {
-        let Some(body) = render_luaskill_package_segment(package, &routes) else {
-            continue;
-        };
-        developer_segments.push(AdditionalPromptSegment::locked(
-            format!("LuaSkills Package: {}", package.skill_id),
-            body,
-            format!("LuaSkills package {}", package.skill_id),
-            PromptBaselineProvenance::new(
-                PromptBaselineKind::PromptSkillInjection,
-                format!("luaskills/{}", package.skill_id),
-            ),
-        ));
-    }
-}
-
 /// Builds project-level prompt-skill resolver input from one preparation request.
 /// 从单条执行准备请求构建项目级提示词技能解析输入。
 fn prompt_skills_project_config_from_request(
@@ -923,6 +947,103 @@ fn remove_resolved_tool(resolved_tools: &mut vulcan_tools_manager::ResolvedToolS
         .retain(|definition| definition.descriptor.id != tool_id);
 }
 
+/// Appends a turn-only hint for exact user references to currently enabled skills and plugins.
+/// 为用户精确引用的当前已启用技能与插件追加本回合指引。
+/// The prompt supplies markers and names, skills and tools supply trusted targets, and segments receives the hint.
+/// prompt 提供标记与名称，skills 和 tools 提供可信目标，segments 接收指引。
+fn append_user_tool_references(
+    segments: &mut Vec<AdditionalPromptSegment>,
+    prompt: &str,
+    skills: &[vulcan_prompt_skills::ResolvedPromptSkill],
+    tools: &[vulcan_tools_manager::VulcanToolDescriptor],
+) {
+    // The two sets keep duplicates out and never copy unmatched user text into a developer segment.
+    // 两个集合消除重复，从不把未匹配的用户文本复制到开发者消息。
+    let mut referenced_skills = std::collections::BTreeSet::new();
+    let mut referenced_plugins = std::collections::BTreeSet::new();
+    let enabled = || skills.iter().filter(|entry| entry.is_enabled());
+    for token in prompt.split_whitespace() {
+        // Permit common punctuation around a reference without matching URLs, addresses, or code paths.
+        // 允许引用带常见标点，同时不匹配网址、邮件地址或代码路径。
+        let token = token.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '(' | ')'
+                    | '['
+                    | ']'
+                    | ','
+                    | '.'
+                    | '!'
+                    | '?'
+                    | '\u{ff0c}'
+                    | '\u{3002}'
+                    | '\u{ff01}'
+                    | '\u{ff1f}'
+                    | '\u{3001}'
+            )
+        });
+        let plugin_name = if let Some(skill_token) = token.strip_prefix('@') {
+            let (name, plugin) = skill_token.split_once('#').unwrap_or((skill_token, ""));
+            if let Some(skill) = enabled().find(|entry| entry.skill.name == name) {
+                referenced_skills.insert(skill.skill.name.as_str());
+            }
+            plugin
+        } else if let Some(name) = token.strip_prefix('#') {
+            name
+        } else {
+            continue;
+        };
+        if plugin_name.is_empty() {
+            continue;
+        }
+        for entry in enabled()
+            .filter(|entry| entry.skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin)
+        {
+            let Some((owner, _)) = entry.skill.name.split_once(':') else {
+                continue;
+            };
+            if owner == plugin_name
+                || (entry.skill.origin.kind == "luaskills"
+                    && owner.strip_prefix("luaskills-") == Some(plugin_name))
+            {
+                referenced_skills.insert(entry.skill.name.as_str());
+            }
+        }
+        for origin in tools.iter().map(|tool| tool.origin()) {
+            if matches!(
+                origin.source_kind(),
+                VulcanToolSourceKind::VulcanPlugin | VulcanToolSourceKind::LuaSkills
+            ) && origin.namespace() == plugin_name
+            {
+                referenced_plugins.insert(origin.namespace());
+            }
+        }
+    }
+
+    // Mentioned routes do not change permissions or run a tool until the model requests it.
+    // 被提及的路由不会改变权限，也不会在模型请求前执行工具。
+    let mut hints = Vec::new();
+    if !referenced_skills.is_empty() {
+        hints.push(format!(
+            "The user referenced these enabled skills: {}. Read them with `skill` before using their capabilities.",
+            referenced_skills.into_iter().collect::<Vec<_>>().join(", "),
+        ));
+    }
+    if !referenced_plugins.is_empty() {
+        hints.push(format!(
+            "The user referenced these enabled tool packages: {}. Prefer their available tools for this task.",
+            referenced_plugins.into_iter().collect::<Vec<_>>().join(", "),
+        ));
+    }
+    if !hints.is_empty() {
+        segments.push(AdditionalPromptSegment::dynamic(
+            "User tool references",
+            hints.join("\n"),
+            "User tool references",
+        ));
+    }
+}
+
 /// Removes request-hidden tools after normal exposure resolution has completed.
 /// 在常规可见性解析完成后移除请求级强制隐藏工具。
 fn remove_request_hidden_tools(
@@ -930,7 +1051,11 @@ fn remove_request_hidden_tools(
     hidden_tool_ids: &[String],
 ) {
     for tool_id in hidden_tool_ids {
-        remove_resolved_tool(resolved_tools, tool_id);
+        // The core discovery tool remains available independently of user tool selectors.
+        // 核心发现工具独立于用户工具筛选设置保持可用。
+        if tool_id != "skill" {
+            remove_resolved_tool(resolved_tools, tool_id);
+        }
     }
 }
 

@@ -11091,7 +11091,6 @@ dependencies = [
  "vulcan-hooks",
  "vulcan-host-tools",
  "vulcan-llm-core",
- "vulcan-luaskills-prompt",
  "vulcan-markdown-memory",
  "vulcan-mcp-runtime",
  "vulcan-permission-judge",
@@ -11472,16 +11471,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "vulcan-luaskills-prompt"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "vulcan-runtime-assets",
- "vulcan-tools-luaskills-call",
- "workspace-hack",
 ]
 
 [[package]]

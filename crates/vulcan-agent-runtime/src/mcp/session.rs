@@ -556,7 +556,7 @@ impl SessionMcpRegistry {
 /// 会话未持有某连接时的错误。
 fn missing_connection(connection_id: &str) -> String {
     format!(
-        "This session has no MCP connection `{connection_id}`. Connections end when they are disconnected or Vulcan Code restarts; list them with `mcp_connect` action `status`, or open a new one."
+        "This session has no MCP connection `{connection_id}`. Connections end when they are disconnected or Vulcan Code restarts; read the `session-mcp` skill to inspect or open a connection."
     )
 }
 

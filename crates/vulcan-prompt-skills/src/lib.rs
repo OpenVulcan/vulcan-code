@@ -663,6 +663,9 @@ impl ResolvedPromptSkill {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PromptSkillStateSource {
+    /// A required core guide is always enabled.
+    /// 必需的核心指南始终启用。
+    Core,
     /// The owning plugin lifecycle published this skill as enabled.
     /// 所属插件生命周期将当前技能发布为启用状态。
     Plugin,
@@ -803,6 +806,11 @@ pub fn load_prompt_skills_from_roots(
     // Resolve one effective runtime record per standard name with the user scope winning.
     // 按用户作用域优先规则为每个标准名称解析一条运行时有效记录。
     let mut effective_by_name = system_by_name;
+    if effective_by_name.contains_key(SESSION_MCP_SKILL_NAME) {
+        // A same-name user package cannot replace the host connection manager's guide.
+        // 同名用户包不能替换宿主连接管理器的指南。
+        user_by_name.remove(SESSION_MCP_SKILL_NAME);
+    }
     effective_by_name.extend(user_by_name);
     catalog.skills = effective_by_name.into_values().collect();
     catalog
@@ -2418,6 +2426,10 @@ pub fn resolve_prompt_skills(
         .collect()
 }
 
+/// The reserved packaged guide for the host's temporary MCP connection manager.
+/// 宿主临时 MCP 连接管理器随包发行的保留指南。
+pub const SESSION_MCP_SKILL_NAME: &str = "session-mcp";
+
 /// Resolves the effective state of one prompt skill: the session, project and global switches win in that order;
 /// without any, an on-demand skill is off and every other skill follows the global default.
 /// 解析单个提示词技能的生效状态：会话、项目与全局开关依次优先；都没有时按需技能关闭，其他技能按全局默认值。
@@ -2428,6 +2440,9 @@ pub fn resolve_prompt_skill_state(
     project: &PromptSkillsProjectConfig,
     session: &PromptSkillsSessionConfig,
 ) -> (PromptSkillState, PromptSkillStateSource) {
+    if name == SESSION_MCP_SKILL_NAME {
+        return (PromptSkillState::Enabled, PromptSkillStateSource::Core);
+    }
     if let Some(state) = session.skill_overrides.get(name).copied() {
         return (state, PromptSkillStateSource::Session);
     }
@@ -2461,7 +2476,7 @@ pub fn render_prompt_skills_instructions(skills: &[ResolvedPromptSkill]) -> Opti
         String::from("<skills_instructions>"),
         String::from("## Skills"),
         String::from(
-            "A skill is a local SKILL.md instruction package. Use the `skill` tool to load full instructions only when the task matches a listed skill.",
+            "When the task matches a listed skill, call `skill` with its listed name before choosing generic tools. Load only the skills relevant to the task.",
         ),
         String::from("### Available skills"),
     ];

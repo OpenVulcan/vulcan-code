@@ -1471,6 +1471,7 @@
   "sessionSettings.collapseOff": "펼치기",
   "composer.slash.panel": "슬래시 명령",
   "composer.mention.panel": "이 프로젝트의 파일",
+  "composer.mention.references": "스킬 및 작업 공간 파일",
   "composer.slash.model": "현재 모델 선택",
   "composer.slash.reasoning": "사고 수준 선택",
   "composer.slash.compact": "대화 컨텍스트 즉시 압축",

@@ -64,7 +64,6 @@ fn manager(
         Vec::new(),
         Vec::new(),
         None,
-        Vec::new(),
         project_policy,
         VmmConfigLayer::default(),
         ready,

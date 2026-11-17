@@ -1428,6 +1428,9 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
   const optionMap = new Map<string, AgentCapabilityPolicyOption>()
   const forbiddenToolSelectors = agentForbiddenToolSelectorSet(workbench.subagentCatalog.childAgentForbiddenToolIds ?? [])
   workbench.hostTools?.nativeTools?.forEach((tool) => {
+    // The core skill discovery and dispatch entries are provided by the host.
+    // 核心技能发现与分发入口由宿主提供。
+    if (tool.id === "skill" || tool.id === "tool_call") return;
     const toolId = tool.id.trim()
     if (toolId.length === 0 || isAgentToolForbidden(toolId, forbiddenToolSelectors)) {
       return

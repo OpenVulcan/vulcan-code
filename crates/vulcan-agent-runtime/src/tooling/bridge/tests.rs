@@ -1,9 +1,10 @@
 //! host bridge tests for semantic AI fallback aliasing.
 //! 面向语义 AI 回退别名的宿主桥接层测试。
 
+use super::luaskills_dispatch::build_luaskills_dispatch_candidate;
 use super::{
-    build_luaskills_dispatch_candidate, build_luaskills_help_candidate, build_vulcan_tools_manager,
-    inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view, luaskills_invocation_failure,
+    build_vulcan_tools_manager, inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view,
+    luaskills_invocation_failure,
 };
 use crate::agent_runtime::task_runtime::collaboration_lifecycle::{
     ChildTaskActivationRequest, ChildTaskLifecycleReceipt, ChildTaskReservationRequest,
@@ -24,9 +25,6 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use vulcan_luaskills_prompt::{
-    LUASKILL_HELP_TOOL_NAME, LuaSkillPackageHelp, LuaSkillPromptEntry, LuaSkillRegistration,
-};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
@@ -219,50 +217,32 @@ fn luaskills_handler_failure_keeps_trace_in_diagnostics() {
     }
 }
 
-/// Verifies implicit LuaSkills expose help and call tools as one paired tool group.
-/// 验证隐式 LuaSkills 会以帮助与调用工具成组暴露。
+/// Verifies a dispatch-only entry contributes only the common tool schema.
+/// 验证仅调度的入口只产生通用工具 Schema。
 #[test]
-fn implicit_luaskills_expose_help_and_call_tool_pair() {
+fn implicit_luaskills_expose_the_dispatcher_without_entry_schema() {
+    // Use a schema with one target-only field to detect schema leakage.
+    // 使用含入口专属字段的 Schema 检测泄漏。
     let entry = RuntimeEntryDescriptor {
-        canonical_name: String::from("vulcan-codekit-ast-tree"),
-        skill_id: String::from("vulcan-codekit"),
-        local_name: String::from("ast-tree"),
-        root_name: String::from("USER"),
-        skill_dir: String::from(r"C:\skills\vulcan-codekit"),
-        description: String::from("Inspect source tree structure."),
+        canonical_name: "vulcan-work-pdf-inspect".into(),
+        skill_id: "vulcan-work".into(),
+        local_name: "pdf-inspect".into(),
+        root_name: "USER".into(),
+        skill_dir: "fixture".into(),
+        description: "Fixture".into(),
         parameters: Vec::new(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "paths": { "type": "string" }
-            },
-            "required": ["paths"]
-        }),
+        input_schema: json!({"type":"object","properties":{"fixture_target_field":{"type":"string"}}}),
     };
-    let manager = VulcanToolsManager::new(vec![
-        build_luaskills_help_candidate(vec![LuaSkillPackageHelp::new(
-            "vulcan-codekit",
-            "",
-            "",
-            Vec::new(),
-            vec![LuaSkillPromptEntry::new(
-                "vulcan-codekit-ast-tree",
-                "Inspect source tree structure.",
-                LuaSkillRegistration::Implicit,
-            )],
-        )]),
-        build_luaskills_dispatch_candidate(None, None, vec![entry]),
-    ]);
-
-    let resolved = manager.resolve_for_execution_mode("Build");
-    let ids = resolved
-        .descriptors
-        .iter()
-        .map(|descriptor| descriptor.id.as_str())
-        .collect::<Vec<_>>();
-
-    assert!(ids.contains(&LUASKILL_HELP_TOOL_NAME));
-    assert!(ids.contains(&CALL_LUASKILL_TOOL_NAME));
+    // Inspect the exact candidate published to the provider.
+    // 检查发布给供应商的候选项。
+    let candidate = build_luaskills_dispatch_candidate(None, None, vec![entry]);
+    assert_eq!(candidate.descriptor.id, CALL_LUASKILL_TOOL_NAME);
+    assert!(
+        !candidate
+            .parameters_schema
+            .to_string()
+            .contains("fixture_target_field")
+    );
 }
 
 /// Plan mode admits a dispatch exactly when its target entry would be admitted when called directly.
@@ -405,7 +385,6 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
             Vec::new(),
             Vec::new(),
             None,
-            Vec::new(),
             VmmConfigLayer::default(),
             VmmConfigLayer::default(),
             false,
@@ -515,7 +494,6 @@ fn feedback_tool_is_registered_only_with_a_host() {
             Default::default(),
             Vec::new(),
             None,
-            Vec::new(),
             VmmConfigLayer::default(),
             VmmConfigLayer::default(),
             false,
@@ -597,7 +575,6 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         Default::default(),
         Vec::new(),
         None,
-        Vec::new(),
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         true,
@@ -674,7 +651,6 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         Default::default(),
         Vec::new(),
         None,
-        Vec::new(),
         VmmConfigLayer::default(),
         VmmConfigLayer {
             enabled: Some(false),
@@ -715,7 +691,6 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         Default::default(),
         Vec::new(),
         None,
-        Vec::new(),
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
@@ -775,7 +750,6 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
         Vec::new(),
         Vec::new(),
         None,
-        Vec::new(),
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
@@ -1065,7 +1039,6 @@ fn frozen_bridge_tools(
         Vec::new(),
         Vec::new(),
         None,
-        Vec::new(),
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,
@@ -1208,7 +1181,6 @@ async fn project_shell_command_orders_allow_once_launch_with_directory_change() 
         Vec::new(),
         Vec::new(),
         None,
-        Vec::new(),
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         false,

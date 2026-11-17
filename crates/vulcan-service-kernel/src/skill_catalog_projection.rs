@@ -435,49 +435,100 @@ pub(crate) fn lua_skills_catalog_summary(
         skills: catalog
             .skills
             .iter()
-            .map(|skill| LuaSkillSummary {
-                skill_id: skill.skill_id.clone(),
-                display_name: skill.display_name.clone(),
-                version: skill.version.clone(),
-                root_name: skill.root_name.clone(),
-                skill_dir: normalized_workspace_path_text_from_path(&skill.skill_dir),
-                enabled: skill.enabled,
-                disabled_reason: skill.disabled_reason.clone(),
-                managed: skill.managed,
-                source_type: skill.source_type.clone(),
-                source_locator: skill.source_locator.clone(),
-                entry_count: skill.entry_count,
-                system_owned: skill.system_owned,
-                tools: skill
-                    .tools
-                    .iter()
-                    .map(|tool| {
-                        let state = provider_configuration
-                            .luaskills
-                            .tool_registration_state(&skill.skill_id, &tool.local_name);
-                        LuaSkillToolSummary {
-                            canonical_name: tool.canonical_name.clone(),
-                            local_name: tool.local_name.clone(),
-                            description: tool.description.clone(),
-                            registration_state: luaskill_tool_registration_state_key(state)
-                                .to_string(),
-                            registration_label: state.to_string(),
-                            registration_help: luaskill_tool_registration_state_help(state)
-                                .to_string(),
-                        }
-                    })
-                    .collect(),
-                config: skill.config.as_ref().map(|config| LuaSkillConfigSummary {
-                    complete: config.complete,
-                    revision: config.revision.clone(),
-                    store_scope: config.store_scope.clone(),
-                    item_count: config.items.len(),
-                    missing_count: config.missing_count,
-                    invalid_count: config.invalid_count,
-                    business_issue_count: config.business_issue_count,
-                    orphaned_count: config.orphaned_count,
-                }),
+            .map(|skill| {
+                // The same package declaration controls UI state and execution exposure.
+                // 同一份包声明控制界面状态与执行暴露。
+                let registration = skill
+                    .registration
+                    .as_ref()
+                    .map(project_luaskill_registration);
+                let default_implicit = registration
+                    .as_ref()
+                    .is_some_and(|value| value.default_implicit);
+                LuaSkillSummary {
+                    skill_id: skill.skill_id.clone(),
+                    display_name: skill.display_name.clone(),
+                    registration,
+                    version: skill.version.clone(),
+                    root_name: skill.root_name.clone(),
+                    skill_dir: normalized_workspace_path_text_from_path(&skill.skill_dir),
+                    enabled: skill.enabled,
+                    disabled_reason: skill.disabled_reason.clone(),
+                    managed: skill.managed,
+                    source_type: skill.source_type.clone(),
+                    source_locator: skill.source_locator.clone(),
+                    entry_count: skill.entry_count,
+                    system_owned: skill.system_owned,
+                    tools: skill
+                        .tools
+                        .iter()
+                        .map(|tool| {
+                            let state = provider_configuration.luaskills.tool_registration_state(
+                                &skill.skill_id,
+                                &tool.local_name,
+                                default_implicit,
+                            );
+                            LuaSkillToolSummary {
+                                canonical_name: tool.canonical_name.clone(),
+                                public_name: Some(luaskills::public_tool_name(
+                                    &tool.canonical_name,
+                                )),
+                                local_name: tool.local_name.clone(),
+                                description: tool.description.clone(),
+                                registration_state: luaskill_tool_registration_state_key(state)
+                                    .to_string(),
+                                registration_label: state.to_string(),
+                                registration_help: luaskill_tool_registration_state_help(state)
+                                    .to_string(),
+                            }
+                        })
+                        .collect(),
+                    config: skill.config.as_ref().map(|config| LuaSkillConfigSummary {
+                        complete: config.complete,
+                        revision: config.revision.clone(),
+                        store_scope: config.store_scope.clone(),
+                        item_count: config.items.len(),
+                        missing_count: config.missing_count,
+                        invalid_count: config.invalid_count,
+                        business_issue_count: config.business_issue_count,
+                        orphaned_count: config.orphaned_count,
+                    }),
+                }
             })
+            .collect(),
+    }
+}
+
+/// Convert LuaSkills author metadata to the localized WebUI package projection.
+/// 将 LuaSkills 作者元数据投影为 WebUI 本地化包资料。
+fn project_luaskill_registration(
+    value: &luaskills::SkillRegistration,
+) -> vulcan_service_api::LuaSkillRegistrationSummary {
+    // Package and guide introductions share the same wire shape and locale keys.
+    // 包介绍和指南介绍共用传输结构和语言键。
+    let project_locales =
+        |locales: &std::collections::BTreeMap<String, luaskills::LocalizedSkillIntroduction>| {
+            locales
+                .iter()
+                .map(|(locale, text)| {
+                    (
+                        locale.clone(),
+                        vulcan_service_api::LuaSkillIntroductionSummary {
+                            title: text.title.clone(),
+                            description: text.description.clone(),
+                        },
+                    )
+                })
+                .collect()
+        };
+    vulcan_service_api::LuaSkillRegistrationSummary {
+        default_implicit: value.mode == luaskills::SkillRegistrationMode::Implicit,
+        default_locale: value.default_locale.clone(),
+        locales: project_locales(&value.locales),
+        prompt_skills: value
+            .prompt_skills
+            .iter()
+            .map(|guide| (guide.name.clone(), project_locales(&guide.locales)))
             .collect(),
     }
 }
@@ -1022,7 +1073,11 @@ pub(crate) fn agent_skill_record_summary(
         .0
         .is_enabled()
     };
-    let plugin_owned = skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin;
+    // Core guides are read-only and cannot be disabled in the catalog.
+    // 核心指南在目录中只读且不能关闭。
+    let plugin_owned = skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin
+        || (skill.scope == vulcan_prompt_skills::PromptSkillScope::System
+            && skill.name == vulcan_prompt_skills::SESSION_MCP_SKILL_NAME);
     AgentSkillRecordSummary {
         skill_key: format!("{}:{}", skill.scope.en_label(), skill.name),
         name: skill.name.clone(),

@@ -6,15 +6,20 @@ import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types
 import type { SkillActionProps } from "./skill-area-types";
 import { LuaSkillsPanel } from "./lua-skills-panel";
 
+// Use a mutable interface language to exercise both mounted surfaces on re-render.
+// 用可变界面语言验证已挂载界面在重新渲染时更新。
+const interfaceState = vi.hoisted(() => ({ locale: "en-US" }));
+
 vi.mock("@/i18n", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/i18n")>();
   const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
-  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+  return { ...actual, useI18n: () => ({ locale: interfaceState.locale, setLocale: () => undefined, t }) };
 });
 
 let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
+  interfaceState.locale = "en-US";
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div");
   document.body.append(host);
@@ -250,4 +255,50 @@ it("distinguishes an empty catalog from a filter that matched nothing", async ()
 
   expect(document.body.textContent).toContain("No items match the current filters.");
   expect(document.body.textContent).not.toContain("Real skill packages appear after startup completes or refresh runs.");
+});
+
+// Verify card and detail introductions switch independently and use the package fallback.
+// 验证卡片和详情独立切换介绍，并使用包声明的默认语言回退。
+it("localizes a LuaSkills package and its guide without opening tools", async () => {
+  // Use independent translations for the package card and the bundled guide.
+  // 为包卡片和随包指南使用两套独立译文。
+  const office = {
+    ...skill("vulcan-work", true),
+    registration: {
+      defaultImplicit: true, defaultLocale: "en-US",
+      locales: {
+        "en-US": { title: "Fixture package", description: "Package introduction EN" },
+        "zh-CN": { title: "办公包示例", description: "办公包介绍" },
+      },
+      promptSkills: {
+        "office-workflow": {
+          "en-US": { title: "Fixture guide", description: "Guide introduction EN" },
+          "zh-CN": { title: "办公指南示例", description: "办公指南介绍" },
+        },
+      },
+    },
+  };
+  // Mount the real management panel with a read-only service fixture.
+  // 使用只读服务夹具挂载实际管理界面。
+  const actions = {
+    onPollLuaSkillConfigEvents: vi.fn().mockResolvedValue({ nextSequence: "0", events: [] }),
+  } as unknown as SkillActionProps;
+  const render = () => root.render(<LuaSkillsPanel actions={actions} skills={[office]} />);
+  await act(async () => render());
+  expect(host.textContent).toContain("Package introduction EN");
+  const card = Array.from(host.querySelectorAll("button"))
+    .find((button) => button.textContent === "Fixture package");
+  expect(card).toBeDefined();
+  await act(async () => card?.click());
+  expect(document.body.textContent).toContain("Guide introduction EN");
+
+  interfaceState.locale = "zh-CN";
+  await act(async () => render());
+  expect(host.textContent).toContain(office.registration.locales["zh-CN"].description);
+  expect(document.body.textContent).toContain(office.registration.promptSkills["office-workflow"]["zh-CN"].description);
+
+  interfaceState.locale = "ja-JP";
+  await act(async () => render());
+  expect(host.textContent).toContain("Package introduction EN");
+  expect(document.body.textContent).toContain("Guide introduction EN");
 });

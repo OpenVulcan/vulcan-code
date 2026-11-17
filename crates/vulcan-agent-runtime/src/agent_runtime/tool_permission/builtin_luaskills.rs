@@ -76,7 +76,10 @@ pub(super) fn classify_dispatch(
     let Some(target_args) = dispatch_arguments(args) else {
         return PermissionSubject::Opaque;
     };
-    classify_entry(name, &target_args).unwrap_or_else(|| generic(name))
+    // Public names carry underscores. Core permission tables use the original canonical names.
+    // 公开名称使用下划线，核心权限表使用原始规范名。
+    let canonical_name = name.replace('_', "-");
+    classify_entry(&canonical_name, &target_args).unwrap_or_else(|| generic(&canonical_name))
 }
 
 /// Returns whether `tool_id` is the implicit LuaSkills dispatcher.

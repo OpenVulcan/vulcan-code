@@ -1,4 +1,5 @@
 import React from "react";
+import type { ComposerShortcut } from "@/components/composer/composer-panel/use-composer-path-mention";
 import { toast } from "@/ui-kit/primitives/toast";
 import {
   enqueueComposerPersistence,
@@ -117,6 +118,9 @@ export function ComposerPanel(props: {
   // Slash commands projected by the shared workbench service.
   // 共享工作台服务投影出的 slash 指令。
   slashCommands: ComposerSlashCommandSummary[];
+  // Catalog references available in the input shortcut menu.
+  // 输入区快捷菜单中的目录引用。
+  shortcuts?: readonly ComposerShortcut[];
   // Visible pending prompts retained for the selected conversation.
   // 当前选中会话保留的可见待发送提示词。
   pendingPrompts: PendingPromptSummary[];
@@ -768,7 +772,7 @@ export function ComposerPanel(props: {
   const { pathMention, handleKeyDown: handleTextareaKeyDown, listboxIds, textareaListbox } = useComposerTextareaKeys({
     input: draftInput, setInput: setDraftInput, textareaRef: composerTextareaRef,
     recallScope: props.projectId ?? "", slotKey: draftSlotKey,
-    workspacePath: props.workspacePath ?? null, projectId: props.projectId, conversationId: props.conversationId,
+    source: props,
     slashPanelVisible, slashActiveIndex: Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1), onKeyDown: handleComposerKeyDown,
   });
 

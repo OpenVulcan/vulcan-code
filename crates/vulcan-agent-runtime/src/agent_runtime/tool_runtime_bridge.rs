@@ -7,7 +7,7 @@ use crate::agent_runtime::tool_permission::{
 };
 use crate::model::SessionId;
 use crate::tooling::native::{
-    BROWSER_MCP_ORIGIN, BROWSER_PAGE_TARGET, PLUGIN_CALL_TOOL_ID, PluginCallArguments,
+    BROWSER_MCP_ORIGIN, BROWSER_PAGE_TARGET, TOOL_CALL_TOOL_ID, ToolCallArguments,
     parse_prompt_skill_detail_tool_arguments,
 };
 use serde_json::{Map, Value, json};
@@ -547,12 +547,12 @@ impl VulcanManagedToolRuntimeBridge {
     pub(crate) fn resolve_skill_action(
         &self,
         request: &CoreToolInvocationRequest,
-    ) -> Option<(PluginCallArguments, &ResolvedToolDefinition)> {
-        if request.tool_name != PLUGIN_CALL_TOOL_ID
+    ) -> Option<(ToolCallArguments, &ResolvedToolDefinition)> {
+        if request.tool_name != TOOL_CALL_TOOL_ID
             || request.argument_parse_error.is_some()
             || !self
                 .definitions_by_id
-                .get(PLUGIN_CALL_TOOL_ID)
+                .get(TOOL_CALL_TOOL_ID)
                 .is_some_and(|definition| {
                     definition.descriptor.source == VulcanToolSourceKind::Native
                 })
@@ -562,7 +562,7 @@ impl VulcanManagedToolRuntimeBridge {
         // The exact pair must exist in the same policy-filtered snapshot as the Provider catalog.
         // 精确的技能和动作组合必须存在于 Provider 目录对应的策略筛选快照中。
         let arguments =
-            serde_json::from_value::<PluginCallArguments>(request.arguments.clone()).ok()?;
+            serde_json::from_value::<ToolCallArguments>(request.arguments.clone()).ok()?;
         // The action is the original plugin definition so its permission and generation remain valid.
         // 动作为原始插件定义，以保留其权限与代次约束。
         let action = self
@@ -636,11 +636,17 @@ impl VulcanManagedToolRuntimeBridge {
             .manager
             .skill_actions(&skill)
             .map(|(alias, action)| {
-                json!({
-                    "action": alias,
-                    "description": action.descriptor.description,
-                    "input_schema": action.parameters_schema
-                })
+                // LuaSkills provides argument explanations and examples in its guide.
+                // LuaSkills 通过随包指南提供参数说明与示例。
+                if action.descriptor.source == VulcanToolSourceKind::LuaSkills {
+                    json!({ "action": alias })
+                } else {
+                    json!({
+                        "action": alias,
+                        "description": action.descriptor.description,
+                        "input_schema": action.parameters_schema
+                    })
+                }
             })
             .collect::<Vec<_>>();
         if actions.is_empty() {
@@ -1560,7 +1566,7 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
         }
         // Dispatch the bound action directly through the existing invocation gates.
         // 经现有调用闸门直接调度已绑定动作。
-        let invocation = if definition.descriptor.id == PLUGIN_CALL_TOOL_ID
+        let invocation = if definition.descriptor.id == TOOL_CALL_TOOL_ID
             && definition.descriptor.source == VulcanToolSourceKind::Native
         {
             BROWSER_PAGE_TARGET

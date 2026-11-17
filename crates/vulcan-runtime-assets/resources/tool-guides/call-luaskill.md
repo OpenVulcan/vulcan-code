@@ -1,28 +1,12 @@
-### Calling an implicit LuaSkill
+### Calling an implicit LuaSkills tool
 
-First call `luaskill_help` with `{"name":"<complete canonical name>"}` for an
-implicit entry listed in its package's invocation block. Read the returned help
-and argument schema before dispatching. Do not guess a short entry name, a
-package alias, or arguments from another version.
+Read the bundled guide with `skill` when the task matches its description.
+Use the public tool name and parameters shown in the guide. Supply `args` as
+name/value pairs with string values. Encode arrays and objects as JSON text.
+Use an empty array for a call without arguments.
 
-Call `call_luaskill` with the same complete canonical name and an `args` array.
-Every array element contains exactly a parameter `name` and a string `value`.
-Use each parameter name only once. Encode object and array values as JSON text;
-encode numbers and booleans as text matching the target schema. String parameters
-remain literal strings. The host restores supported JSON types from that schema.
-Use an empty array when the selected entry has no arguments.
-
-For example, after discovering an entry with string `query` and integer `limit`
-parameters, the dispatcher argument shape is:
+For a guide that documents a string parameter and an integer parameter:
 
 ```json
-{"name":"example-package-search","args":[{"name":"query","value":"source ownership"},{"name":"limit","value":"4"}]}
+{"name":"example_package_search","args":[{"name":"query","value":"source ownership"},{"name":"limit","value":"4"}]}
 ```
-
-The example name is illustrative, not an installed capability. Dispatch only an
-implicit entry currently listed for its package. Required fields and additional
-constraints come from that entry's schema and help. Do not invent defaults or
-bypass a refused call by selecting another entry. Report an explicit host or skill
-failure rather than treating it as a successful empty result. Missing skill
-configuration must be supplied through the supported configuration UI, not copied
-into tool hints.

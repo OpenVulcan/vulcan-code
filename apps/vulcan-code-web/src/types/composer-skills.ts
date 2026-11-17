@@ -182,6 +182,9 @@ export interface ToolCallSummary {
 // LuaSkillToolSummary describes one Lua Skill runtime tool row.
 // LuaSkillToolSummary 描述单个 Lua Skill 运行时工具行。
 export interface LuaSkillToolSummary {
+  // Public underscore name supplied by the runtime when available.
+  // 运行时提供的公开下划线名称。
+  publicName?: string;
   // Canonical host-visible tool name.
   // 宿主可见的规范工具名称。
   canonicalName: string;
@@ -204,7 +207,38 @@ export interface LuaSkillToolSummary {
 
 // LuaSkillSummary describes one Lua Skill package.
 // LuaSkillSummary 描述单个 Lua Skill 包。
+// LuaSkillIntroduction describes a registered package or guide in one language.
+// LuaSkillIntroduction 描述单一语言下的已注册技能包或指南。
+export interface LuaSkillIntroduction {
+  // Display title.
+  // 显示标题。
+  title: string;
+  // Compact description.
+  // 精简说明。
+  description: string;
+}
+
+// LuaSkillPackageRegistration carries localized introductions and the declared default.
+// LuaSkillPackageRegistration 携带本地化介绍和声明的默认方式。
+export interface LuaSkillPackageRegistration {
+  // Whether implicit registration is available.
+  // 是否支持隐式注册。
+  defaultImplicit: boolean;
+  // Fallback language declared by the package.
+  // 包声明的回退语言。
+  defaultLocale: string;
+  // Package introductions by language tag.
+  // 以语言标签索引的包介绍。
+  locales: Record<string, LuaSkillIntroduction>;
+  // Guide introductions by stable prompt skill name and language tag.
+  // 以提示词技能稳定名称和语言标签索引的指南介绍。
+  promptSkills: Record<string, Record<string, LuaSkillIntroduction>>;
+}
+
 export interface LuaSkillSummary {
+  // Registration metadata is only sent for packages declaring the new contract.
+  // 仅对声明新契约的包传输注册元数据。
+  registration?: LuaSkillPackageRegistration;
   // Stable skill identifier.
   // 稳定技能标识。
   skillId: string;

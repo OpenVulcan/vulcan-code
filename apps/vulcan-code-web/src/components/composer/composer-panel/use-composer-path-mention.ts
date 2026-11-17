@@ -61,14 +61,52 @@ export function pathMentionSuggestions(entries: readonly WorkspaceFileEntrySumma
   return [...starts, ...contains].slice(0, PATH_MENTION_LIMIT);
 }
 
+// ComposerShortcut stores an exact catalog reference and its display label.
+// ComposerShortcut 保存精确目录引用和对应显示名称。
+export interface ComposerShortcut {
+  kind: "skill" | "plugin";
+  name: string;
+  label: string;
+}
+
+// ComposerMentionRow combines catalog references with selectable workspace entries.
+// ComposerMentionRow 将目录引用与可选择的工作区条目组合在同一列表。
+export type ComposerMentionRow = ComposerShortcut | { kind: "path"; entry: WorkspaceFileEntrySummary };
+
+// composerMentionAt locates the token around the caret, including a plugin after a skill.
+// composerMentionAt 定位光标周围的引用，支持紧跟技能名的插件引用。
+export function composerMentionAt(input: string, caret: number): (PathMention & { marker: "@" | "#" }) | null {
+  // tokenStart and tokenEnd bound a whitespace-delimited word.
+  // tokenStart 和 tokenEnd 界定一个以空白分隔的词。
+  let tokenStart = caret;
+  while (tokenStart > 0 && !/\s/u.test(input[tokenStart - 1])) tokenStart -= 1;
+  let tokenEnd = caret;
+  while (tokenEnd < input.length && !/\s/u.test(input[tokenEnd])) tokenEnd += 1;
+  // The compound form only applies after a canonical skill, so an @ path containing # still works.
+  // 复合位置只匹配规范技能名，包含 # 的 @ 路径仍可使用。
+  const token = input.slice(tokenStart, tokenEnd);
+  const compound = /^@[A-Za-z0-9_:-]+#/u.exec(token);
+  const hashOffset = compound ? compound[0].length - 1 : -1;
+  if (token.startsWith("#") || (hashOffset > 0 && tokenStart + hashOffset < caret)) {
+    const start = tokenStart + Math.max(0, hashOffset);
+    return { start, end: tokenEnd, query: input.slice(start + 1, caret), marker: "#" };
+  }
+  if (hashOffset > 0 && caret > tokenStart && caret <= tokenStart + hashOffset) {
+    return { start: tokenStart, end: tokenStart + hashOffset, query: input.slice(tokenStart + 1, caret), marker: "@" };
+  }
+  const path = pathMentionAt(input, caret);
+  return path ? { ...path, marker: "@" } : null;
+}
+
 // ComposerPathMention is the panel state and the keyboard and pointer actions the composer wires in.
 // ComposerPathMention 是输入区接入的面板状态及键盘与指针操作。
 export interface ComposerPathMention {
-  suggestions: WorkspaceFileEntrySummary[];
+  suggestions: ComposerMentionRow[];
+  marker: "@" | "#";
   visible: boolean;
   highlightedIndex: number;
   setHighlightedIndex: (index: number) => void;
-  accept: (entry: WorkspaceFileEntrySummary) => void;
+  accept: (row: ComposerMentionRow) => void;
   // trackCaret records where the caret is after typing, clicking or moving it.
   // trackCaret 记录输入、点击或移动后的光标位置。
   trackCaret: (textarea: HTMLTextAreaElement) => void;
@@ -88,6 +126,7 @@ export function useComposerPathMention(options: {
   workspacePath: string | null;
   projectId: string | null;
   conversationId: string | null;
+  shortcuts?: readonly ComposerShortcut[];
 }): ComposerPathMention {
   const { input, setInput, textareaRef, workspacePath, projectId, conversationId } = options;
   const [caret, setCaret] = React.useState<number | null>(null);
@@ -102,8 +141,10 @@ export function useComposerPathMention(options: {
   );
   const folders = listings.workspacePath === workspacePath ? listings.folders : null;
 
-  const mention = workspacePath && caret !== null && caret <= input.length ? pathMentionAt(input, caret) : null;
-  const split = mention ? splitPathMention(mention.query) : null;
+  // A catalog reference is available even when the conversation has no workspace.
+  // 即使会话没有工作区也可以选择目录引用。
+  const mention = caret !== null && caret <= input.length ? composerMentionAt(input, caret) : null;
+  const split = mention?.marker === "@" ? splitPathMention(mention.query) : null;
   const directory = split?.directory ?? null;
 
   React.useEffect(() => {
@@ -128,11 +169,19 @@ export function useComposerPathMention(options: {
   }, [directory]);
 
   const entries = directory === null ? null : folders?.get(directory) ?? null;
-  const suggestions = React.useMemo(
-    () => (entries && split ? pathMentionSuggestions(entries, split.prefix) : []),
-    [entries, split?.prefix],
-  );
-  const mentionKey = mention ? `${mention.start}:${mention.query}` : null;
+  // Catalog matches are shown ahead of paths, while paths remain browsable by directory.
+  // 目录匹配项排在路径之前，路径仍可按目录浏览。
+  const suggestions: ComposerMentionRow[] = [];
+  if (mention && !split?.directory) {
+    const kind = mention.marker === "#" ? "plugin" : "skill";
+    const query = mention.query.toLowerCase();
+    suggestions.push(...(options.shortcuts ?? []).filter((item) => item.kind === kind
+      && (item.name.toLowerCase().includes(query) || item.label.toLowerCase().includes(query))));
+  }
+  if (entries && split) {
+    suggestions.push(...pathMentionSuggestions(entries, split.prefix).map((entry) => ({ kind: "path" as const, entry })));
+  }
+  const mentionKey = mention ? `${mention.marker}${mention.start}:${mention.query}` : null;
   const visible = suggestions.length > 0 && mentionKey !== dismissed;
   const highlighted = Math.min(highlightedIndex, Math.max(suggestions.length - 1, 0));
 
@@ -140,10 +189,16 @@ export function useComposerPathMention(options: {
     setHighlightedIndex(0);
   }, [mentionKey]);
 
-  const accept = React.useCallback((entry: WorkspaceFileEntrySummary) => {
+  const accept = React.useCallback((row: ComposerMentionRow) => {
     if (!mention) return;
-    const replacement = pathMentionText(entry.relativePath, entry.isDirectory);
-    const next = input.slice(0, mention.start) + replacement + input.slice(mention.end).replace(/^\s/u, entry.isDirectory ? "$&" : "");
+    // A shortcut inserts a stable machine-readable ID, even when its visible label is localized.
+    // 快捷引用插入稳定标识，无论展示名称使用哪种语言。
+    const suffix = input.slice(mention.end);
+    const replacement = row.kind === "path"
+      ? pathMentionText(row.entry.relativePath, row.entry.isDirectory)
+      : `${mention.marker}${row.name}${suffix.startsWith("#") ? "" : " "}`;
+    const next = input.slice(0, mention.start) + replacement
+      + suffix.replace(/^\s/u, row.kind === "path" && row.entry.isDirectory ? "$&" : "");
     const position = mention.start + replacement.length;
     setInput(next);
     setCaret(position);
@@ -180,5 +235,5 @@ export function useComposerPathMention(options: {
     return false;
   };
 
-  return { suggestions, visible, highlightedIndex: highlighted, setHighlightedIndex, accept, trackCaret, handleKeyDown };
+  return { suggestions, marker: mention?.marker ?? "@", visible, highlightedIndex: highlighted, setHighlightedIndex, accept, trackCaret, handleKeyDown };
 }

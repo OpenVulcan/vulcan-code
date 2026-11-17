@@ -220,6 +220,10 @@ pub struct LuaSkillSummary {
     /// Human-facing display name.
     /// 面向用户的显示名称。
     pub display_name: String,
+    /// Localized introductions and default mode declared by the package.
+    /// 包声明的本地化介绍和默认注册方式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<LuaSkillRegistrationSummary>,
     /// Skill package version.
     /// 技能包版本。
     pub version: String,
@@ -256,6 +260,37 @@ pub struct LuaSkillSummary {
     /// Optional package configuration summary declared by this skill.
     /// 当前技能声明的可选技能包配置摘要。
     pub config: Option<LuaSkillConfigSummary>,
+}
+
+/// Package-owned discovery information for management surfaces.
+/// 面向管理界面的包级发现信息。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillRegistrationSummary {
+    /// Whether the package supports implicit registration.
+    /// 包是否支持隐式注册。
+    pub default_implicit: bool,
+    /// Locale used for missing translations.
+    /// 译文缺失时使用的语言。
+    pub default_locale: String,
+    /// Introductions describing the entire tool package.
+    /// 描述整个工具包的介绍。
+    pub locales: BTreeMap<String, LuaSkillIntroductionSummary>,
+    /// Localized introductions keyed by each stable prompt skill ID.
+    /// 按各提示词技能稳定标识索引的本地化介绍。
+    pub prompt_skills: BTreeMap<String, BTreeMap<String, LuaSkillIntroductionSummary>>,
+}
+
+/// User-facing title and description in one language.
+/// 单种语言的用户可见标题与说明。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LuaSkillIntroductionSummary {
+    /// Localized display title.
+    /// 本地化显示标题。
+    pub title: String,
+    /// Localized description.
+    /// 本地化说明。
+    pub description: String,
 }
 
 /// Compact package configuration status projected into one Lua Skill row.
@@ -627,9 +662,13 @@ pub struct LuaSkillConfigEventBatch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LuaSkillToolSummary {
-    /// Canonical host-visible tool name.
-    /// 宿主可见的规范工具名称。
+    /// Canonical runtime identity used by tool policies and history.
+    /// 工具策略和历史记录使用的规范运行时标识。
     pub canonical_name: String,
+    /// Portable name shown to models and package users.
+    /// 面向模型和包用户展示的通用名称。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_name: Option<String>,
     /// Local tool name inside the skill package.
     /// 技能包内部的本地工具名称。
     pub local_name: String,

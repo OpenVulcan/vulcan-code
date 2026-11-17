@@ -1,5 +1,5 @@
 import React from "react";
-import { File, Folder } from "lucide-react";
+import { File, Folder, Puzzle, BookOpen } from "lucide-react";
 
 import { useI18n } from "@/i18n";
 
@@ -19,13 +19,13 @@ export function ComposerPathMentionPanel(props: { mention: ComposerPathMention; 
     listRef.current?.children[highlightedIndex]?.scrollIntoView?.({ block: "nearest" });
   }, [highlightedIndex]);
   return (
-    <div aria-label={t("composer.mention.panel")} className="vk-slash" data-kind="path" id={props.id} ref={listRef} role="listbox">
+    <div aria-label={t(props.mention.marker === "#" ? "area.skills" : "composer.mention.references")} className="vk-slash" data-kind={props.mention.marker === "#" ? "plugin" : "path"} id={props.id} ref={listRef} role="listbox">
       {suggestions.map((entry, index) => (
         <button
           aria-selected={index === highlightedIndex}
           className="vk-slash-row"
           id={composerListOptionId(props.id, index)}
-          key={entry.relativePath}
+          key={entry.kind === "path" ? `path:${entry.entry.relativePath}` : `${entry.kind}:${entry.name}`}
           // The textarea keeps focus, so the caret and the @ word stay where they are.
           // 文本框保持焦点，使光标与 @ 词保持原位。
           onMouseDown={(event) => event.preventDefault()}
@@ -35,8 +35,13 @@ export function ComposerPathMentionPanel(props: { mention: ComposerPathMention; 
           tabIndex={-1}
           type="button"
         >
-          {entry.isDirectory ? <Folder aria-hidden="true" /> : <File aria-hidden="true" />}
-          <span className="vk-slash-cmd">{entry.isDirectory ? `${entry.name}/` : entry.name}</span>
+          {entry.kind === "path"
+            ? entry.entry.isDirectory ? <Folder aria-hidden="true" /> : <File aria-hidden="true" />
+            : entry.kind === "skill" ? <BookOpen aria-hidden="true" /> : <Puzzle aria-hidden="true" />}
+          <span className="vk-slash-cmd">{entry.kind === "path"
+            ? `${entry.entry.name}${entry.entry.isDirectory ? "/" : ""}`
+            : entry.label}</span>
+          {entry.kind === "path" || entry.label === entry.name ? null : <span className="vk-slash-desc">{entry.name}</span>}
         </button>
       ))}
     </div>

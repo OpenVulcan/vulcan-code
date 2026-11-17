@@ -21,9 +21,8 @@
 
 ## 工具
 
-1. **三个固定工具。** `mcp_connect`（`connect` / `status` / `disconnect`）、`mcp_tools`（列出工具，
-   或用 `tool` 读取单个工具的说明与输入输出 Schema）、`mcp_call`（调用）。工具列表不随连接变化，
-   被连接服务器的工具不会进入 Provider 请求的工具清单。
+1. **连接管理按需暴露。** 模型读取系统 Skill `session-mcp` 后，通过 `tool_call` 执行原生 `mcp_connect` 的连接、状态查询与断开动作。读取 Skill 不会连接服务器。
+   `mcp_tools` 仍负责查看连接上的工具及 Schema，`mcp_call` 负责调用。连接成功后，服务器工具不会进入 Provider 工具清单。
 2. **稳定连接 ID。** `connect` 返回 `mcp_<8 位十六进制>` 形式的随机 ID，之后用它调用；名称只用于辨认，
    在会话内不区分大小写唯一，最长 `SESSION_MCP_NAME_MAX_CHARS` 个字符。
 3. **数量上限。** 每个根会话最多 `SESSION_MCP_MAX_CONNECTIONS` 个连接；超限或重名在启动服务器之前拒绝，
@@ -38,7 +37,7 @@
 1. **属于根会话。** 连接登记在根会话名下；子代理通过 `TaskRuntime` 的会话记录解析到根会话，可以查看与调用，
    但不能 `connect` 或 `disconnect`。其他会话按“不存在”处理。
 2. **不写配置，不自动重连。** 连接只在内存中；Core 重启后连接 ID 失效，调用明确报错并指引用
-   `mcp_connect` `status` 查看或重新连接。服务器断开（进程退出、传输关闭）后连接标记为已关闭并保留原因，
+   `session-mcp` Skill 查看或重新连接。服务器断开（进程退出、传输关闭）后连接标记为已关闭并保留原因，
    不重连；`disconnect` 移除它。
 3. **工具变化。** 服务器发送 `tools/list_changed`（或事件流滞后）时工具列表标记为过期，下次读取时重新列出；
    `mcp_tools` 的 `refresh` 可强制重新列出。
