@@ -51,6 +51,26 @@ pub struct NativeBrowserSnapshot {
 /// 单个可信会话中供 AI 直接工具使用的宿主浏览器调度接口。
 #[async_trait::async_trait]
 pub trait NativeBrowserRuntime: fmt::Debug + Send + Sync {
+    /// Captures the current selection without starting a browser or MCP process.
+    /// 捕获当前选择，不启动浏览器或 MCP 进程。
+    fn capture_page_target(&self, _owner: SessionId) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    /// Invokes the exact MCP tool for the previously captured selection and plugin generation.
+    /// 对先前捕获的选择及插件代次调用精确 MCP 工具。
+    async fn invoke_page_tool(
+        &self,
+        _owner: SessionId,
+        _target: &str,
+        _generation: u64,
+        _tool: &str,
+        _schema: &serde_json::Value,
+        _args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err(String::from("Browser page actions are unavailable."))
+    }
+
     /// Lists only browsers owned by `owner_session_id` and returns their selected state.
     /// 仅列出 `owner_session_id` 所拥有的浏览器并返回其选中状态。
     async fn list(&self, owner_session_id: SessionId)
@@ -80,6 +100,16 @@ pub trait NativeBrowserRuntime: fmt::Debug + Send + Sync {
         browser_id: &str,
     ) -> Result<NativeBrowserSnapshot, String>;
 }
+
+tokio::task_local! {
+    /// Host-captured selection scoped to permission, hooks and one plugin invocation.
+    /// 限定于权限、Hook 与单次插件调用的宿主捕获选择。
+    pub(crate) static BROWSER_PAGE_TARGET: Option<String>;
+}
+
+/// Stable MCP server identity for the built-in browser.
+/// 内置浏览器稳定的 MCP 服务身份。
+pub(crate) const BROWSER_MCP_ORIGIN: &str = "vulcan-browser:playwright";
 
 /// Parsed arguments accepted by the browser-open tool.
 /// 浏览器打开工具接受的已解析参数。

@@ -1028,6 +1028,107 @@ fn test_provider_config() -> ProviderConfigurationFile {
     ProviderConfigurationFile::default()
 }
 
+/// Verifies that an enabled browser publishes only skill routes during ordinary preparation.
+/// 验证已启用的浏览器在普通准备中仅发布技能入口。
+#[test]
+fn browser_uses_packaged_skill_actions_without_mcp_discovery() {
+    use crate::tooling::native::{NativeBrowserRuntime, NativeBrowserSnapshot};
+
+    /// A browser runtime that must stay idle throughout ordinary request preparation.
+    /// 在普通请求准备的全程必须保持空闲的浏览器运行时。
+    #[derive(Debug)]
+    struct IdleBrowser;
+
+    #[async_trait::async_trait]
+    impl NativeBrowserRuntime for IdleBrowser {
+        /// Rejects any selection capture during ordinary preparation.
+        /// 拒绝普通准备期间的任何选择捕获。
+        fn capture_page_target(&self, _: Uuid) -> Result<Option<String>, String> {
+            panic!("ordinary preparation must not capture a browser target")
+        }
+
+        /// Rejects unexpected browser listing.
+        /// 拒绝意外浏览器列表读取。
+        async fn list(&self, _: Uuid) -> Result<Vec<NativeBrowserSnapshot>, String> {
+            panic!("ordinary preparation must not list browser sessions")
+        }
+        /// Rejects unexpected browser startup.
+        /// 拒绝意外浏览器启动。
+        async fn open(&self, _: Uuid, _: bool) -> Result<NativeBrowserSnapshot, String> {
+            panic!("ordinary preparation must not open a browser")
+        }
+        /// Rejects unexpected selection.
+        /// 拒绝意外浏览器选择。
+        async fn select(&self, _: Uuid, _: &str) -> Result<NativeBrowserSnapshot, String> {
+            panic!("ordinary preparation must not select a browser")
+        }
+        /// Rejects unexpected browser closure.
+        /// 拒绝意外关闭浏览器。
+        async fn close(&self, _: Uuid, _: &str) -> Result<NativeBrowserSnapshot, String> {
+            panic!("ordinary preparation must not close a browser")
+        }
+    }
+
+    // Load the actual package and pinned definitions with the browser explicitly enabled.
+    // 显式启用浏览器并加载真实插件包及固定工具定义。
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let enabled = std::collections::BTreeSet::from([String::from("vulcan-browser")]);
+    let catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
+        &root,
+        None,
+        &Default::default(),
+        &enabled,
+        1,
+    );
+    assert!(
+        catalog
+            .enabled_mcp_servers
+            .contains_key("vulcan-browser:playwright"),
+        "{:?}",
+        catalog.plugins["vulcan-browser"].diagnostics
+    );
+    // Inject only the inert host interface, with no supplemental live MCP connections.
+    // 仅注入空闲宿主接口，不附加实时 MCP 连接。
+    let config = test_provider_config();
+    let foundation = test_runtime_foundation_with_plugins(&config, Some(Arc::new(catalog)));
+    let mut request = test_execution_preparation_request();
+    request.native_browser_runtime = Some(Arc::new(IdleBrowser));
+    let prepared =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    let published = &prepared.tool_snapshot.resolved_tool_definitions;
+    assert!(
+        published
+            .iter()
+            .any(|tool| tool.descriptor.id == "plugin_call")
+    );
+    assert!(
+        published
+            .iter()
+            .all(|tool| !tool.descriptor.id.starts_with("browser_")
+                && tool.descriptor.origin().namespace() != "vulcan-browser:playwright")
+    );
+    // Underlying identities still match permission and hook targets.
+    // 底层身份仍与权限和 Hook 目标一致。
+    let manager = &prepared.tool_snapshot.tools_manager;
+    let skill = "vulcan-browser:browser-workflow";
+    let open = manager.skill_action(skill, "open").unwrap();
+    let screenshot = manager.skill_action(skill, "screenshot").unwrap();
+    assert_eq!(open.descriptor.id, "browser_open");
+    assert_eq!(
+        screenshot.descriptor.origin().namespace(),
+        "vulcan-browser:playwright"
+    );
+    assert_eq!(
+        screenshot.descriptor.origin().original_name(),
+        "browser_take_screenshot"
+    );
+    assert!(
+        manager
+            .skill_action(skill, "browser_take_screenshot")
+            .is_none()
+    );
+}
+
 /// Verifies discovery and dispatch through the real Context7 package and Provider tool projection.
 /// 通过真实 Context7 包及 Provider 工具投影验证发现与调度。
 /// The test does not grant network access; a valid action reaches the plugin runtime boundary.

@@ -52,9 +52,10 @@ impl BrowserManager {
             .filter(|session| session.projection.status == BrowserSessionStatus::Running)
             .ok_or_else(|| String::from(super::BROWSER_ERROR_UNKNOWN_SESSION))?;
         let projection = session.projection.clone();
-        state
-            .ai_selected_sessions
-            .insert(String::from(owner_session_id), String::from(session_id));
+        state.ai_selected_sessions.insert(
+            String::from(owner_session_id),
+            (String::from(session_id), uuid::Uuid::new_v4().to_string()),
+        );
         Ok(projection)
     }
 
@@ -70,6 +71,18 @@ impl BrowserManager {
         &self,
         owner_session_id: &str,
     ) -> Result<Option<BrowserSessionProjection>, String> {
+        self.selected_ai_browser_binding(owner_session_id)
+            .map(|selected| selected.map(|(browser, _)| browser))
+    }
+
+    /// Reads the live browser and one exact selection token under the same lock.
+    /// 在同一锁内读取实时浏览器与精确选择令牌。
+    pub(crate) fn selected_ai_browser_binding(
+        &self,
+        owner_session_id: &str,
+    ) -> Result<Option<(BrowserSessionProjection, String)>, String> {
+        // The selection and its token must correspond to the same state revision.
+        // 选择与其令牌必须对应同一状态修订。
         let state = self
             .inner
             .lock()
@@ -77,10 +90,14 @@ impl BrowserManager {
         Ok(state
             .ai_selected_sessions
             .get(owner_session_id)
-            .and_then(|session_id| state.sessions.get(session_id))
-            .filter(|session| session.projection.owner_session_id == owner_session_id)
-            .filter(|session| session.projection.status == BrowserSessionStatus::Running)
-            .map(|session| session.projection.clone()))
+            .and_then(|(session_id, token)| {
+                state
+                    .sessions
+                    .get(session_id)
+                    .filter(|session| session.projection.owner_session_id == owner_session_id)
+                    .filter(|session| session.projection.status == BrowserSessionStatus::Running)
+                    .map(|session| (session.projection.clone(), token.clone()))
+            }))
     }
 
     /// Opens one Core-only host gateway after checking conversation ownership and the exclusive lease.

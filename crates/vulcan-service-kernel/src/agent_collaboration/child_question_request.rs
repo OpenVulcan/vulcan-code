@@ -150,8 +150,6 @@ async fn prepare_child_execution_request(
     request.vmm_runtime_ready =
         crate::webui_prompt_lifecycle::webui_vmm_runtime_readiness(&invocation.state)?
             .service_ready;
-    request.supplemental_mcp_tools =
-        crate::browser::prepare_browser_mcp_bindings(invocation.state.clone(), session_id).await?;
     Ok(request)
 }
 

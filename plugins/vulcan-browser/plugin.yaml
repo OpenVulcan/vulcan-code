@@ -22,6 +22,7 @@ required_files:
   - config/schema.json
   - config/defaults.json
   - skills/browser-workflow/SKILL.md
+  - schemas/playwright-tools.json
 execution:
   dependencies:
     manifest: dependencies.yaml
@@ -130,6 +131,31 @@ mcp:
     - id: playwright
       name: Playwright Browser
       scope: conversation
+      prompt_tools:
+        skill: browser-workflow
+        schema_file: schemas/playwright-tools.json
+        core_actions:
+          list: browser_list
+          open: browser_open
+          select: browser_select
+          close: browser_close
+        actions:
+          navigate: browser_navigate
+          back: browser_navigate_back
+          snapshot: browser_snapshot
+          screenshot: browser_take_screenshot
+          click: browser_click
+          type: browser_type
+          press_key: browser_press_key
+          hover: browser_hover
+          select_option: browser_select_option
+          fill_form: browser_fill_form
+          wait_for: browser_wait_for
+          tabs: browser_tabs
+          handle_dialog: browser_handle_dialog
+          console_messages: browser_console_messages
+          network_requests: browser_network_requests
+          resize: browser_resize
       transport:
         type: stdio
         launcher:

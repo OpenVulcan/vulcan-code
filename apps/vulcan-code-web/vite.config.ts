@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import { configDefaults } from "vitest/config";
 import { VULCAN_DEV_WEBUI_ORIGIN } from "./src/service/vite-service-discovery-origin";
 import { PDFJS_DATA_BASE_PATH, PDFJS_DATA_FOLDERS } from "./src/components/file-viewers/pdfjs-data-path";
@@ -16,7 +17,7 @@ const changelogDir = path.resolve(__dirname, "../../crates/vulcan-runtime-assets
 
 // Configure the Vite app served by Core and loaded by the desktop shell.
 // 配置由 Core 提供页面并供桌面壳加载的 Vite 应用。
-export default defineConfig(({ mode }) => {
+export default defineConfig(async ({ mode }) => {
   // isRelease selects the packaged release behavior where no Vite server is needed.
   // isRelease 选择无需 Vite 服务端的打包 release 行为。
   const isRelease = mode === "production";
@@ -31,6 +32,9 @@ export default defineConfig(({ mode }) => {
     // 单元测试也拥有独立缓存，避免其模块图替换浏览器中的 React 单例。
     cacheDir: path.resolve(__dirname, "node_modules", mode === "test" ? ".vite-workbench-test" : ".vite-workbench"),
     plugins: [react(), vulcanServiceDiscoveryPlugin(userVulcanRootName), pdfjsDataPlugin()],
+    define: {
+      __VULCAN_BROWSER_ACTION_DISPLAY__: JSON.stringify(await browserActionDisplay()),
+    },
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
@@ -83,6 +87,41 @@ export default defineConfig(({ mode }) => {
         },
   };
 });
+
+/** Returns card names from the same packaged aliases Core resolves at runtime.
+ * 从 Core 运行时解析的同一份随包别名返回工具卡名称。 */
+async function browserActionDisplay() {
+  // The YAML parser runs only while loading the build configuration.
+  // YAML 解析器仅在加载构建配置时运行。
+  const { load } = createRequire(import.meta.url)("js-yaml") as { load: (source: string) => unknown };
+  // Source is the browser plugin's validated package manifest.
+  // 源文件是浏览器插件经校验的包清单。
+  const source = await fs.readFile(path.resolve(__dirname, "../../plugins/vulcan-browser/plugin.yaml"), "utf8");
+  // Manifest exposes only the route fields needed to preserve the existing presentation names.
+  // 清单只在此使用保留现有展示名称所需的路由字段。
+  const manifest = load(source) as {
+    id: string;
+    mcp: { servers: { id: string; prompt_tools: {
+      skill: string;
+      core_actions: Record<string, string>;
+      actions: Record<string, string>;
+    } }[] };
+  };
+  // Find the exact packaged Playwright origin.
+  // 查找精确随包 Playwright 来源。
+  const server = manifest.mcp.servers.find((entry) => entry.id === "playwright");
+  if (!server) throw new Error("The bundled Playwright action manifest is missing.");
+  // Original MCP names keep the existing browser card and history presentation.
+  // 原始 MCP 名称保留当前浏览器工具卡及历史展示。
+  const prefix = `mcp_${manifest.id.replaceAll("-", "_")}_${server.id}_`;
+  return {
+    skill: `${manifest.id}:${server.prompt_tools.skill}`,
+    actions: {
+      ...server.prompt_tools.core_actions,
+      ...Object.fromEntries(Object.entries(server.prompt_tools.actions).map(([alias, name]) => [alias, prefix + name])),
+    },
+  };
+}
 
 // vulcanServiceDiscoveryPlugin exposes the latest local service endpoint to browser-mode dev clients.
 // vulcanServiceDiscoveryPlugin 向浏览器开发客户端暴露最新本地服务端点。

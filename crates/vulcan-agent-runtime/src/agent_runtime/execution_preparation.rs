@@ -18,7 +18,7 @@ use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::provider_tool_bridge::build_provider_tool_candidates;
-use crate::tooling::native::{PLUGIN_CALL_TOOL_ID, SUBMIT_PLAN_TOOL_ID};
+use crate::tooling::native::{BROWSER_MCP_ORIGIN, PLUGIN_CALL_TOOL_ID, SUBMIT_PLAN_TOOL_ID};
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
@@ -41,6 +41,7 @@ use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
 };
 
+mod browser_skill;
 pub(crate) mod captured_child_tool_admission;
 mod dedicated_session;
 #[path = "execution_preparation/tool_exposure.rs"]
@@ -361,7 +362,7 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         &model_blueprint.provider_id,
         &model_blueprint.model_id,
     );
-    let provider_tool_candidates = build_provider_tool_candidates(
+    let mut provider_tool_candidates = build_provider_tool_candidates(
         Arc::clone(&public_ai_runtime),
         public_ai_configuration,
         workspace_root.clone(),
@@ -384,19 +385,55 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
     );
     // Freeze the opted-in identities from the same published plugin catalog as the tool bindings.
     // 从工具绑定使用的同一已发布插件目录冻结声明为按需的身份。
-    let plugin_skill_actions = foundation
-        .vulcan_plugin_catalog()
+    let plugin_catalog = foundation.vulcan_plugin_catalog();
+    let mut plugin_skill_actions = plugin_catalog
         .iter()
         .flat_map(|catalog| catalog.enabled_tools.values())
         .filter_map(|tool| {
             tool.manifest.prompt_skill.as_ref().map(|skill| {
                 (
-                    (tool.plugin_id.clone(), tool.id.clone()),
-                    format!("{}:{skill}", tool.plugin_id),
+                    (
+                        VulcanToolSourceKind::VulcanPlugin,
+                        tool.plugin_id.clone(),
+                        tool.id.clone(),
+                    ),
+                    (format!("{}:{skill}", tool.plugin_id), tool.id.clone()),
                 )
             })
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<std::collections::HashMap<_, _>>();
+    // Browser aliases refer to the original Core and MCP tool identities.
+    // 浏览器别名指向原始 Core 与 MCP 工具身份。
+    if let Some(runtime) = request.native_browser_runtime.as_ref()
+        && let Some(server) = plugin_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.enabled_mcp_servers.get(BROWSER_MCP_ORIGIN))
+        && let Some(route) = &server.manifest.prompt_tools
+    {
+        // Both providers are advertised through the same namespaced skill.
+        // 两类工具均通过同一个带命名空间的技能公开。
+        let skill = format!("{}:{}", server.plugin_id, route.skill);
+        for (kind, namespace, actions) in [
+            (VulcanToolSourceKind::Native, "native", &route.core_actions),
+            (
+                VulcanToolSourceKind::Mcp,
+                BROWSER_MCP_ORIGIN,
+                &route.actions,
+            ),
+        ] {
+            plugin_skill_actions.extend(actions.iter().map(|(alias, name)| {
+                (
+                    (kind, namespace.to_owned(), name.clone()),
+                    (skill.clone(), alias.clone()),
+                )
+            }));
+        }
+        provider_tool_candidates.extend(browser_skill::candidates(
+            server,
+            runtime,
+            &tool_exposure.selectors,
+        ));
+    }
     // The manager retains executable skill actions after removing their public declarations.
     // 移除公开声明后，管理器继续持有可执行的技能动作。
     let mut tools_manager = build_vulcan_tools_manager(
@@ -431,6 +468,13 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         request.native_agent_collaboration_runtime.clone(),
         request.project_shell_guard.clone(),
     );
+    if let Some(runtime) = request.native_browser_runtime.clone() {
+        tools_manager = tools_manager.with_browser_target(move |session| {
+            runtime.capture_page_target(
+                uuid::Uuid::parse_str(session).map_err(|error| error.to_string())?,
+            )
+        });
+    }
     after_precheck_trace(
         "after_precheck_25a9_tools_manager_ready",
         format!("session={}", request.session_id),
@@ -512,12 +556,10 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         .all(|id| resolved_tools.descriptors.iter().any(|tool| tool.id == id));
     resolved_tools.definitions.retain(|definition| {
         let origin = definition.descriptor.origin();
-        if origin.source_kind() != VulcanToolSourceKind::VulcanPlugin {
-            return true;
-        }
-        let Some(skill) = plugin_skill_actions.get(&(
+        let Some((skill, alias)) = plugin_skill_actions.get(&(
+            origin.source_kind(),
             origin.namespace().to_owned(),
-            definition.descriptor.id.clone(),
+            origin.original_name().to_owned(),
         )) else {
             return true;
         };
@@ -526,14 +568,17 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
                 .iter()
                 .any(|entry| entry.skill.name == *skill && entry.is_enabled())
         {
-            skill_actions.push((skill.clone(), definition.clone()));
+            skill_actions.push((skill.clone(), alias.clone(), definition.clone()));
         }
         false
     });
     resolved_tools.descriptors.retain(|tool| {
         let origin = tool.origin();
-        origin.source_kind() != VulcanToolSourceKind::VulcanPlugin
-            || !plugin_skill_actions.contains_key(&(origin.namespace().to_owned(), tool.id.clone()))
+        !plugin_skill_actions.contains_key(&(
+            origin.source_kind(),
+            origin.namespace().to_owned(),
+            origin.original_name().to_owned(),
+        ))
     });
     if skill_actions.is_empty() {
         remove_resolved_tool(&mut resolved_tools, PLUGIN_CALL_TOOL_ID);
@@ -541,10 +586,10 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
     prompt_skills.retain(|entry| {
         !plugin_skill_actions
             .values()
-            .any(|skill| *skill == entry.skill.name)
+            .any(|(skill, _)| *skill == entry.skill.name)
             || skill_actions
                 .iter()
-                .any(|(skill, _)| *skill == entry.skill.name)
+                .any(|(skill, _, _)| *skill == entry.skill.name)
     });
     tools_manager.set_skill_actions(skill_actions);
     if render_prompt_skills_instructions(&prompt_skills).is_none() {

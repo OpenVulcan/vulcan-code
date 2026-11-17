@@ -1113,33 +1113,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 publication.as_ref(),
             )
         }) {
-            Ok(Some(mut request)) => {
-                // Discover owner-scoped Playwright schemas before the Provider sees this turn's
-                // tool catalog; an empty browser uses a non-connectable template until AI opens one.
-                // 在 Provider 看到本回合工具目录前发现所有者范围 Playwright Schema；没有浏览器时先用
-                // 不可连接的模板，直至 AI 打开浏览器。
-                match crate::browser::prepare_browser_mcp_bindings(state.clone(), session_id).await
-                {
-                    Ok(bindings) => request.supplemental_mcp_tools = bindings,
-                    Err(error) => {
-                        tracing::warn!("[webui-service] prepare browser MCP failed: {error}");
-                        if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
-                            &app,
-                            &state,
-                            &agent_runtime,
-                            session_id,
-                            &preparation_turn_id,
-                            &error,
-                        )
-                        .await
-                        {
-                            tracing::warn!(
-                                "[webui-service] cleanup failed browser MCP preparation failed: {cleanup_error}"
-                            );
-                        }
-                        return;
-                    }
-                }
+            Ok(Some(request)) => {
                 webui_after_precheck_trace(
                     "after_precheck_18_stream_spawn_call",
                     format!(

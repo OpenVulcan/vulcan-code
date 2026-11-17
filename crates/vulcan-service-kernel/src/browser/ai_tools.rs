@@ -26,10 +26,6 @@ const BROWSER_PLUGIN_ID: &str = "vulcan-browser";
 /// 提供已批准 Playwright 页面工具的精确插件内 MCP 服务。
 const PLAYWRIGHT_SERVER_ID: &str = "playwright";
 
-/// Unreachable local endpoint used only to discover fixed-version MCP schemas before a browser opens.
-/// 在打开浏览器前仅用于发现固定版本 MCP Schema 的不可达本地端点。
-const DISCOVERY_ENDPOINT: &str = "ws://127.0.0.1:1/devtools/browser/unavailable";
-
 /// Lifetime of an AI control lease, renewed by its owner MCP supervisor.
 /// AI 控制租约的有效时长，由其所有者 MCP 监督任务续订。
 const AI_LEASE_TTL: Duration = Duration::from_secs(600);
@@ -240,20 +236,6 @@ pub(crate) fn native_browser_runtime(
     };
     Ok(enabled
         .then(|| Arc::new(CoreNativeBrowserRuntime { state }) as Arc<dyn NativeBrowserRuntime>))
-}
-
-/// Discovers approved owner-scoped Playwright tools before the provider request is launched.
-/// 在启动 Provider 请求前发现已批准的所有者范围 Playwright 工具。
-pub(crate) async fn prepare_browser_mcp_bindings(
-    state: SharedServiceBridgeState,
-    owner_session_id: SessionId,
-) -> Result<Vec<McpRuntimeToolBinding>, String> {
-    if native_browser_runtime(state.clone())?.is_none() {
-        return Ok(Vec::new());
-    }
-    CoreNativeBrowserRuntime { state }
-        .prepare_bindings(owner_session_id)
-        .await
 }
 
 impl BrowserManager {
@@ -612,14 +594,12 @@ impl CoreNativeBrowserRuntime {
                     .collect(),
             ),
         );
-        let bindings = connection
-            .mcp_runtime
-            .owned_stdio_tool_bindings_following_replacement(
-                BROWSER_PLUGIN_ID,
-                connection.plugin_generation,
-                owner_session_id,
-                &allowlist,
-            )?;
+        let bindings = connection.mcp_runtime.owned_stdio_tool_bindings(
+            BROWSER_PLUGIN_ID,
+            connection.plugin_generation,
+            owner_session_id,
+            &allowlist,
+        )?;
         for required in [
             "browser_navigate",
             "browser_snapshot",
@@ -851,55 +831,10 @@ impl CoreNativeBrowserRuntime {
     async fn establish_connection(
         environment: &BrowserAiEnvironment,
         owner_session_id: SessionId,
-        browser_id: Option<String>,
+        browser_id: String,
         pending_slot: &mut Option<BrowserAiConnection>,
     ) -> Result<BrowserAiConnection, String> {
         let owner = owner_session_id.to_string();
-        let Some(browser_id) = browser_id else {
-            let config = Self::server_config(environment, &owner, DISCOVERY_ENDPOINT)?;
-            let partition = environment
-                .mcp_runtime
-                .open_ordered_owned_stdio_partition(
-                    BROWSER_PLUGIN_ID,
-                    environment.plugin_generation,
-                    owner_session_id,
-                    vec![config],
-                )
-                .await;
-            if let Err(error) = partition {
-                // A failed bootstrap may have created a process before publishing its lease, so
-                // request exact owner shutdown and retain metadata if that cleanup is uncertain.
-                // 启动失败可能在发布租约前已经创建进程，因此请求精确所有者分区关闭，并在清理不确定时保留元数据。
-                *pending_slot = Some(BrowserAiConnection {
-                    plugin_generation: environment.plugin_generation,
-                    mcp_runtime: environment.mcp_runtime.clone(),
-                    browser_id: None,
-                    lease_secret: None,
-                    connection_id: None,
-                    heartbeat: None,
-                    ready: false,
-                });
-                let cleanup = environment.mcp_runtime.shutdown_owned_stdio_partition(
-                    BROWSER_PLUGIN_ID,
-                    environment.plugin_generation,
-                    owner_session_id,
-                );
-                return Err(Self::establishment_failure_message(
-                    pending_slot,
-                    error,
-                    cleanup,
-                ));
-            }
-            return Ok(BrowserAiConnection {
-                plugin_generation: environment.plugin_generation,
-                mcp_runtime: environment.mcp_runtime.clone(),
-                browser_id: None,
-                lease_secret: None,
-                connection_id: None,
-                heartbeat: None,
-                ready: true,
-            });
-        };
         let connection_id = Uuid::new_v4().to_string();
         let manager = environment.manager.clone();
         let host_browser_id = browser_id.clone();
@@ -1093,21 +1028,34 @@ impl CoreNativeBrowserRuntime {
         })
     }
 
-    /// Ensures model-visible schemas come from the current exact owner partition.
-    /// 确保模型可见 Schema 来自当前精确所有者分区。
+    /// Acquires exact live bindings only when a page action is being executed.
+    /// 只在执行页面动作时取得精确实时绑定。
     async fn prepare_bindings(
         &self,
         owner_session_id: SessionId,
+        target: String,
+        generation: u64,
     ) -> Result<Vec<McpRuntimeToolBinding>, String> {
         let environment = self.environment()?;
+        if generation != environment.plugin_generation {
+            return Err(String::from(
+                "The browser plugin changed after this action was prepared.",
+            ));
+        }
         // Acquire ordered admission before creating cancellation-independent work, closing the late-slot race.
         // 创建独立于取消的工作前取得有序准入，封闭迟到槽位竞争。
         let reservation =
             Self::reserve_preparation_slot(environment.manager.clone(), owner_session_id).await?;
         let state = self.state.clone();
         Self::await_owner_transition(async move {
-            Self::prepare_bindings_transition(state, environment, owner_session_id, reservation)
-                .await
+            Self::prepare_bindings_transition(
+                state,
+                environment,
+                owner_session_id,
+                &target,
+                reservation,
+            )
+            .await
         })
         .await
     }
@@ -1118,6 +1066,7 @@ impl CoreNativeBrowserRuntime {
         state: SharedServiceBridgeState,
         environment: BrowserAiEnvironment,
         owner_session_id: SessionId,
+        target: &str,
         mut reservation: BrowserAiPreparationReservation,
     ) -> Result<Vec<McpRuntimeToolBinding>, String> {
         let owner = owner_session_id.to_string();
@@ -1127,15 +1076,16 @@ impl CoreNativeBrowserRuntime {
             .connection
             .as_deref_mut()
             .expect("browser preparation reservation remains locked until Drop");
-        let selected = environment.manager.selected_ai_browser(&owner)?;
-        let selected_browser_id = selected.map(|projection| projection.session_id);
+        // Recheck after taking the same slot used by selection and before touching a live partition.
+        // 取得选择共用的槽位后再次校验，且在接触实时分区之前完成。
+        let selected_browser_id = Self::page_browser_id(&environment.manager, &owner, target)?;
         let reused = connection.as_ref().is_some_and(|current| {
             // A disable rollback can reopen plugin admission after its drain removed the old
             // partition. Slot metadata alone cannot prove that the captured MCP process exists.
             // 停用回滚可能在排空移除旧分区后重新开放插件准入；仅靠槽位元数据不能证明 MCP 进程仍存在。
             current.ready
                 && current.plugin_generation == environment.plugin_generation
-                && current.browser_id == selected_browser_id
+                && current.browser_id.as_deref() == Some(selected_browser_id.as_str())
                 && current
                     .mcp_runtime
                     .owned_stdio_partition(
@@ -1187,6 +1137,19 @@ impl CoreNativeBrowserRuntime {
                 .ok_or_else(|| String::from("browser MCP connection is unavailable"))?,
             owner_session_id,
         )
+    }
+
+    /// Resolves a captured selection under the owning browser transition slot.
+    /// 在所属浏览器转换槽位下解析已捕获的选择。
+    fn page_browser_id(
+        manager: &BrowserManager,
+        owner: &str,
+        target: &str,
+    ) -> Result<String, String> {
+        manager.selected_ai_browser_binding(owner)?
+            .filter(|(_, token)| token == target)
+            .map(|(browser, _)| browser.session_id)
+            .ok_or_else(|| String::from("Browser selection changed after this action was prepared. Inspect the current browser before retrying."))
     }
 
     /// Resolves the currently enabled plugin generation together with Core's browser manager.
@@ -1289,7 +1252,7 @@ impl CoreNativeBrowserRuntime {
         let next = match Self::establish_connection(
             &environment,
             owner_session_id,
-            Some(browser_id.clone()),
+            browser_id.clone(),
             &mut connection,
         )
         .await
@@ -1407,7 +1370,7 @@ impl CoreNativeBrowserRuntime {
                 Self::establish_connection(
                     &environment,
                     owner_session_id,
-                    Some(browser_id.clone()),
+                    browser_id.clone(),
                     &mut connection,
                 )
                 .await?,
@@ -1474,6 +1437,41 @@ impl CoreNativeBrowserRuntime {
 
 #[async_trait::async_trait]
 impl NativeBrowserRuntime for CoreNativeBrowserRuntime {
+    /// Captures the selection without connecting to Playwright.
+    /// 捕获选择，无需连接 Playwright。
+    fn capture_page_target(&self, owner: SessionId) -> Result<Option<String>, String> {
+        self.enabled_manager()?
+            .selected_ai_browser_binding(&owner.to_string())
+            .map(|selected| selected.map(|(_, token)| token))
+    }
+
+    /// Executes the approved tool on one exact live partition and original Schema.
+    /// 在一个精确的实时分区上按原始 Schema 执行获准工具。
+    async fn invoke_page_tool(
+        &self,
+        owner: SessionId,
+        target: &str,
+        generation: u64,
+        tool: &str,
+        schema: &serde_json::Value,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        // This binding cannot follow a replacement after the owner slot is released.
+        // 此绑定在所有者槽位释放后也不能跟随替代连接。
+        let binding = self
+            .prepare_bindings(owner, target.to_owned(), generation)
+            .await?
+            .into_iter()
+            .find(|binding| binding.origin_tool_name() == Some(tool))
+            .ok_or_else(|| format!("The live Playwright connection does not provide `{tool}`."))?;
+        if binding.args_schema() != schema {
+            return Err(format!(
+                "The live Playwright schema for `{tool}` differs from the packaged version."
+            ));
+        }
+        binding.invoke_for_owner_in_conversation(owner, args).await
+    }
+
     /// Lists only the exact trusted conversation's browsers and selected browser.
     /// 仅列出精确可信会话拥有的浏览器与已选浏览器。
     async fn list(
@@ -1545,6 +1543,39 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use tokio::sync::oneshot;
+
+    /// Rejects a delayed page action before opening an MCP partition, even after switching back.
+    /// 在打开 MCP 分区前拒绝延后的页面动作，即使已经切回旧浏览器。
+    #[test]
+    fn delayed_page_action_cannot_inherit_replacement_browser() {
+        // Both browsers belong to the same conversation.
+        // 两个浏览器属于同一会话。
+        let manager = BrowserManager::new();
+        // One owner switches away from the captured page and back again.
+        // 同一个所有者从已捕获页面切走再切回。
+        let owner = "browser-switch-regression";
+        let first = manager
+            .create_owned_session(owner, BrowserProfileMode::Ephemeral)
+            .unwrap();
+        let second = manager
+            .create_owned_session(owner, BrowserProfileMode::Ephemeral)
+            .unwrap();
+        manager.select_ai_browser(owner, &first.session_id).unwrap();
+        // The same capture is retained across both selection changes.
+        // 同一份捕获跨两次选择变化保留。
+        let (_, target) = manager.selected_ai_browser_binding(owner).unwrap().unwrap();
+        assert_eq!(
+            CoreNativeBrowserRuntime::page_browser_id(&manager, owner, &target).unwrap(),
+            first.session_id
+        );
+        manager
+            .select_ai_browser(owner, &second.session_id)
+            .unwrap();
+        assert!(CoreNativeBrowserRuntime::page_browser_id(&manager, owner, &target).is_err());
+        manager.select_ai_browser(owner, &first.session_id).unwrap();
+        assert!(CoreNativeBrowserRuntime::page_browser_id(&manager, owner, &target).is_err());
+        assert!(manager.ai_connections.lock().unwrap().is_empty());
+    }
 
     /// A cancelled binding waiter cannot let retirement finish before its reserved conversion publishes.
     /// 绑定等待者取消后，退休不能早于已预留转换的发布完成。

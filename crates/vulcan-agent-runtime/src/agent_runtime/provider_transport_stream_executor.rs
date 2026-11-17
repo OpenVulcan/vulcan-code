@@ -106,20 +106,24 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         &self,
         requests: &[CoreToolInvocationRequest],
     ) -> Result<(), VulcanCoreError> {
-        let recovery_requests = requests
+        // Capture each tool's exact target before waiting on the durable batch.
+        // 等待可靠批次前捕获各工具的精确目标。
+        let bindings = requests
             .iter()
-            .map(|request| {
-                let request_stream_id = request.request_stream_id.clone();
-                self.runtime_bridge
-                    .binding_fingerprint_for_request(request)
-                    .map(|binding_fingerprint| ToolExecutionRecoveryRequest {
-                        request_stream_id,
-                        request: request.clone(),
-                        binding_fingerprint,
-                    })
-            })
+            .map(|request| self.runtime_bridge.capture_invocation_binding(request))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|message| VulcanCoreError::InvalidState { message })?;
+        // Persist the same binding that will govern the later invocation.
+        // 持久化同一份将约束后续执行的绑定。
+        let recovery_requests = requests
+            .iter()
+            .zip(&bindings)
+            .map(|(request, binding)| ToolExecutionRecoveryRequest {
+                request_stream_id: request.request_stream_id.clone(),
+                request: request.clone(),
+                binding_fingerprint: binding.fingerprint.clone(),
+            })
+            .collect();
         let (batch_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolBatchPrepared,
@@ -142,7 +146,7 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 details: None,
             })?;
         self.runtime_bridge
-            .install_prepared_invocation_identities(requests, identities)
+            .install_prepared_invocation_bindings(requests, identities, bindings)
             .map_err(|message| VulcanCoreError::InvalidState { message })
     }
 
@@ -234,7 +238,7 @@ impl StreamingRuntimeToolExecutor {
                 request: request.clone(),
                 binding_fingerprint: self
                     .runtime_bridge
-                    .binding_fingerprint_for_request(request)
+                    .prepared_binding_fingerprint(request)
                     .map_err(|message| VulcanCoreError::InvalidState { message })?,
             })
             .with_metadata(Some(json!({

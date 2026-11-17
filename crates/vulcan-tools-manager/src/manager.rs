@@ -17,7 +17,14 @@ pub struct VulcanToolsManager {
     /// Policy-filtered plugin targets indexed by prompt skill and action.
     /// 按提示词技能与动作索引、已通过策略筛选的插件目标。
     skill_actions: std::collections::BTreeMap<(String, String), ResolvedToolDefinition>,
+    /// Host capture of the current browser selection for one trusted session.
+    /// 宿主为可信会话捕获当前浏览器选择的回调。
+    browser_target: Option<Arc<BrowserTargetCapture>>,
 }
+
+/// Captures an opaque browser selection without opening an automation connection.
+/// 捕获不透明浏览器选择，不打开自动化连接。
+type BrowserTargetCapture = dyn Fn(&str) -> Result<Option<String>, String> + Send + Sync;
 
 impl VulcanToolsManager {
     /// Builds one unified tool manager from the current host-owned candidate surfaces.
@@ -27,6 +34,7 @@ impl VulcanToolsManager {
             candidates: normalize_candidate_public_tool_names(candidates),
             workspace_root: None,
             skill_actions: Default::default(),
+            browser_target: None,
         }
     }
 
@@ -45,15 +53,15 @@ impl VulcanToolsManager {
 
     /// Stores skill actions admitted for this turn without adding Provider tool definitions.
     /// 存储本回合获准的技能动作，无需增加 Provider 工具定义。
-    /// Each entry pairs a canonical skill name with the original resolved tool.
-    /// 每项以规范技能名与原始已解析工具组成。
+    /// Each entry contains the canonical skill, local alias and original resolved tool.
+    /// 每项包含规范技能名、本地别名和原始已解析工具。
     pub fn set_skill_actions(
         &mut self,
-        actions: impl IntoIterator<Item = (String, ResolvedToolDefinition)>,
+        actions: impl IntoIterator<Item = (String, String, ResolvedToolDefinition)>,
     ) {
         self.skill_actions = actions
             .into_iter()
-            .map(|(skill, definition)| ((skill, definition.descriptor.id.clone()), definition))
+            .map(|(skill, action, definition)| ((skill, action), definition))
             .collect();
     }
 
@@ -66,11 +74,33 @@ impl VulcanToolsManager {
 
     /// Iterates the original definitions available through the specified skill.
     /// 遍历指定技能可以调用的原始定义。
-    pub fn skill_actions(&self, skill: &str) -> impl Iterator<Item = &ResolvedToolDefinition> {
+    pub fn skill_actions(
+        &self,
+        skill: &str,
+    ) -> impl Iterator<Item = (&str, &ResolvedToolDefinition)> {
         self.skill_actions
             .iter()
             .filter(move |((name, _), _)| name.eq_ignore_ascii_case(skill))
-            .map(|(_, definition)| definition)
+            .map(|((_, action), definition)| (action.as_str(), definition))
+    }
+
+    /// Installs the host callback for browser selection capture and returns the manager.
+    /// 安装浏览器选择捕获的宿主回调并返回管理器。
+    pub fn with_browser_target(
+        mut self,
+        capture: impl Fn(&str) -> Result<Option<String>, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.browser_target = Some(Arc::new(capture));
+        self
+    }
+
+    /// Captures the current target for the trusted session, or returns no selection.
+    /// 捕获可信会话的当前目标，未选择时返回空值。
+    pub fn capture_browser_target(&self, session: &str) -> Result<Option<String>, String> {
+        match &self.browser_target {
+            Some(capture) => capture(session),
+            None => Ok(None),
+        }
     }
 
     /// Returns all admitted action descriptors for durable child tool admission.

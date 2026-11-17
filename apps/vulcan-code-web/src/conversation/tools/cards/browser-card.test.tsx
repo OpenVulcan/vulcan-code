@@ -47,6 +47,23 @@ function renderCard(event: ToolCallEvent): HTMLDivElement {
 }
 
 describe("Playwright browser tool card", () => {
+  it("keeps the browser card and the original screenshot result for a packaged alias", () => {
+    // Both the running and completed events use the same plugin action envelope.
+    // 运行中与已完成事件使用同一种插件动作封装。
+    const request = {
+      skill: "vulcan-browser:browser-workflow",
+      action: "screenshot",
+      arguments: { scale: "css" },
+    };
+    // The historical alias is projected back to the same display identity.
+    // 历史别名恢复成同一工具卡展示身份。
+    const running = readToolCall(browserEvent("plugin_call", request));
+    expect(resolveToolCard(running)).toEqual({ Card: BrowserCard, family: "web" });
+    expect(running.name).toBe("mcp_vulcan_browser_playwright_browser_take_screenshot");
+    expect(running.input).toEqual({ scale: "css" });
+    expect(resolveToolCard(readToolCall(browserEvent("plugin_call", request, { model_output: "Captured" })))).toEqual({ Card: BrowserCard, family: "web" });
+  });
+
   it("routes both a streaming request and its finished call and leaves unrelated MCP names alone", () => {
     // Use the public tool identity recorded by the browser integration.
     // 使用浏览器集成记录的公开工具标识。

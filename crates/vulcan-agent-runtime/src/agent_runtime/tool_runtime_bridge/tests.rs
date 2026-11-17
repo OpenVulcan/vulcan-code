@@ -38,6 +38,79 @@ use vulcan_tools_manager::{
 mod file_durability;
 mod tool_chain_steps;
 
+/// Verifies rejected and resumed page calls cannot use a newer browser selection.
+/// 验证被拒绝及恢复的页面调用无法使用更新的浏览器选择。
+#[test]
+fn prepared_browser_call_retains_its_original_selection_fingerprint() {
+    // Prepare the actual plugin envelope alongside a browser MCP definition.
+    // 在浏览器 MCP 定义旁准备真实插件调用封装。
+    let (mut manager, mut definitions) = build_demo_manager();
+    // The fixture grants only a single exact browser page action.
+    // 夹具只授予单个精确浏览器页面动作。
+    let mut target = definitions.first().unwrap().clone();
+    target.descriptor = VulcanToolDescriptor::new(
+        "mcp_vulcan_browser_playwright_browser_navigate",
+        "navigate",
+        "Navigate the page",
+        None,
+        VulcanToolOrigin::new(
+            VulcanToolSourceKind::Mcp,
+            "vulcan-browser:playwright",
+            "browser_navigate",
+        ),
+    );
+    // Use the existing fixture closure for the dispatcher registration.
+    // 复用现有夹具闭包作为调度器的注册。
+    let mut dispatcher = definitions.first().unwrap().clone();
+    dispatcher.descriptor = VulcanToolDescriptor::new(
+        "plugin_call",
+        "plugin_call",
+        "Call a plugin",
+        None,
+        VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", "plugin_call"),
+    );
+    definitions.push(dispatcher);
+    manager.set_skill_actions([(
+        String::from("vulcan-browser:browser-workflow"),
+        String::from("navigate"),
+        target,
+    )]);
+    // Switching changes the host token after the durable identity has been issued.
+    // 切换在可靠身份签发后改变宿主令牌。
+    let selection = Arc::new(Mutex::new(String::from("browser-selection-a")));
+    let captured = Arc::clone(&selection);
+    let manager = manager.with_browser_target(move |_| Ok(Some(captured.lock().unwrap().clone())));
+    let bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
+    let request = ToolInvocationRequest {
+        request_stream_id: String::from("browser-page-call"),
+        tool_call_id: String::from("browser-call"),
+        tool_name: String::from("plugin_call"),
+        arguments: json!({"skill": "vulcan-browser:browser-workflow", "action": "navigate", "arguments": {"url": "https://example.test/"}}),
+        argument_parse_error: None,
+        raw_arguments: Default::default(),
+        user_request: Default::default(),
+    };
+    // The batch captures the selection before the first tool can be scheduled.
+    // 批次在首个工具可被调度之前捕获选择。
+    let original = bridge.binding_fingerprint_for_request(&request).unwrap();
+    install_test_invocation_identity(&bridge, &request, 1, 1, 1);
+    *selection.lock().unwrap() = String::from("browser-selection-b");
+    assert_eq!(
+        bridge.prepared_binding_fingerprint(&request).unwrap(),
+        original
+    );
+    assert_ne!(
+        bridge.binding_fingerprint_for_request(&request).unwrap(),
+        original
+    );
+    let (_, binding) = bridge.take_prepared_invocation_identity(&request).unwrap();
+    assert_eq!(
+        binding.browser_target.as_deref(),
+        Some("browser-selection-a")
+    );
+}
+
 /// Verifies a host credential never reaches model text or structured durable tool details.
 /// 验证宿主凭据不会到达模型文本或结构化可靠工具详情。
 #[test]

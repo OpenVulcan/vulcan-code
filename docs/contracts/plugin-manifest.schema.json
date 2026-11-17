@@ -802,6 +802,41 @@
       },
       "type": "object"
     },
+    "VulcanPluginMcpPromptToolsManifest": {
+      "additionalProperties": false,
+      "description": "Names and frozen schemas for an on-demand managed MCP server.\n按需受管 MCP 服务的动作名称与冻结 Schema。",
+      "properties": {
+        "actions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Short action to exact MCP tool name.\n短动作名到精确 MCP 工具名。",
+          "type": "object"
+        },
+        "core_actions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Short action to Core browser management tool name.\n短动作名到 Core 浏览器管理工具名。",
+          "type": "object"
+        },
+        "schema_file": {
+          "description": "Package-relative snapshot of the pinned server's unmodified tool definitions.\n相对于插件包的固定版本服务器原始工具定义快照。",
+          "type": "string"
+        },
+        "skill": {
+          "description": "Local skill name from the owning package.\n所属包中的本地技能名。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill",
+        "schema_file",
+        "actions",
+        "core_actions"
+      ],
+      "type": "object"
+    },
     "VulcanPluginMcpScopeManifest": {
       "description": "Lifetime of one plugin-owned MCP server declaration.\n单个插件自有 MCP 服务器声明的生命周期。",
       "oneOf": [
@@ -828,6 +863,17 @@
         "name": {
           "description": "Default user-facing server name.\n默认的用户可见服务器名称。",
           "type": "string"
+        },
+        "prompt_tools": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginMcpPromptToolsManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional packaged skill route for MCP and matching Core browser actions.\nMCP 与对应 Core 浏览器动作的可选随包技能路由。"
         },
         "scope": {
           "$ref": "#/$defs/VulcanPluginMcpScopeManifest",

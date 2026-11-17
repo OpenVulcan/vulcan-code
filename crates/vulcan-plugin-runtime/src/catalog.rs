@@ -162,6 +162,35 @@ pub struct VulcanPluginMcpServerDescriptor {
     /// Source manifest retained for runtime materialization.
     /// 为运行时物化保留的源清单。
     pub manifest: VulcanPluginMcpServerManifest,
+    /// Original MCP tool definitions from the declared packaged snapshot.
+    /// 声明随包快照中的原始 MCP 工具定义。
+    pub prompt_tool_snapshot: Option<VulcanPluginMcpPromptToolSnapshot>,
+}
+
+/// Frozen output of `tools/list` for the named managed MCP actions.
+/// 指定受管 MCP 动作的冻结 `tools/list` 输出。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginMcpPromptToolSnapshot {
+    /// Package version that produced the listing.
+    /// 生成工具列表的包版本。
+    pub version: String,
+    /// Tool definitions keyed by exact upstream MCP name.
+    /// 以精确上游 MCP 名称索引的工具定义。
+    pub tools: BTreeMap<String, VulcanPluginMcpPromptToolSchema>,
+}
+
+/// Original MCP description and parameter contract.
+/// 原始 MCP 描述和参数契约。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginMcpPromptToolSchema {
+    /// Description returned during discovery.
+    /// 发现时服务器返回的描述。
+    pub description: String,
+    /// Unmodified MCP input Schema.
+    /// 未改写的 MCP 输入 Schema。
+    pub input_schema: serde_json::Value,
 }
 
 /// One validated plugin-level model instruction contribution.
@@ -756,6 +785,90 @@ fn rebuild_catalog_surface(snapshot: &mut VulcanPluginCatalogSnapshot) {
 
 /// Loads and validates one exact package without allowing path escape.
 /// 加载并校验一个精确插件包，同时禁止路径逃逸。
+fn load_mcp_prompt_tool_snapshot(
+    plugin_id: &str,
+    server: &VulcanPluginMcpServerManifest,
+    skills: &[PromptSkill],
+    root: &Path,
+) -> Result<Option<VulcanPluginMcpPromptToolSnapshot>, String> {
+    // Only the built-in browser currently has a host-owned lazy transport.
+    // 当前只有内置浏览器具备宿主管理的按需传输。
+    let Some(route) = &server.prompt_tools else {
+        return Ok(None);
+    };
+    if plugin_id != "vulcan-browser"
+        || server.id != "playwright"
+        || server.scope != crate::VulcanPluginMcpScopeManifest::Conversation
+    {
+        return Err(String::from(
+            "No host-owned prompt tool transport for this MCP server.",
+        ));
+    }
+    // Resolve the exact skill from the same packaged catalog.
+    // 从同一随包目录解析精确技能。
+    let skill_name = format!("{plugin_id}:{}", route.skill);
+    if !skills.iter().any(|entry| entry.name == skill_name) {
+        return Err(format!(
+            "Managed MCP prompt skill `{skill_name}` was not found."
+        ));
+    }
+    // Validate alias ownership and reject ambiguous or duplicated targets.
+    // 校验别名归属并拒绝含糊名称或重复目标。
+    let mut targets = BTreeSet::new();
+    for (alias, name) in route.actions.iter().chain(&route.core_actions) {
+        validate_identifier(alias, "MCP prompt tool action")?;
+        if !targets.insert(name)
+            || route.actions.contains_key(alias) && route.core_actions.contains_key(alias)
+        {
+            return Err(format!(
+                "Duplicate MCP prompt tool alias or target `{alias}`."
+            ));
+        }
+    }
+    if route.core_actions.values().any(|name| {
+        !matches!(
+            name.as_str(),
+            "browser_list" | "browser_open" | "browser_select" | "browser_close"
+        )
+    }) || route.actions.is_empty()
+    {
+        return Err(String::from(
+            "Invalid Core browser prompt tool action list.",
+        ));
+    }
+    // Load the exact snapshot declared by the plugin, then verify the package pin and tool set.
+    // 加载插件精确声明的快照，再核对包版本锁和工具集合。
+    let snapshot_path = resolve_package_file(root, &route.schema_file, "MCP prompt tool schema")?;
+    // Read JSON using the same package file boundary as other plugin schemas.
+    // 经与其他插件 Schema 相同的包文件边界读取 JSON。
+    let snapshot: VulcanPluginMcpPromptToolSnapshot =
+        serde_json::from_value(read_json_file(&snapshot_path)?)
+            .map_err(|error| error.to_string())?;
+    // Browser packages already pin the same launch dependency in their package manifest.
+    // 浏览器包在其包清单中已固定同一启动依赖。
+    let package = read_json_file(&resolve_package_file(
+        root,
+        "node/package.json",
+        "Playwright package manifest",
+    )?)?;
+    if package["dependencies"]["@playwright/mcp"].as_str() != Some(snapshot.version.as_str())
+        || snapshot.tools.len() != route.actions.len()
+        || route.actions.values().any(|name| {
+            snapshot.tools.get(name).is_none_or(|tool| {
+                !tool.input_schema.is_object()
+                    || jsonschema::validator_for(&tool.input_schema).is_err()
+            })
+        })
+    {
+        return Err(String::from(
+            "MCP prompt tool snapshot does not match the pinned package or action list.",
+        ));
+    }
+    Ok(Some(snapshot))
+}
+
+/// Loads and validates one plugin package before publishing its executable surfaces.
+/// 发布可执行入口前加载并校验单个插件包。
 fn load_vulcan_plugin_package(
     catalog_root: &Path,
     package_root: &Path,
@@ -1055,21 +1168,37 @@ fn load_vulcan_plugin_package(
         descriptor.diagnostics.push(error);
         return descriptor;
     }
-    descriptor.mcp_servers = manifest
-        .mcp
-        .servers
-        .iter()
-        .map(|server| VulcanPluginMcpServerDescriptor {
-            plugin_id: manifest.id.clone(),
-            plugin_generation: 0,
-            credential_binding: crate::VulcanPluginCredentialBinding::Unconfigured,
-            credential_lease: None,
-            configuration: None,
-            id: server.id.clone(),
-            name: server.name.clone(),
-            manifest: server.clone(),
-        })
-        .collect();
+    for server in &manifest.mcp.servers {
+        // Load the checked schema snapshot without starting its MCP process.
+        // 加载经校验的 Schema 快照，无需启动 MCP 进程。
+        let prompt_tool_snapshot = match load_mcp_prompt_tool_snapshot(
+            &manifest.id,
+            server,
+            &descriptor.skills,
+            &canonical_package_root,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                descriptor.availability = VulcanPluginAvailability::Unavailable;
+                descriptor.runtime_state = VulcanPluginRuntimeState::Unavailable;
+                descriptor.diagnostics.push(error);
+                return descriptor;
+            }
+        };
+        descriptor
+            .mcp_servers
+            .push(VulcanPluginMcpServerDescriptor {
+                plugin_id: manifest.id.clone(),
+                plugin_generation: 0,
+                credential_binding: crate::VulcanPluginCredentialBinding::Unconfigured,
+                credential_lease: None,
+                configuration: None,
+                id: server.id.clone(),
+                name: server.name.clone(),
+                manifest: server.clone(),
+                prompt_tool_snapshot,
+            });
+    }
     let mut hook_ids = BTreeSet::new();
     let lua_hooks = manifest
         .lua_runtime

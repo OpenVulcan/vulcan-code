@@ -71,8 +71,6 @@ pub(super) async fn apply_manual_compaction_tool_visibility(
     let subagent_model_policy =
         crate::subagent_models::session_subagent_model_policy(handle.as_ref())?;
     let native_browser_runtime = crate::browser::native_browser_runtime(state.clone())?;
-    let supplemental_mcp_tools =
-        crate::browser::prepare_browser_mcp_bindings(state.clone(), session_id).await?;
     let knowledge_access = match crate::resolve_turn_knowledge_access(state, session_id).await {
         Ok(access) => access,
         Err(error) => {
@@ -96,7 +94,6 @@ pub(super) async fn apply_manual_compaction_tool_visibility(
             app.clone(),
         ),
     );
-    context.supplemental_mcp_tools = supplemental_mcp_tools;
     context.knowledge_access = knowledge_access;
     Ok(())
 }

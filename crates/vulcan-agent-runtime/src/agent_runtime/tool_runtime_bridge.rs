@@ -7,7 +7,8 @@ use crate::agent_runtime::tool_permission::{
 };
 use crate::model::SessionId;
 use crate::tooling::native::{
-    PLUGIN_CALL_TOOL_ID, PluginCallArguments, parse_prompt_skill_detail_tool_arguments,
+    BROWSER_MCP_ORIGIN, BROWSER_PAGE_TARGET, PLUGIN_CALL_TOOL_ID, PluginCallArguments,
+    parse_prompt_skill_detail_tool_arguments,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -72,8 +73,11 @@ pub struct VulcanManagedToolRuntimeBridge {
     execution_mode: String,
     /// Durable V1 identities awaiting exact tool-body execution, keyed only by request stream id.
     /// 等待精确工具主体执行的可靠 V1 身份，仅以请求流身份为键。
-    prepared_invocation_identities:
-        Arc<Mutex<HashMap<RequestStreamId, PreparedToolInvocationIdentity>>>,
+    prepared_invocation_identities: Arc<
+        Mutex<
+            HashMap<RequestStreamId, (PreparedToolInvocationIdentity, PreparedInvocationBinding)>,
+        >,
+    >,
     /// Permission host consulted before every dispatch; `None` when no policy is configured.
     /// 每次调度前咨询的权限宿主；未配置策略时为 `None`。
     permission_host: Option<Arc<dyn ToolPermissionHost>>,
@@ -89,6 +93,17 @@ pub const RUNTIME_EVENT_PROJECTION_BARRIER_ID: &str = "webui_projection_barrier_
 /// Exact Core receipt returned by the durable V1 tool-batch owner.
 /// 由可靠 V1 工具批次所有者返回的精确 Core 回执。
 pub type PreparedToolInvocationIdentity = PreparedToolReceipt;
+
+/// Binding frozen before a durable tool batch or any concurrent tool body starts.
+/// 在可靠工具批次及并发工具主体启动前冻结的绑定。
+pub(crate) struct PreparedInvocationBinding {
+    /// Fingerprint persisted by the original tool recovery boundary.
+    /// 由原始工具恢复边界持久化的指纹。
+    pub(crate) fingerprint: String,
+    /// Exact browser selection token when the request is a page action.
+    /// 请求为页面动作时捕获的精确浏览器选择令牌。
+    browser_target: Option<String>,
+}
 
 /// Payload released by one completed runtime-event projection barrier.
 /// 单个运行时事件投影屏障完成后释放的载荷。
@@ -302,12 +317,30 @@ impl VulcanManagedToolRuntimeBridge {
     /// Success only when every request stream has exactly one matching identity and no older
     /// prepared identity would be overwritten.
     /// 仅当每个请求流都恰好拥有一个匹配身份，且不会覆盖旧的待执行身份时成功。
+    #[cfg(test)]
     pub(crate) fn install_prepared_invocation_identities(
         &self,
         requests: &[CoreToolInvocationRequest],
         identities: Vec<PreparedToolInvocationIdentity>,
     ) -> Result<(), String> {
-        if requests.len() != identities.len() {
+        // Test invocations use the same capture boundary as production.
+        // 测试调用采用与生产相同的捕获边界。
+        let bindings = requests
+            .iter()
+            .map(|request| self.capture_invocation_binding(request))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.install_prepared_invocation_bindings(requests, identities, bindings)
+    }
+
+    /// Installs exact receipt and binding pairs for one batch.
+    /// 为同一批次安装精确回执及绑定。
+    pub(crate) fn install_prepared_invocation_bindings(
+        &self,
+        requests: &[CoreToolInvocationRequest],
+        identities: Vec<PreparedToolInvocationIdentity>,
+        bindings: Vec<PreparedInvocationBinding>,
+    ) -> Result<(), String> {
+        if requests.len() != identities.len() || requests.len() != bindings.len() {
             return Err(format!(
                 "Prepared V1 tool identity count mismatch: expected {}, received {}.",
                 requests.len(),
@@ -315,13 +348,10 @@ impl VulcanManagedToolRuntimeBridge {
             ));
         }
         let mut expected = HashMap::with_capacity(requests.len());
-        for request in requests {
+        for (request, binding) in requests.iter().zip(bindings) {
             let request_stream_id = RequestStreamId::try_new(request.request_stream_id.clone())
                 .map_err(|error| error.to_string())?;
-            if expected
-                .insert(request_stream_id, request.tool_call_id.as_str())
-                .is_some()
-            {
+            if expected.insert(request_stream_id, binding).is_some() {
                 return Err(String::from(
                     "Prepared tool batch contains a duplicate request stream identity.",
                 ));
@@ -329,20 +359,20 @@ impl VulcanManagedToolRuntimeBridge {
         }
         let mut staged = HashMap::with_capacity(identities.len());
         for identity in identities {
-            if !expected.contains_key(&identity.request_stream_id) {
-                return Err(format!(
-                    "Prepared V1 tool identity references unknown request stream `{}`.",
-                    identity.request_stream_id.as_str()
-                ));
-            }
-            if staged
-                .insert(identity.request_stream_id.clone(), identity)
-                .is_some()
-            {
+            if staged.contains_key(&identity.request_stream_id) {
                 return Err(String::from(
                     "Prepared V1 tool identities contain a duplicate request stream identity.",
                 ));
             }
+            // Pair each receipt with its stream, independent of the receipt order.
+            // 按请求流配对各回执，独立于回执顺序。
+            let Some(binding) = expected.remove(&identity.request_stream_id) else {
+                return Err(format!(
+                    "Prepared V1 tool identity references unknown request stream `{}`.",
+                    identity.request_stream_id.as_str()
+                ));
+            };
+            staged.insert(identity.request_stream_id.clone(), (identity, binding));
         }
         let mut prepared = self.prepared_invocation_identities.lock().map_err(|_| {
             String::from("Prepared V1 tool identity registry is locked and cannot install a batch.")
@@ -362,7 +392,7 @@ impl VulcanManagedToolRuntimeBridge {
     fn take_prepared_invocation_identity(
         &self,
         request: &CoreToolInvocationRequest,
-    ) -> Result<PreparedToolInvocationIdentity, VulcanCoreError> {
+    ) -> Result<(PreparedToolInvocationIdentity, PreparedInvocationBinding), VulcanCoreError> {
         let request_stream_id = RequestStreamId::try_new(request.request_stream_id.clone())
             .map_err(|error| VulcanCoreError::InvalidState {
                 message: error.to_string(),
@@ -440,17 +470,74 @@ impl VulcanManagedToolRuntimeBridge {
 
     /// Returns the stable fingerprint of the exact resolved or explicitly unregistered binding used by one request.
     /// 返回单条请求所使用精确已解析绑定或明确未注册绑定的稳定指纹。
+    #[cfg(test)]
     pub(crate) fn binding_fingerprint_for_request(
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<String, String> {
+        self.capture_invocation_binding(request)
+            .map(|binding| binding.fingerprint)
+    }
+
+    /// Captures the original descriptor and any page target before persisting the batch.
+    /// 持久化批次前捕获原始描述符与页面目标。
+    pub(crate) fn capture_invocation_binding(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Result<PreparedInvocationBinding, String> {
         if let Some((_, action)) = self.resolve_skill_action(request) {
-            return resolved_tool_binding_fingerprint(action);
+            // A recovered or delayed invocation must keep the browser selected at preparation.
+            // 恢复或延后的调用必须保留准备时选中的浏览器。
+            let mut fingerprint = resolved_tool_binding_fingerprint(action)?;
+            // Only managed browser MCP page actions capture the conversation's selection.
+            // 仅受管浏览器 MCP 页面动作捕获会话选择。
+            let origin = action.descriptor.origin();
+            // Missing selection also participates in the durable identity.
+            // 缺少选择同样参与可靠身份。
+            let browser_target = if origin.source_kind() == VulcanToolSourceKind::Mcp
+                && origin.namespace() == BROWSER_MCP_ORIGIN
+            {
+                let target = self
+                    .manager
+                    .capture_browser_target(&self.session_id.to_string())?;
+                fingerprint = stable_tool_binding_fingerprint(&json!([fingerprint, target]))?;
+                target
+            } else {
+                None
+            };
+            return Ok(PreparedInvocationBinding {
+                fingerprint,
+                browser_target,
+            });
         }
-        match self.definitions_by_id.get(&request.tool_name) {
+        // Keep existing direct and unknown-tool fingerprints stable.
+        // 保留已有直接工具及未知工具的稳定指纹。
+        let fingerprint = match self.definitions_by_id.get(&request.tool_name) {
             Some(definition) => resolved_tool_binding_fingerprint(definition),
             None => unregistered_tool_binding_fingerprint(&request.tool_name),
-        }
+        }?;
+        Ok(PreparedInvocationBinding {
+            fingerprint,
+            browser_target: None,
+        })
+    }
+
+    /// Returns the prepared fingerprint without re-reading live browser selection.
+    /// 返回已准备指纹，避免再次读取浏览器实时选择。
+    pub(crate) fn prepared_binding_fingerprint(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Result<String, String> {
+        // Stored recovery state is indexed by the actual request stream.
+        // 已存恢复状态以实际请求流为索引。
+        let stream = RequestStreamId::try_new(request.request_stream_id.clone())
+            .map_err(|error| error.to_string())?;
+        self.prepared_invocation_identities
+            .lock()
+            .map_err(|_| String::from("Prepared tool binding registry is unavailable."))?
+            .get(&stream)
+            .map(|(_, binding)| binding.fingerprint.clone())
+            .ok_or_else(|| String::from("Tool request has no prepared binding."))
     }
 
     /// Resolves a valid dispatcher envelope to its frozen tool binding.
@@ -548,9 +635,9 @@ impl VulcanManagedToolRuntimeBridge {
         let actions = self
             .manager
             .skill_actions(&skill)
-            .map(|action| {
+            .map(|(alias, action)| {
                 json!({
-                    "action": action.descriptor.id,
+                    "action": alias,
                     "description": action.descriptor.description,
                     "input_schema": action.parameters_schema
                 })
@@ -1438,7 +1525,7 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
-        let identity = self.take_prepared_invocation_identity(request)?;
+        let (identity, binding) = self.take_prepared_invocation_identity(request)?;
         let Some(definition) = self.definitions_by_id.get(&request.tool_name) else {
             return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
                 request,
@@ -1470,7 +1557,12 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
         let invocation = if definition.descriptor.id == PLUGIN_CALL_TOOL_ID
             && definition.descriptor.source == VulcanToolSourceKind::Native
         {
-            self.invoke_skill_action(request, context).await
+            BROWSER_PAGE_TARGET
+                .scope(
+                    binding.browser_target,
+                    self.invoke_skill_action(request, context),
+                )
+                .await
         } else {
             self.invoke_definition(
                 definition,

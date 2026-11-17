@@ -438,14 +438,31 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         stopping,
         page_thread: Some(page_thread),
     };
-    let plugins = VulcanPluginRuntimeManager::without_runtime(
+    // The browser's formal Lua hook package must be activated with the same owner as production.
+    // 浏览器正式 Lua Hook 包必须通过与生产相同的所有者激活。
+    let engine = luaskills::LuaEngine::new(luaskills::LuaEngineOptions::new(
+        luaskills::LuaVmPoolConfig {
+            min_size: 1,
+            max_size: 1,
+            idle_ttl_secs: 60,
+        },
+        luaskills::LuaRuntimeHostOptions::with_runtime_root(
+            vulcan_runtime_assets::native_host_path(temp.path()),
+        ),
+    ))
+    .expect("embedded browser plugin engine");
+    let plugins = VulcanPluginRuntimeManager::new(
+        Arc::new(engine),
         repository.join("plugins"),
         temp.path().join("user-plugins"),
-        temp.path().join("bridge"),
+        repository.join("plugin-bridge/vulcan-plugin-bridge"),
         output.join("dependencies/runtimes"),
         temp.path().join("plugin-state"),
         temp.path().join("plugin-runtime"),
     );
+    plugins
+        .initialize_formal_runtime(vulcan_plugin_runtime::VulcanPluginRuntimeSettings::default())
+        .expect("attach the browser plugin runtime");
     let enabled = BTreeSet::from([String::from("vulcan-browser")]);
     let catalog = plugins
         .refresh_catalog(&BTreeSet::new(), &enabled)
@@ -459,8 +476,8 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         .await
         .expect("empty global MCP runtime");
     cleanup.access = Some(access.clone());
-    // AI turn preparation starts the plugin before any short-lived host grant is issued.
-    // AI 回合准备会在颁发任何短时宿主授权之前启动插件。
+    // Launch a legacy discovery template explicitly to exercise its replacement in this fixture.
+    // 在夹具中显式启动旧发现模板，以验证替换过程。
     let template = plugin_conversation_mcp_server_config(
         &plugins,
         "vulcan-browser",
@@ -728,6 +745,22 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         "an owner cannot invoke the other conversation's MCP binding"
     );
 
+    // Prepare a real pending navigation while A owns the current exact MCP partition.
+    // 当前精确 MCP 分区归 A 时，准备一次真实待执行导航。
+    let pending_navigation = access
+        .owned_stdio_tool_bindings(
+            "vulcan-browser",
+            generation,
+            owner,
+            &McpRuntimeToolAllowlist::new(
+                None,
+                Some(BTreeSet::from([String::from("browser_navigate")])),
+            ),
+        )
+        .unwrap()
+        .into_iter()
+        .find(|binding| binding.origin_tool_name() == Some("browser_navigate"))
+        .unwrap();
     let second = manager
         .create_owned_session(&owner.to_string(), BrowserProfileMode::Ephemeral)
         .expect("create second owner browser");
@@ -766,6 +799,13 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         .replace_owned_stdio_partition("vulcan-browser", generation, owner, vec![second_config])
         .await
         .expect("replace owner MCP partition");
+    assert!(
+        pending_navigation
+            .invoke_for_owner_in_conversation(owner, serde_json::json!({"url": &page_url}))
+            .await
+            .is_err(),
+        "the prepared navigation must never reach the replacement partition"
+    );
     call(
         &tool(&access, generation, owner, "browser_snapshot"),
         owner,

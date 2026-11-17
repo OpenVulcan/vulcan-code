@@ -79,6 +79,12 @@ pub(crate) fn resolve_execution_tool_exposure(
     // 在应用相同的 MCP 选择器闸门前合并预先发现的所有者范围绑定。
     let mut mcp_bindings = foundation.resolved_mcp_tools_for_agent(agent_id);
     mcp_bindings.extend(request.supplemental_mcp_tools.iter().cloned());
+    if request.native_browser_runtime.is_some() {
+        // The browser's namespace is supplied exclusively by its packaged, owner-bound candidates.
+        // 浏览器命名空间仅由随包且绑定所有者的候选工具提供。
+        mcp_bindings
+            .retain(|tool| tool.server_id() != Some(crate::tooling::native::BROWSER_MCP_ORIGIN));
+    }
     let mcp_tools = filter_mcp_tool_bindings(mcp_bindings, &selectors);
     ExecutionToolExposureSelection {
         native_tool_ids,
@@ -463,23 +469,18 @@ fn filter_mcp_tool_bindings(
     tools
         .into_iter()
         .filter(|tool| {
-            if mcp_tool_binding_matches_any(tool, &selectors.global_disabled)
-                || mcp_tool_binding_matches_any(tool, &selectors.mcp_tool_disabled)
-                || tool.server_id().is_some_and(|server_id| {
-                    tool_selector_matches(&selectors.mcp_server_disabled, &[server_id])
-                })
-            {
-                return false;
-            }
-            let no_allow = !selectors.has_global_allow()
-                && selectors.mcp_tool_allowed.is_empty()
-                && selectors.mcp_server_allowed.is_empty();
-            no_allow
-                || mcp_tool_binding_matches_any(tool, &selectors.global_allowed)
-                || mcp_tool_binding_matches_any(tool, &selectors.mcp_tool_allowed)
-                || tool.server_id().is_some_and(|server_id| {
-                    tool_selector_matches(&selectors.mcp_server_allowed, &[server_id])
-                })
+            mcp_surface_selected(
+                &[
+                    tool.id(),
+                    tool.name(),
+                    tool.description(),
+                    tool.origin_tool_id(),
+                    tool.server_id().unwrap_or_default(),
+                    tool.origin_tool_name().unwrap_or_default(),
+                ],
+                tool.server_id(),
+                selectors,
+            )
         })
         .collect()
 }
@@ -532,26 +533,28 @@ fn luaskills_entry_matches_any(
     )
 }
 
-/// Returns whether one MCP binding matches a normalized selector set.
-/// 返回单个 MCP 绑定是否命中规范化选择器集合。
-fn mcp_tool_binding_matches_any(
-    tool: &McpRuntimeToolBinding,
-    selectors: &BTreeSet<String>,
+/// Applies the same request selectors to a live MCP binding or a packaged MCP definition.
+/// 对实时 MCP 绑定或随包 MCP 定义应用相同请求选择器。
+pub(super) fn mcp_surface_selected(
+    fields: &[&str],
+    server_id: Option<&str>,
+    selectors: &ToolExposureSelectorState,
 ) -> bool {
-    let origin_tool_id = tool.origin_tool_id();
-    let server_id = tool.server_id().unwrap_or_default();
-    let tool_name = tool.origin_tool_name().unwrap_or_default();
-    tool_selector_matches(
-        selectors,
-        &[
-            tool.id(),
-            tool.name(),
-            tool.description(),
-            origin_tool_id,
-            server_id,
-            tool_name,
-        ],
-    )
+    if tool_selector_matches(&selectors.global_disabled, fields)
+        || tool_selector_matches(&selectors.mcp_tool_disabled, fields)
+        || server_id.is_some_and(|id| tool_selector_matches(&selectors.mcp_server_disabled, &[id]))
+    {
+        return false;
+    }
+    // Empty allow selectors admit the same surfaces as the direct route.
+    // 空启用选择器准入范围与直接入口相同。
+    let no_allow = !selectors.has_global_allow()
+        && selectors.mcp_tool_allowed.is_empty()
+        && selectors.mcp_server_allowed.is_empty();
+    no_allow
+        || tool_selector_matches(&selectors.global_allowed, fields)
+        || tool_selector_matches(&selectors.mcp_tool_allowed, fields)
+        || server_id.is_some_and(|id| tool_selector_matches(&selectors.mcp_server_allowed, &[id]))
 }
 
 /// Returns whether a final resolved public tool remains visible after request selectors.

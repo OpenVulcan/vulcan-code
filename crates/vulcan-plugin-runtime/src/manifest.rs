@@ -642,6 +642,30 @@ pub struct VulcanPluginMcpServerManifest {
     /// Strictly selected transport and its transport-specific settings.
     /// 严格选择的传输方式及其专属设置。
     pub transport: VulcanPluginMcpTransportManifest,
+    /// Optional packaged skill route for MCP and matching Core browser actions.
+    /// MCP 与对应 Core 浏览器动作的可选随包技能路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tools: Option<VulcanPluginMcpPromptToolsManifest>,
+}
+
+/// Names and frozen schemas for an on-demand managed MCP server.
+/// 按需受管 MCP 服务的动作名称与冻结 Schema。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub struct VulcanPluginMcpPromptToolsManifest {
+    /// Local skill name from the owning package.
+    /// 所属包中的本地技能名。
+    pub skill: String,
+    /// Package-relative snapshot of the pinned server's unmodified tool definitions.
+    /// 相对于插件包的固定版本服务器原始工具定义快照。
+    pub schema_file: String,
+    /// Short action to exact MCP tool name.
+    /// 短动作名到精确 MCP 工具名。
+    pub actions: std::collections::BTreeMap<String, String>,
+    /// Short action to Core browser management tool name.
+    /// 短动作名到 Core 浏览器管理工具名。
+    pub core_actions: std::collections::BTreeMap<String, String>,
 }
 
 /// Lifetime of one plugin-owned MCP server declaration.

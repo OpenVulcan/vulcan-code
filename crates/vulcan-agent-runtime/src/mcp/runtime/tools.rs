@@ -2746,6 +2746,21 @@ impl McpRuntimeToolBinding {
             .await
     }
 
+    /// Invokes an owner binding with ordinary conversation result and screenshot projection.
+    /// 通过所有者绑定调用并保留普通会话结果与截图投影。
+    pub async fn invoke_for_owner_in_conversation(
+        &self,
+        owner: SessionId,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.invoke_for_owner_and_audience(
+            owner,
+            args,
+            vulcan_mcp_runtime::McpToolResultAudience::Conversation,
+        )
+        .await
+    }
+
     /// Invokes an owner-scoped binding only through its still-current exact owner lease.
     /// 仅通过仍然当前的精确所有者租约调用所有者范围绑定。
     ///

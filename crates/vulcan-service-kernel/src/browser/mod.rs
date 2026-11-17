@@ -16,7 +16,6 @@ pub use runtime_install::{
 };
 
 pub(crate) use ai_tools::native_browser_runtime;
-pub(crate) use ai_tools::prepare_browser_mcp_bindings;
 
 pub use host::{
     BROWSER_HOST_CONTROL_DISCOVERY_FILENAME, BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION,
@@ -540,9 +539,9 @@ struct BrowserManagerState {
     /// Closure order used to evict only old terminal records after the retained-history bound.
     /// 用于在历史上限后仅驱逐较早终态记录的关闭顺序。
     closed_session_order: VecDeque<String>,
-    /// AI-selected browser by trusted VulcanCode conversation identity.
-    /// 按可信 VulcanCode 会话身份保存 AI 当前选中的浏览器。
-    ai_selected_sessions: BTreeMap<String, String>,
+    /// AI-selected browser and selection token by trusted conversation identity.
+    /// 按可信会话身份保存 AI 当前选中的浏览器及选择令牌。
+    ai_selected_sessions: BTreeMap<String, (String, String)>,
     /// Host startups reserved before any blocking process work begins.
     /// 在任何阻塞性进程工作开始前预留的宿主启动槽。
     starting_hosts: BTreeSet<String>,
@@ -2401,7 +2400,7 @@ impl BrowserManager {
         let projection = session.projection.clone();
         state
             .ai_selected_sessions
-            .retain(|_, selected| selected != session_id);
+            .retain(|_, (selected, _)| selected != session_id);
         if !was_closed {
             state
                 .closed_session_order

@@ -84,16 +84,14 @@ pub(crate) fn spawn_webui_question_prepare_task(
                     publication.as_ref(),
                     PromptContinuationPurpose::QuestionExecution,
                 )?;
-                // Native publication is complete; browser discovery must not retain the global mutation barrier.
-                // 原生发布已经完成；浏览器发现不得继续持有全局变更屏障。
+                // Release publication before the new execution starts.
+                // 在新执行开始前释放发布屏障。
                 drop(publication);
                 // None means the exact kernel owner was closed, so no replacement may be started here.
                 // None 表示精确内核所有者已关闭，因此这里不能启动替代执行。
-                let Some(mut request) = request else {
+                let Some(request) = request else {
                     return Ok::<(), String>(());
                 };
-                request.supplemental_mcp_tools =
-                    crate::browser::prepare_browser_mcp_bindings(state.clone(), session_id).await?;
                 crate::agent_stream::spawn_question_execution_stream_task(
                     app.clone(),
                     state.clone(),
