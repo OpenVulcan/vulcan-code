@@ -18,6 +18,7 @@ use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::provider_tool_bridge::build_provider_tool_candidates;
+use crate::tooling::collaboration::ASK_PARENT_TOOL_ID;
 use crate::tooling::native::{BROWSER_MCP_ORIGIN, PLUGIN_CALL_TOOL_ID, SUBMIT_PLAN_TOOL_ID};
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use crate::workspace_path::normalize_workspace_path_text;
@@ -35,7 +36,7 @@ use vulcan_prompt_skills::{
     PromptSkillsProjectConfig, PromptSkillsSessionConfig, render_prompt_skills_instructions,
     resolve_prompt_skills,
 };
-use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
+use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot, ExecutionScope};
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
@@ -522,6 +523,11 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         ] {
             remove_resolved_tool(&mut resolved_tools, tool_id);
         }
+    }
+    // The host can verify a direct parent only for embedded task sessions.
+    // 宿主仅能为内嵌子任务会话校验直接父会话。
+    if matches!(request.execution_scope, ExecutionScope::MainSession { .. }) {
+        remove_resolved_tool(&mut resolved_tools, ASK_PARENT_TOOL_ID);
     }
     remove_request_hidden_tools(&mut resolved_tools, &request.tool_request_hidden_tool_ids);
     if request.prompt_purpose == ExecutionPromptPurpose::QuestionExecution {

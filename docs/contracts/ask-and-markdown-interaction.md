@@ -115,6 +115,7 @@
 
 ## 五、代理协作展示边界
 
+- `ask_parent` 只向具有直接父会话的内嵌子任务公开。主会话和独立会话可用 `ask_question` 向有权访问的目标会话提问。执行 `ask_parent` 时，宿主仍须验证直接父会话的任务归属。
 - 代理之间的问题、阶段通知和子任务结果不进入人类 Ask 弹窗，不继承人类拒答会中断任务的语义。
 - ChatArea 分支时间线与事件原生时间线共用 `conversation-collaboration-card.tsx`。卡片身份来自强类型 V1 事件，不把代理消息改成人类提示词。收到的问题正文目前只存在于宿主 `agent_message` 输入的 XML 信封中；展示解码必须同时校验输入来源、`agent-message:{event_id}` 动作身份、接收会话、版本和问题类型，不能识别人类或助手正文中的同名标签。
 - 上述 XML 展示解码的契约归属是 `crates/vulcan-ai-contract/src/host_message.rs` 的 `HostMessageEnvelope::render` 和 `HOST_MESSAGE_ENVELOPE_VERSION`。修改宿主信封时必须同步 `conversation-agent-question-input.ts` 及其夹具测试；不新增正文持久化副本。其他代理输入镜像继续隐藏，答案以 `question_answered` 的强类型答案快照展示，避免重复。

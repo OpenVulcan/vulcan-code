@@ -103,11 +103,13 @@ fn cache_preserving_compaction_declares_source_turn_tool_list() {
     use crate::agent_runtime::execution_preparation::tests::{
         test_execution_preparation_request, test_runtime_foundation,
     };
+    use crate::vulcan_tools_bridge::tests::FakeCollaborationRuntime;
     let config = ProviderConfigurationFile::default();
     let foundation = test_runtime_foundation(&config);
     // sourceRequest enables a request-gated tool family so a dropped gate changes the tool list.
     // sourceRequest 启用一个由请求控制的工具族，使丢失的闸门会改变工具清单。
     let mut source_request = test_execution_preparation_request();
+    source_request.native_agent_collaboration_runtime = Some(Arc::new(FakeCollaborationRuntime));
     source_request.project_id = Some(String::from("project-a"));
     source_request.knowledge_access = Some(crate::agent_runtime::ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
@@ -139,6 +141,7 @@ fn cache_preserving_compaction_declares_source_turn_tool_list() {
             .collect::<Vec<_>>()
     };
     let source_ids = tool_ids(&source.tool_snapshot.resolved_tool_definitions);
+    assert!(!source_ids.iter().any(|id| id == ASK_PARENT_TOOL_ID));
     assert!(
         !source_ids.is_empty(),
         "source turn should declare tools; the fixture may have changed"
@@ -158,6 +161,35 @@ fn cache_preserving_compaction_declares_source_turn_tool_list() {
     assert!(!compaction_request.runtime_policy.memory_recall_enabled);
     assert!(!compaction_request.runtime_policy.memory_writeback_enabled);
     assert!(compaction_request.context_injection.is_none());
+
+    // An embedded source retains its parent tool in the preserved schema, subject to the same execution rejection.
+    // 内嵌任务来源在保缓存 Schema 中保留父会话工具，并同样拒绝实际执行。
+    source_request.execution_scope = vulcan_session_core::ExecutionScope::TaskSession {
+        root_session_id: vulcan_session_core::SessionNodeId::from(uuid::Uuid::from_u128(1)),
+        task_session_id: vulcan_session_core::SessionNodeId::from(source_request.session_id),
+    };
+    let child_launch_context =
+        PromptCompactionLaunchContext::from_execution_request(&source_request);
+    let child_request = build_prompt_compaction_launch_request(
+        source_request.session_id,
+        "embedded child",
+        &source_request.workspace_path,
+        None,
+        &child_launch_context,
+        None,
+        ReasoningEffortLevel::Off,
+        SessionConversationState::default(),
+    );
+    let child = prepare_execution_with_tool_snapshot(&foundation, None, &config, &child_request)
+        .expect("embedded compaction preparation should resolve");
+    assert!(child.preparation.tool_request_rejection_all_tools);
+    assert!(
+        child
+            .preparation
+            .tool_descriptors
+            .iter()
+            .any(|tool| tool.id == ASK_PARENT_TOOL_ID)
+    );
 }
 
 /// Verifies local prompt compaction preserves the exact route while disabling recursive automatic compaction.
@@ -346,7 +378,7 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
     );
     assert_eq!(
         request.tool_request_hidden_tool_ids,
-        vec![String::from("hidden-tool")]
+        vec![String::from("hidden-tool"), ASK_PARENT_TOOL_ID.to_owned()]
     );
     assert_eq!(
         request.session_prompt_skill_overrides.get("review"),

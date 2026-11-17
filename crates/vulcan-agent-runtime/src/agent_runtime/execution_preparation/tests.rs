@@ -795,6 +795,94 @@ fn question_execution_removes_business_tools_from_both_surfaces() {
     }
 }
 
+/// Verifies the provider schema and invocation registry expose `ask_parent` only to an embedded child.
+/// 验证供应商 Schema 和执行注册表仅向内嵌子任务公开 `ask_parent`。
+#[test]
+fn ask_parent_is_visible_only_in_embedded_task_sessions() {
+    use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
+    use crate::tooling::collaboration::{ASK_PARENT_TOOL_ID, ASK_QUESTION_TOOL_ID};
+    use crate::vulcan_tools_bridge::tests::FakeCollaborationRuntime;
+    use vulcan_core::tool::VulcanToolExecutor;
+
+    // Use the real collaboration candidate builder with an inert host port and an offline route.
+    // 使用真实协作候选构建器，并提供空闲宿主端口和离线路由。
+    let config = test_provider_config();
+    let foundation = test_runtime_foundation(&config);
+    let mut request = test_execution_preparation_request();
+    request.native_agent_collaboration_runtime = Some(Arc::new(FakeCollaborationRuntime));
+
+    // Independent sessions also execute at MainSession scope. An embedded task has an exact root.
+    // 独立会话同样以 MainSession 范围执行；内嵌任务拥有明确的根会话。
+    let scenarios = [
+        (
+            request.execution_scope.clone(),
+            ExecutionPromptPurpose::UserTurn,
+            false,
+        ),
+        (
+            request.execution_scope.clone(),
+            ExecutionPromptPurpose::AgentTask,
+            false,
+        ),
+        (
+            ExecutionScope::TaskSession {
+                root_session_id: SessionNodeId::from(Uuid::from_u128(1)),
+                task_session_id: SessionNodeId::from(request.session_id),
+            },
+            ExecutionPromptPurpose::AgentTask,
+            true,
+        ),
+    ];
+    for (scope, purpose, has_parent) in scenarios {
+        request.execution_scope = scope;
+        request.prompt_purpose = purpose;
+        // Use the same request preparation and tool projection that construct physical Provider requests.
+        // 复用实际 Provider 请求使用的执行准备与工具投影。
+        let prepared =
+            prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+        let runtime = prepare_host_tool_runtime_context(
+            prepared.tool_snapshot.tools_manager,
+            &prepared.tool_snapshot.resolved_tool_definitions,
+            request.session_id,
+            &prepared.preparation.execution_mode,
+            foundation.task_runtime(),
+        );
+        assert_eq!(
+            prepared
+                .preparation
+                .tool_descriptors
+                .iter()
+                .any(|tool| tool.id == ASK_PARENT_TOOL_ID),
+            has_parent,
+        );
+        assert_eq!(
+            runtime
+                .provider_tool_definitions
+                .iter()
+                .any(|tool| tool.name == ASK_PARENT_TOOL_ID),
+            has_parent,
+        );
+        assert_eq!(
+            runtime
+                .runtime_bridge
+                .is_tool_registered(ASK_PARENT_TOOL_ID),
+            has_parent
+        );
+        assert!(
+            runtime
+                .provider_tool_definitions
+                .iter()
+                .any(|tool| tool.name == ASK_QUESTION_TOOL_ID)
+        );
+        assert!(
+            runtime
+                .provider_tool_definitions
+                .iter()
+                .any(|tool| tool.name == "ask")
+        );
+    }
+}
+
 /// Original tool origins constrain both advertised tools and callable definitions after catalog changes.
 /// 工具目录变化后，原工具来源同时限制展示工具和可调用定义。
 #[test]

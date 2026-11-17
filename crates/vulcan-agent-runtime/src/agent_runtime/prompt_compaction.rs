@@ -23,6 +23,7 @@ use crate::provider_config::{
     ReasoningEffortLevel,
 };
 use crate::tooling::CommandSessionRuntime;
+use crate::tooling::collaboration::ASK_PARENT_TOOL_ID;
 use async_stream::stream;
 use futures_util::{StreamExt, stream::Stream};
 use std::{
@@ -108,6 +109,9 @@ impl PromptCompactionModelTarget {
 /// 在压缩期间复现普通回合提示词与工具可见性所需的不可变会话控制。
 #[derive(Debug, Clone)]
 pub struct PromptCompactionLaunchContext {
+    /// Whether the source request belongs to an embedded task session with a direct parent.
+    /// 来源请求是否属于具有直接父会话的内嵌子任务会话。
+    pub source_is_embedded_child: bool,
     /// Exact sampling temperature captured from the owning request; compaction cannot silently change active request configuration.
     /// 从所属请求捕获的精确采样温度；压缩不能静默改变活动请求配置。
     pub temperature: Option<f32>,
@@ -223,6 +227,7 @@ impl Default for PromptCompactionLaunchContext {
     /// 返回构建模式执行且不含会话专属覆盖的上下文。
     fn default() -> Self {
         Self {
+            source_is_embedded_child: false,
             temperature: None,
             media_projection: None,
             execution_mode: String::from("build"),
@@ -277,6 +282,10 @@ impl PromptCompactionLaunchContext {
         // 只复制来源的有效 VMM 层，使策略隐藏 VMM 的子代理保持原形态。
         let vmm_enabled = request.runtime_policy.vmm_enabled;
         Self {
+            source_is_embedded_child: matches!(
+                request.execution_scope,
+                vulcan_session_core::ExecutionScope::TaskSession { .. }
+            ),
             temperature: request.temperature,
             // Compaction planning supplies its own exact source snapshot after the ordinary controls are copied.
             // 普通控制复制后，由压缩规划提供自身精确来源快照。
@@ -1111,6 +1120,12 @@ fn build_prompt_compaction_launch_request(
     // Pending route settings come from the exact picker snapshot captured for this manual summary.
     // 待生效路由设置来自为本次手动摘要捕获的精确选择器快照。
     let pending_route = model_target.and_then(|target| target.pending_route.as_ref());
+    // Compaction has its own execution scope; match parent-tool visibility to the captured source.
+    // 压缩有专用执行范围，向父会话提问工具的可见性遵循已捕获的来源。
+    let mut tool_request_hidden_tool_ids = launch_context.tool_request_hidden_tool_ids.clone();
+    if !launch_context.source_is_embedded_child {
+        tool_request_hidden_tool_ids.push(ASK_PARENT_TOOL_ID.to_owned());
+    }
     ExecutionPreparationRequest {
         session_id,
         execution_scope: vulcan_session_core::ExecutionScope::ContextCompaction {
@@ -1183,7 +1198,7 @@ fn build_prompt_compaction_launch_request(
         tool_request_rejection_reason: launch_context.tool_request_rejection_reason.clone(),
         tool_request_rejection_all_tools: launch_context.tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids: launch_context.tool_request_rejection_tool_ids.clone(),
-        tool_request_hidden_tool_ids: launch_context.tool_request_hidden_tool_ids.clone(),
+        tool_request_hidden_tool_ids,
         prompt_purpose: ExecutionPromptPurpose::ContextCompactionCachePreserving,
         prompt_skill_policy_override: launch_context.prompt_skill_policy_override.clone(),
         project_prompt_skills: launch_context.project_prompt_skills.clone(),

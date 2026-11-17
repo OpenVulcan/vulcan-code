@@ -39,7 +39,7 @@ use vulcan_vmm::VmmConfigLayer;
 /// Provides a host collaboration port whose candidates can be projected by bridge tests.
 /// 提供可由桥接测试投影工具候选的宿主协作端口。
 #[derive(Debug)]
-struct FakeCollaborationRuntime;
+pub(crate) struct FakeCollaborationRuntime;
 
 #[async_trait::async_trait]
 impl NativeAgentCollaborationRuntime for FakeCollaborationRuntime {

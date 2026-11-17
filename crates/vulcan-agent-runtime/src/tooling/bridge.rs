@@ -61,7 +61,7 @@ use luaskills_dispatch::{
 };
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Resolves the shared project lock used to order command launches and directory changes.
 /// 解析用于排序命令启动与目录更换的项目共享锁。
