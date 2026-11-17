@@ -1,6 +1,7 @@
 import React from "react";
 import {
   captureConversationScrollSnapshot,
+  conversationDistanceFromBottom,
   conversationScrollTopForSnapshot,
   conversationViewportAllowsTailFollow,
   type ConversationScrollSnapshot,
@@ -87,6 +88,32 @@ export const CONVERSATION_TAIL_RESERVE_MAX_SHARE = 0.4;
 // 返回值：以 CSS 像素表示的预留高度。
 export function conversationTailReserveHeight(foldLimit: number, contentHeight: number, cap: number): number {
   return Math.max(0, Math.min(cap, Math.ceil(foldLimit - contentHeight)));
+}
+
+// Allow rounding of fractional scroll positions when detecting a return to the bottom after wheel input.
+// 判断滚轮滚动后是否回到底部时，允许小数滚动位置的取整误差。
+const CONVERSATION_BOTTOM_ROUNDING_PX = 1;
+
+// Check whether the wheel can reach the transcript through any nested scrollports.
+// 检查滚轮事件能否经过嵌套滚动区到达会话正文。
+// Parameters: event supplies the direction and event path; scrollport is the owning transcript.
+// 参数：event 提供滚动方向和事件路径，scrollport 是所属会话正文。
+// Returns: true when the transcript can receive the native wheel scroll.
+// 返回值：会话正文能接收原生滚轮滚动时返回 true。
+function wheelReachesTranscript(event: WheelEvent, scrollport: HTMLElement): boolean {
+  for (const target of event.composedPath()) {
+    if (target === scrollport) return true;
+    if (!(target instanceof HTMLElement)) continue;
+    // Only a vertical scroll container can consume or contain this wheel input.
+    // 只有纵向滚动容器能消耗或阻止传递这次滚轮输入。
+    const style = window.getComputedStyle(target);
+    if (style.overflowY !== "auto" && style.overflowY !== "scroll") continue;
+    // A tool card at its edge can pass the wheel to the transcript if its CSS allows scroll chaining.
+    // 工具卡滚到边缘时，如果 CSS 允许滚动传递，滚轮可继续作用于会话正文。
+    const canScroll = event.deltaY < 0 ? target.scrollTop > 0 : conversationDistanceFromBottom(target) > 0;
+    if (canScroll || style.overscrollBehaviorY === "contain" || style.overscrollBehaviorY === "none") return false;
+  }
+  return false;
 }
 
 // ProgrammaticScrollTarget describes one in-flight native scroll operation owned by the controller.
@@ -236,6 +263,9 @@ export function useConversationScrollController(
   // followTailRef is the controller's explicit viewport ownership state.
   // followTailRef 是控制器显式的视口所有权状态。
   const followTailRef = React.useRef(true);
+  // Explicit upward wheel input requires a return to the bottom before passive following can resume.
+  // 明确向上滚动滚轮后，必须回到底部才能恢复自动跟随。
+  const wheelReadingRef = React.useRef(false);
   // observedScrollTopRef is the last native position processed by the controller ledger.
   // observedScrollTopRef 是控制器账本处理的最后一个原生位置。
   const observedScrollTopRef = React.useRef(0);
@@ -340,6 +370,7 @@ export function useConversationScrollController(
   // Returns: nothing.
   // 返回值：无。
   const publishFollowTail = React.useCallback((followTail: boolean): void => {
+    if (followTail) wheelReadingRef.current = false;
     if (followTailRef.current === followTail) {
       return;
     }
@@ -513,7 +544,15 @@ export function useConversationScrollController(
       layoutTransactionRef.current = null;
       foldLimitRef.current = null;
       cancelPendingFrame();
-      publishFollowTail(conversationViewportAllowsTailFollow(element));
+      if (!wheelReadingRef.current) {
+        publishFollowTail(conversationViewportAllowsTailFollow(element));
+      }
+    }
+    // Wheel reading resumes only on downward movement to the bottom, including fractional movement.
+    // 滚轮阅读仅在向下移到底部时恢复跟随，也支持小数像素位移。
+    if (wheelReadingRef.current && !target && actualTop > previousTop
+      && conversationDistanceFromBottom(element) < CONVERSATION_BOTTOM_ROUNDING_PX) {
+      publishFollowTail(true);
     }
     if (!followTailRef.current) {
       reconcileTailReserve(element);
@@ -696,6 +735,7 @@ export function useConversationScrollController(
         layoutTransactionRef.current = null;
         pendingTurnRevealRef.current = null;
         foldLimitRef.current = null;
+        wheelReadingRef.current = false;
         cancelPendingFrame();
         publishFollowTail(false);
       }
@@ -793,7 +833,7 @@ export function useConversationScrollController(
       const ownershipDecision = conversationResizeOwnershipDecision(
         followTailRef.current,
         transactionActive,
-        conversationViewportAllowsTailFollow(element),
+        !wheelReadingRef.current && conversationViewportAllowsTailFollow(element),
       );
       if (ownershipDecision.adoptedTail) {
         layoutTransactionRef.current = null;
@@ -872,12 +912,45 @@ export function useConversationScrollController(
   }, [options.active, options.scrollRef, options.surfaceId, reconcileTailReserve, syncTail]);
 
   React.useEffect(() => {
-    // element owns the native smooth-scroll lifecycle for this exact transcript.
-    // element 拥有当前精确转录的原生平滑滚动生命周期。
+    // element and surfaceId bind wheel input and smooth scrolling to one mounted transcript.
+    // element 和 surfaceId 将滚轮输入和平滑滚动绑定到一个已挂载的会话正文。
     const element = options.scrollRef.current;
-    if (!options.active || !options.surfaceId || !element) {
+    const surfaceId = options.surfaceId;
+    if (!options.active || !surfaceId || !element) {
       return;
     }
+    // Record reader intent before native scroll notifications or content observers can correct the viewport.
+    // 在原生滚动通知或内容观察器校正视口之前记录读者意图。
+    // Parameters: event is the native wheel input; the browser still controls the actual movement.
+    // 参数：event 是原生滚轮输入，实际位移仍由浏览器控制。
+    // Returns: nothing.
+    // 返回值：无。
+    const handleWheel = (event: WheelEvent): void => {
+      if (element.dataset.conversationSurfaceId !== surfaceId || scrollbarProgressRef.current !== null
+        || event.defaultPrevented || event.ctrlKey || event.shiftKey || event.deltaY === 0
+        || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        return;
+      }
+      if (event.deltaY > 0) {
+        // At the bottom there may be no subsequent scroll event, even when the user explicitly scrolls down.
+        // 已在底部时，即使用户明确向下滚动，也可能不再产生 scroll 事件。
+        if (wheelReadingRef.current && conversationDistanceFromBottom(element) < CONVERSATION_BOTTOM_ROUNDING_PX
+          && wheelReachesTranscript(event, element)) {
+          publishFollowTail(true);
+        }
+        return;
+      }
+      if (element.scrollHeight <= element.clientHeight || !wheelReachesTranscript(event, element)) return;
+
+      wheelReadingRef.current = true;
+      userRevisionRef.current += 1;
+      layoutTransactionRef.current = null;
+      pendingTurnRevealRef.current = null;
+      foldLimitRef.current = null;
+      cancelPendingFrame();
+      publishFollowTail(false);
+      if (programmaticTargetRef.current) writeScrollTop(element, element.scrollTop);
+    };
     // handleScrollEnd closes a smooth target that the browser stopped before reaching its destination.
     // handleScrollEnd 关闭浏览器在到达目标前停止的平滑滚动目标。
     const handleScrollEnd = (): void => {
@@ -895,12 +968,18 @@ export function useConversationScrollController(
       if (!reachedTarget) {
         userRevisionRef.current += 1;
         cancelPendingFrame();
-        publishFollowTail(conversationViewportAllowsTailFollow(element));
+        if (!wheelReadingRef.current) {
+          publishFollowTail(conversationViewportAllowsTailFollow(element));
+        }
       }
     };
+    element.addEventListener("wheel", handleWheel, { passive: true });
     element.addEventListener("scrollend", handleScrollEnd);
-    return () => element.removeEventListener("scrollend", handleScrollEnd);
-  }, [cancelPendingFrame, options.active, options.scrollRef, options.surfaceId, publishFollowTail]);
+    return () => {
+      element.removeEventListener("wheel", handleWheel);
+      element.removeEventListener("scrollend", handleScrollEnd);
+    };
+  }, [cancelPendingFrame, options.active, options.scrollRef, options.surfaceId, publishFollowTail, writeScrollTop]);
 
   React.useEffect(() => {
     // handleLayoutWillChange captures the exact semantic viewport before collapse or shell geometry mutation.

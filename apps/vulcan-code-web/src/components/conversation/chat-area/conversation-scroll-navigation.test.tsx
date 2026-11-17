@@ -59,6 +59,10 @@ it("keeps the held track position as turns resize and reaches the new bottom", a
         detail: { progress, dragging },
       }),
     );
+    // Dragging must take ownership even after a wheel gesture has paused following.
+    // 即使滚轮已经暂停跟随，拖动也必须能接管滚动。
+    scrollport.dispatchEvent(new WheelEvent("wheel", { deltaY: -2 }));
+    expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
     await React.act(async () => { moveThumb(0.5, true); });
     expect(scrollport.scrollTop).toBe(1_250);
     contentHeight = 6_500;
@@ -72,6 +76,11 @@ it("keeps the held track position as turns resize and reaches the new bottom", a
     await React.act(async () => { moveThumb(1, false); });
     expect(scrollport.scrollTop).toBe(6_000);
     expect(onFollowTailChange).toHaveBeenLastCalledWith(true);
+    contentHeight += 50;
+    scrollport.dispatchEvent(new CustomEvent<ConversationTurnWindowLayoutDetail>(
+      CONVERSATION_TURN_WINDOW_LAYOUT_EVENT, { detail: { anchor: null } },
+    ));
+    expect(scrollport.scrollTop).toBe(contentHeight - scrollport.clientHeight);
   } finally {
     await React.act(async () => root.unmount());
     host.remove();
