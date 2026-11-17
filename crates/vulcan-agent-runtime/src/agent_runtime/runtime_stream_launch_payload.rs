@@ -604,6 +604,55 @@ mod tests {
         println!("{COMPLETED}");
     }
 
+    /// Boots a real project rules file larger than 184 KiB into the system baseline.
+    /// 将超过 184 KiB 的真实项目规则文件引导至系统基线。
+    ///
+    /// Takes no arguments and returns no value.
+    /// 无参数，无返回值。
+    #[test]
+    fn large_project_rules_survive_runtime_bootstrap() {
+        use vulcan_session_core::v1::context::{LockedPromptTarget, LockedSourceKind};
+
+        // Use an isolated workspace with more than 184 KiB of UTF-8 rules.
+        // 使用独立工作区，写入超过 184 KiB 的 UTF-8 规则。
+        let workspace = tempfile::tempdir().expect("create project workspace");
+        let rules = format!(
+            "Project rules start\n{}\nProject rules end",
+            "界".repeat(192 * 1024 / '界'.len_utf8())
+        );
+        std::fs::write(
+            workspace
+                .path()
+                .join(vulcan_prompt_composer::DEFAULT_PROJECT_RULES_FILE_NAME),
+            &rules,
+        )
+        .expect("write project rules");
+
+        // Build the same prompt and host messages that a normal user turn prepares.
+        // 构建普通用户回合所用的提示词和宿主消息。
+        let mut preparation = build_test_preparation();
+        preparation.workspace_path =
+            vulcan_runtime_assets::native_host_path_text_from_path(workspace.path());
+        let mut request = build_test_request();
+        request
+            .workspace_path
+            .clone_from(&preparation.workspace_path);
+        let bootstrap = build_runtime_bootstrap_core(&preparation, &request, None)
+            .expect("large project rules must not fail host message preparation");
+        let source = bootstrap
+            .locked_baseline
+            .locked_sources()
+            .iter()
+            .find(|source| source.kind == LockedSourceKind::AgentsMd)
+            .expect("project rules must be part of the locked baseline");
+        assert_eq!(source.target, LockedPromptTarget::System);
+        assert_eq!(source.content, rules);
+        assert!(
+            bootstrap.system_preamble.contains(&rules),
+            "the system prompt must carry the complete rules"
+        );
+    }
+
     /// Verifies actual bootstrap exposes dynamic instructions once in User history and keeps both top projections stable.
     /// 验证真实 bootstrap 将动态指令仅投影一次到 User 历史，且两份顶部投影均保持稳定。
     #[test]

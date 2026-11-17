@@ -606,6 +606,14 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
             content: String::from("candidate-baseline-content"),
         }])
         .expect("candidate baseline");
+    // Cover project rules larger than the former host-message limit and verify they reach both encoders intact.
+    // 覆盖超过旧宿主消息上限的项目规则，验证其完整传入两种编码器。
+    let project_rules = format!(
+        "persisted-baseline-content\n{}\nproject rules end",
+        "界".repeat(192 * 1024 / '界'.len_utf8()),
+    );
+    let framed_rules =
+        format!("<vulcan_context_agent_md>\n{project_rules}\n</vulcan_context_agent_md>");
     let initialized_locked_baseline = LockedBaselineProjection::project(vec![
         LockedBaselineSegmentInput {
             kind: LockedSourceKind::AgentsMd,
@@ -613,7 +621,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
             target: LockedPromptTarget::User,
             source_label: None,
             source_id: None,
-            content: String::from("persisted-baseline-content"),
+            content: project_rules,
         },
         LockedBaselineSegmentInput {
             kind: LockedSourceKind::BaselineHooks,
@@ -823,10 +831,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
             "fixed-base-system\n\nfixed-agent-system".into(),
         ),
         text_ai_message(MessageRole::System, HOST_MESSAGE_GUIDANCE.into()),
-        text_ai_message(
-            MessageRole::System,
-            render_project_agents_instruction("persisted-baseline-content"),
-        ),
+        text_ai_message(MessageRole::System, framed_rules.clone()),
         text_ai_message(MessageRole::Developer, "fixed-capability-guide".into()),
     ]));
     // Verify both an in-band prefix and a protocol with dedicated system instructions.
@@ -855,11 +860,9 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
         })
         .expect("encoded project rules");
     assert_eq!(project_message["role"], "system");
-    assert!(
-        project_message["content"]
-            .as_str()
-            .unwrap()
-            .contains("<vulcan_context_agent_md>")
+    assert_eq!(
+        project_message["content"].as_str(),
+        Some(framed_rules.as_str())
     );
     let responses =
         vulcan_llm_core::encode_codex_responses_request(&rebuilt.transport.exact_request)
@@ -874,7 +877,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
         responses.body["instructions"]
             .as_str()
             .unwrap()
-            .contains("<vulcan_context_agent_md>")
+            .contains(&framed_rules)
     );
     assert_eq!(responses.body["input"][0]["role"], "developer");
     assert_eq!(
