@@ -845,8 +845,10 @@ fn collapse_whitespace_compacts_skill_descriptions() {
     assert_eq!(collapse_whitespace(" \n\t "), "");
 }
 
+/// Verifies the discovery catalog includes enabled skill identities without their file addresses.
+/// 验证发现目录只列出启用的技能标识，且不包含其文件地址。
 #[test]
-fn renders_only_enabled_skills() {
+fn renders_enabled_skill_catalog_without_file_paths() {
     let skills = vec![
         ResolvedPromptSkill {
             skill: prompt_skill_fixture("enabled", "Use for enabled tasks."),
@@ -863,6 +865,35 @@ fn renders_only_enabled_skills() {
     assert!(rendered.contains("enabled"));
     assert!(!rendered.contains("disabled"));
     assert!(rendered.contains("<skills_instructions>"));
+    assert!(rendered.contains("`skill`"));
+    assert!(!rendered.contains(SKILL_FILE_NAME));
+    assert_eq!(
+        project_saved_skill_catalog(&rendered).as_deref(),
+        Some(rendered.as_str())
+    );
+}
+
+/// Verifies persisted legacy catalogs retain their entries while physical addresses are removed.
+/// 验证旧版持久化目录保留技能条目并移除物理地址。
+#[test]
+fn projects_legacy_skill_catalog_without_file_paths() {
+    // The historical renderer stored one path suffix per catalog entry.
+    // 历史渲染器在每个目录条目末尾保存一个路径字段。
+    let legacy = format!(
+        "{SKILL_CATALOG_HEADER}- package:review: Review source (file: /fixture (local)/catalog/review/SKILL.md)\n- terminal: Terminals (file: C:\\fixture\\SKILL.md){LEGACY_SKILL_CATALOG_FOOTER}"
+    );
+    // Saved source remains available for integrity checks while this view can be sent to the model.
+    // 已保存的原始来源仍可用于完整性检查，而此投影视图可发送给模型。
+    let projected = project_saved_skill_catalog(&legacy).expect("legacy catalog should project");
+    assert!(projected.contains("- package:review: Review source\n- terminal: Terminals"));
+    assert!(projected.contains("`skill`"));
+    assert!(!projected.contains("fixture"));
+    assert!(!projected.contains(SKILL_FILE_NAME));
+    assert!(legacy.contains(SKILL_FILE_NAME));
+    assert!(
+        project_saved_skill_catalog(&legacy.replace("/catalog/review", "\n/catalog/review"))
+            .is_none()
+    );
 }
 
 /// Verifies managed package writes commit strict standard and Vulcan metadata together.

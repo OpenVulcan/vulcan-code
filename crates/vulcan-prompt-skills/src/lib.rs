@@ -2461,46 +2461,86 @@ pub fn resolve_prompt_skill_state(
     )
 }
 
-/// Renders enabled prompt skills into a compact developer instruction block.
-/// 将启用的提示词技能渲染为紧凑的开发者指令块。
+/// Shared heading for the current and already persisted skill catalogs.
+/// 当前技能目录与已持久化技能目录共用的标题。
+const SKILL_CATALOG_HEADER: &str = concat!(
+    "<skills_instructions>\n## Skills\n",
+    "When the task matches a listed skill, call `skill` with its listed name before choosing generic tools. Load only the skills relevant to the task.\n",
+    "### Available skills\n",
+);
+
+/// Tool-first instructions for model-visible skill discovery.
+/// 面向模型的技能发现指引，明确通过工具加载技能。
+const SKILL_CATALOG_FOOTER: &str = concat!(
+    "\n### How to use skills\n",
+    "- Call `skill` with the exact listed name to load the full instructions, skill file path, and resource directory.\n",
+    "- Use the returned instructions and resource directory to locate any referenced scripts or files.\n",
+    "</skills_instructions>",
+);
+
+/// Identifies the historical catalog format whose rows included physical file paths.
+/// 标识在条目中包含物理文件路径的历史目录格式。
+const LEGACY_SKILL_CATALOG_FOOTER: &str = concat!(
+    "\n### How to use skills\n",
+    "- Match the user's task against the skill descriptions before loading a skill.\n",
+    "- Call `skill` with the exact skill name to load its full SKILL.md content and resource directory.\n",
+    "- Do not assume scripts or references until the skill content or its base directory has been loaded.\n",
+    "</skills_instructions>",
+);
+
+/// Renders the named, enabled `skills` as a developer catalog for tool-based discovery.
+/// 将 `skills` 中已启用且有描述的技能渲染为通过工具发现的开发者目录。
 pub fn render_prompt_skills_instructions(skills: &[ResolvedPromptSkill]) -> Option<String> {
-    let enabled = skills
+    let rows = skills
         .iter()
         .filter(|skill| skill.is_enabled() && skill.skill.has_description())
+        .map(|resolved| {
+            format!(
+                "- {}: {}",
+                resolved.skill.name,
+                collapse_whitespace(&resolved.skill.description)
+            )
+        })
         .collect::<Vec<_>>();
-    if enabled.is_empty() {
-        return None;
-    }
-
-    let mut lines = vec![
-        String::from("<skills_instructions>"),
-        String::from("## Skills"),
-        String::from(
-            "When the task matches a listed skill, call `skill` with its listed name before choosing generic tools. Load only the skills relevant to the task.",
-        ),
-        String::from("### Available skills"),
-    ];
-    for resolved in enabled {
-        lines.push(format!(
-            "- {}: {} (file: {})",
-            resolved.skill.name,
-            collapse_whitespace(&resolved.skill.description),
-            vulcan_runtime_assets::native_host_path_text_from_path(&resolved.skill.skill_file)
-        ));
-    }
-    lines.extend([
-        String::from("### How to use skills"),
-        String::from("- Match the user's task against the skill descriptions before loading a skill."),
-        String::from("- Call `skill` with the exact skill name to load its full SKILL.md content and resource directory."),
-        String::from("- Do not assume scripts or references until the skill content or its base directory has been loaded."),
-        String::from("</skills_instructions>"),
-    ]);
-    Some(lines.join("\n"))
+    (!rows.is_empty()).then(|| {
+        format!(
+            "{SKILL_CATALOG_HEADER}{}{SKILL_CATALOG_FOOTER}",
+            rows.join("\n")
+        )
+    })
 }
 
-/// Renders one prompt skill as the output of the native skill tool.
-/// 将单个提示词技能渲染为原生 skill 工具输出。
+/// Projects a saved skill catalog for dispatch, omitting a malformed legacy catalog.
+/// 将已保存的技能目录投影到派发请求中，遇到无法解析的旧目录时省略该片段。
+pub fn project_saved_skill_catalog(content: &str) -> Option<std::borrow::Cow<'_, str>> {
+    // Match the historical renderer before decoding the rows; current descriptions are opaque.
+    // 先匹配历史渲染器的固定结尾再解析条目，当前目录的描述按原样投影。
+    let Some(legacy) = content.strip_suffix(LEGACY_SKILL_CATALOG_FOOTER) else {
+        return Some(std::borrow::Cow::Borrowed(content));
+    };
+    // Decode the historical one-row-per-skill grammar and drop the file field at the boundary.
+    // 按历史格式逐行解析技能，并在字段边界移除文件地址。
+    let rows = legacy
+        .strip_prefix(SKILL_CATALOG_HEADER)?
+        .lines()
+        .map(|row| {
+            let (entry, _) = row.strip_suffix(')')?.split_once(" (file: ")?;
+            entry.strip_prefix("- ")?;
+            Some(entry)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(std::borrow::Cow::Owned(format!(
+        "{SKILL_CATALOG_HEADER}{}{SKILL_CATALOG_FOOTER}",
+        rows.join("\n")
+    )))
+}
+
+/// Renders the loaded `skill` and its `sampled_files` for the native skill result.
+/// 将已加载的 `skill` 和抽样资源 `sampled_files` 渲染为原生 skill 工具结果。
 pub fn render_skill_tool_output(skill: &PromptSkill, sampled_files: &[PathBuf]) -> String {
+    // Describe the exact file and resource directory of the prepared skill.
+    // 展示执行准备阶段确定的具体技能文件及资源目录。
+    let skill_file = vulcan_runtime_assets::native_host_path_text_from_path(&skill.skill_file);
     let base_dir = vulcan_runtime_assets::native_host_path_text_from_path(&skill.base_dir);
     let mut lines = vec![
         format!("<skill_content name=\"{}\">", xml_escape(&skill.name)),
@@ -2509,6 +2549,7 @@ pub fn render_skill_tool_output(skill: &PromptSkill, sampled_files: &[PathBuf]) 
         String::new(),
         skill.body.trim().to_string(),
         String::new(),
+        format!("Skill file: {skill_file}"),
         format!("Base directory for this skill: {base_dir}"),
         String::from(
             "Relative paths in this skill, such as scripts/, references/, or templates/, are relative to this base directory.",

@@ -1874,9 +1874,22 @@ fn visit_initial_request_prefix(
             .iter()
             .filter(|source| source.kind != LockedSourceKind::AgentsMd && source.target == target)
         {
+            // Project historical skill catalogs at the shared dispatch and inspector boundary.
+            // 在派发与检查器共用的边界投影历史技能目录。
+            let content = match source.kind {
+                LockedSourceKind::PromptSkillInjection => {
+                    let Some(content) =
+                        vulcan_prompt_skills::project_saved_skill_catalog(&source.content)
+                    else {
+                        continue;
+                    };
+                    content
+                }
+                _ => std::borrow::Cow::Borrowed(source.content.as_str()),
+            };
             visit(
                 role,
-                &source.content,
+                &content,
                 RequestContextPromptKind::Locked(source.kind),
                 source.source_label.as_deref(),
             );

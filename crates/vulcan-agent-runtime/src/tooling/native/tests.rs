@@ -214,6 +214,14 @@ async fn prompt_skill_detail_uses_execution_prepared_snapshot() {
     assert!(output.contains(
         vulcan_runtime_assets::native_host_path_text_from_path(&missing_base_dir).as_str()
     ));
+    assert!(
+        output.contains(
+            vulcan_runtime_assets::native_host_path_text_from_path(
+                &missing_base_dir.join("SKILL.md")
+            )
+            .as_str()
+        )
+    );
     assert!(output.contains("scripts\\review.ps1") || output.contains("scripts/review.ps1"));
 }
 

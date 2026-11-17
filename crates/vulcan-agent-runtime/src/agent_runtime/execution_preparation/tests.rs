@@ -1796,6 +1796,7 @@ entries:
         .join("\n");
     assert_eq!(developer.matches("office_fixture_discovery").count(), 1);
     assert!(!developer.contains("fixture_guide_body"));
+    assert!(!developer.contains("SKILL.md"));
     let definitions = &prepared.tool_snapshot.resolved_tool_definitions;
     assert!(
         !definitions
@@ -1862,6 +1863,7 @@ entries:
     )
     .await;
     assert!(guide.model_output.contains("fixture_guide_body"));
+    assert!(guide.model_output.contains("SKILL.md"));
     assert!(guide.model_output.contains("vulcan_work_pdf_inspect"));
     assert!(!guide.model_output.contains("input_schema"));
     let output = invoke(3, TOOL_CALL_TOOL_ID, call).await;

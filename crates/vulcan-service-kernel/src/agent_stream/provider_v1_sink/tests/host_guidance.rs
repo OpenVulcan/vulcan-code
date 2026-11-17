@@ -21,6 +21,56 @@ fn baseline_with_text(text: &str) -> LockedBaselineProjection {
     .unwrap()
 }
 
+/// Checks that dispatch and preview both hide the file field of a persisted skill catalog.
+/// 验证派发与预览都隐藏持久化技能目录中的文件字段。
+#[test]
+fn provider_projects_legacy_skill_catalog_without_file_paths() {
+    // Use the historical wire format and a path that can be checked independently of the wording.
+    // 使用历史线路格式，并通过样例路径独立于文案验证结果。
+    let legacy = concat!(
+        "<skills_instructions>\n## Skills\n",
+        "When the task matches a listed skill, call `skill` with its listed name before choosing generic tools. Load only the skills relevant to the task.\n",
+        "### Available skills\n- fixture: Review source (file: /only-in-saved-baseline/SKILL.md)",
+        "\n### How to use skills\n",
+        "- Match the user's task against the skill descriptions before loading a skill.\n",
+        "- Call `skill` with the exact skill name to load its full SKILL.md content and resource directory.\n",
+        "- Do not assume scripts or references until the skill content or its base directory has been loaded.\n",
+        "</skills_instructions>",
+    );
+    // The source kind limits the transformation to skill catalogs.
+    // 来源类型将转换范围限定为技能目录。
+    let baseline = LockedBaselineProjection::project(vec![LockedBaselineSegmentInput {
+        kind: LockedSourceKind::PromptSkillInjection,
+        node_id: "fixture-skill-catalog".into(),
+        target: LockedPromptTarget::Developer,
+        source_label: None,
+        source_id: Some("enabled-prompt-skills".into()),
+        content: legacy.into(),
+    }])
+    .unwrap();
+    // Both readers use this baseline, which still contains the original bytes.
+    // 两个读取方使用同一基线，基线仍持有原始字节。
+    let fixed = ProviderPromptLayers::default();
+    let mut messages = Vec::new();
+    let mut prompt_parts = Vec::new();
+    append_provider_request_prefix(&fixed, &baseline, &mut messages, &mut prompt_parts).unwrap();
+    let (preview, _) = preview_request_prefix(&fixed, &baseline).unwrap();
+
+    assert_eq!(preview, messages);
+    assert!(prompt_parts.iter().any(|text| text.contains("fixture")));
+    assert!(
+        prompt_parts
+            .iter()
+            .all(|text| !text.contains("/only-in-saved-baseline/"))
+    );
+    assert!(
+        baseline
+            .locked_sources()
+            .iter()
+            .any(|source| source.content == legacy)
+    );
+}
+
 /// Builds a valid candidate for `handle` through the real physical reconstruction; dispatches nothing.
 /// 通过真实物理重建为 `handle` 构造合法候选；不发送请求。
 pub(super) fn candidate_for(handle: &SessionHandle) -> ProviderRequestPreparationCandidate {
