@@ -100,6 +100,12 @@ impl StreamingRuntimeToolExecutor {
 
 #[async_trait]
 impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
+    /// Uses the resolved host tool catalog to check the exact requested name.
+    /// 使用已解析的宿主工具清单校验请求中的精确名称。
+    fn is_tool_registered(&self, tool_name: &str) -> bool {
+        self.runtime_bridge.is_tool_registered(tool_name)
+    }
+
     /// Publishes one complete durable recovery batch before any concurrent tool future starts.
     /// 在任何并发工具 Future 启动前发布一批完整的可靠恢复请求。
     async fn prepare_tool_batch(

@@ -4,6 +4,36 @@ use super::*;
 /// Provider 工具参数文档被拒绝时使用的稳定模型可见标记。
 const TOOL_ARGUMENT_PARSE_FAILURE_PREFIX: &str = "[tool_argument_parse_error]";
 
+/// Returns a terminal rejection for a missing tool or invalid arguments in `request`.
+/// 当 `request` 的工具不存在或参数无效时返回终态拒绝。
+/// `executor` supplies the registered names; a missing tool takes precedence over its arguments.
+/// `executor` 提供已注册的名称；工具不存在时优先报告名称错误。
+fn tool_invocation_rejection(
+    executor: &impl VulcanToolExecutor,
+    request: &ToolInvocationRequest,
+) -> Option<ToolInvocationResult> {
+    if !executor.is_tool_registered(&request.tool_name) {
+        return Some(ToolInvocationResult {
+            tool_call_id: request.tool_call_id.clone(),
+            tool_name: request.tool_name.clone(),
+            model_output: format!("Unknown tool `{}`.", request.tool_name),
+            host_result: Some(json!({
+                "kind": "unknown_tool",
+                "status": "failed",
+                "executed": false,
+                "side_effect_observed": false,
+                "tool_call_id": request.tool_call_id,
+                "tool_name": request.tool_name,
+            })),
+            is_error: true,
+        });
+    }
+    request
+        .argument_parse_error
+        .as_deref()
+        .map(|message| build_tool_argument_parse_failure_result(request, message))
+}
+
 /// Builds one non-executed tool result for Provider arguments that could not be parsed as complete JSON.
 /// 为无法解析为完整 JSON 的 Provider 参数构建一条未执行工具结果。
 ///
@@ -282,8 +312,7 @@ impl VulcanCoreController {
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
     {
-        if let Some(message) = request.argument_parse_error.as_deref() {
-            let rejected_result = build_tool_argument_parse_failure_result(request, message);
+        if let Some(rejected_result) = tool_invocation_rejection(executor, request) {
             self.record_tool_finished(&rejected_result);
             return Ok(rejected_result);
         }
@@ -347,16 +376,11 @@ impl VulcanCoreController {
         let mut pending_executions = FuturesUnordered::new();
         let policy_snapshot = self.snapshot.clone();
         for (request_index, request) in requests.into_iter().enumerate() {
-            if let Some(message) = request.argument_parse_error.as_deref() {
-                // Provider-invalid arguments are terminal before dispatch and therefore cannot enter the host executor.
-                // Provider 无效参数在分派前即为终态，因此不得进入宿主执行器。
+            if let Some(rejection) = tool_invocation_rejection(executor, &request) {
                 // The executor still records the terminal so its prepared batch can close.
                 // 执行器仍需记录该终态，使其已准备批次能够封闭。
                 let rejected_result = executor
-                    .settle_undispatched_tool(
-                        &request,
-                        build_tool_argument_parse_failure_result(&request, message),
-                    )
+                    .settle_undispatched_tool(&request, rejection)
                     .await?;
                 self.record_tool_finished(&rejected_result);
                 result_slots[request_index] = Some(Ok(rejected_result));

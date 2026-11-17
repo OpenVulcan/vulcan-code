@@ -3032,14 +3032,14 @@ mod tests {
                         })
                     })
                     .collect::<Vec<_>>();
-                calls.push(json!({"index":3,"id":"call-3","function":{"name":"invented_","arguments":arguments}}));
+                calls.push(json!({"index":3,"id":"call-3","function":{"name":"ui-","arguments":arguments}}));
                 let mut events = decoder
                     .push_sse(
                         None,
-                        &json!({"choices":[{"delta":{"tool_calls":calls}}]}).to_string(),
+                        &json!({"choices":[{"delta":{"content":"<tool_call><function=ui-metrics>fixture</tool_call>","tool_calls":calls}}]}).to_string(),
                     )
                     .unwrap();
-                events.extend(decoder.push_sse(None, r#"{"choices":[{"delta":{"tool_calls":[{"index":3,"function":{"name":"tool"}}]},"finish_reason":"tool_calls"}]}"#).unwrap());
+                events.extend(decoder.push_sse(None, r#"{"choices":[{"delta":{"tool_calls":[{"index":3,"function":{"name":"metrics"}}]},"finish_reason":"tool_calls"}]}"#).unwrap());
                 // StepFun keeps empty identity fields in argument-only deltas; these must preserve the unknown name.
                 // StepFun 在仅含参数的增量中保留空身份字段；这些字段必须保留已收到的未知工具名。
                 events.extend(decoder.push_sse(None, r#"{"choices":[{"delta":{"tool_calls":[{"index":3,"id":"","function":{"name":"","arguments":""}}]}}]}"#).unwrap());
@@ -3055,7 +3055,12 @@ mod tests {
                 }
                 assert!(events.iter().any(|event| matches!(event,
                     AiStreamEvent::ToolCallStarted { tool_name, call_id, index: 3, .. }
-                    if tool_name == "invented_tool" && call_id == "call-3"
+                    if tool_name == "ui-metrics" && call_id == "call-3"
+                )));
+                // The mirrored markup remains plain text; only the structured entry declares a call.
+                // 同时输出的标记仍是纯文本，只有结构化条目声明调用。
+                assert!(events.iter().any(|event| matches!(event,
+                    AiStreamEvent::ResponseTextDelta { delta, .. } if delta.contains("<function=ui-metrics>")
                 )));
                 assert_eq!(
                     events

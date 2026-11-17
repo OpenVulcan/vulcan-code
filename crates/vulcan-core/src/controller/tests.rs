@@ -280,6 +280,9 @@ struct MockToolExecutor {
     /// Pre-planned tool outcomes keyed by tool name.
     /// 按工具名称索引的预先规划工具结果。
     outcomes_by_tool: MockToolOutcomeMap,
+    /// Optional catalog of the names visible to the controller.
+    /// 控制器可见的可选工具名称清单。
+    registered_tools: Option<std::collections::BTreeSet<String>>,
     /// Recorded tool invocation requests received by the executor.
     /// 被执行器收到并记录下来的工具调用请求集合。
     executed_requests: Arc<Mutex<Vec<ToolInvocationRequest>>>,
@@ -362,6 +365,14 @@ impl MockToolExecutor {
 
 #[async_trait]
 impl VulcanToolExecutor for MockToolExecutor {
+    /// Returns whether `tool_name` is registered when this test supplies a catalog.
+    /// 当本测试提供工具清单时，返回 `tool_name` 是否注册。
+    fn is_tool_registered(&self, tool_name: &str) -> bool {
+        self.registered_tools
+            .as_ref()
+            .is_none_or(|names| names.contains(tool_name))
+    }
+
     /// Records one non-empty batch before its tool bodies may start.
     /// 在工具主体可以启动前记录一个非空批次。
     async fn prepare_tool_batch(

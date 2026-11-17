@@ -152,9 +152,18 @@ it("groups system prompt and tool schemas, and adds the same execution's assista
   // The response arrives in a later poll without a change to the sent request.
   // 回复在后一次轮询到达，实发请求保持不变。
   const actual = snapshot("execution-c", "user prompt");
+  // Keep the final heading beyond the old backend limit.
+  // 将最后一个标题放到原后端限制之外。
+  const systemBody = `## system fixture\n\n${"body ".repeat(6500)}\n\n## system tail`;
+  // Use a long MCP-style name and a description that competes for space in the row.
+  // 使用较长的 MCP 风格工具名和占用同一行空间的说明。
+  const toolName = "mcp_fixture_browser_playwright_browser_take_screenshot";
+  // A complete tool description is kept for the expanded preview.
+  // 展开的预览保留完整的工具说明。
+  const toolDescription = `${"fixture description ".repeat(20)}description tail`;
   actual.snapshot.nodes = [
-    { field: "messages", index: 0, role: "system", kind: null, content: '{"content":"## system fixture"}', text: "## system fixture", truncated: false },
-    { field: "tools", index: 0, role: null, kind: "function", content: '{"function":{"name":"fixture_tool","description":"fixture description"}}', truncated: false },
+    { field: "messages", index: 0, role: "system", kind: null, content: JSON.stringify({ content: systemBody }), text: systemBody, truncated: false },
+    { field: "tools", index: 0, role: null, kind: "function", content: JSON.stringify({ function: { name: toolName, description: toolDescription } }), truncated: false },
     ...actual.snapshot.nodes,
     { field: "messages", index: 2, role: "tool", kind: null, content: '{"host_result":null,"model_output":"## returned"}',
       toolParts: [{ name: "file_read", result: true, content: "## returned" }], truncated: false },
@@ -171,13 +180,21 @@ it("groups system prompt and tool schemas, and adds the same execution's assista
   try {
     await act(async () => root.render(<I18nProvider initialLocale="en-US"><RequestContextDialog sessionId="fixture-session" onClose={vi.fn()} /></I18nProvider>));
     expect(document.querySelector(".vk-request-context-detail .vk-md h2")?.textContent).toBe("system fixture");
+    expect([...document.querySelectorAll(".vk-request-context-detail .vk-md h2")].some((heading) => heading.textContent === "system tail")).toBe(true);
+    // The Raw tab must keep the same end of the system prompt as the Markdown view.
+    // 原始内容标签须保留与 Markdown 预览相同的提示词末尾。
+    const systemRaw = [...document.querySelectorAll<HTMLButtonElement>(".vk-request-context-tabs button")]
+      .find((button) => button.textContent === readLocaleMessage("en-US", "requestContext.raw"))!;
+    await act(async () => systemRaw.click());
+    expect(document.querySelector(".vk-request-context-detail pre")?.textContent).toContain("## system tail");
     expect(document.querySelector(".vk-request-context-origins")?.textContent).toContain("Fixture VMM");
-    expect(document.querySelector(".vk-request-context-list")?.textContent).not.toContain("fixture_tool");
+    expect(document.querySelector(".vk-request-context-list")?.textContent).not.toContain(toolName);
     const toolsKey = readLocaleMessage("en-US", "skills.action.tools");
     const tools = [...document.querySelectorAll<HTMLButtonElement>(".vk-request-context-tabs button")]
       .find((button) => button.textContent === toolsKey)!;
     await act(async () => tools.click());
-    expect(document.querySelector(".vk-request-context-detail")?.textContent).toContain("fixture_tool");
+    expect(document.querySelector(".vk-request-context-catalog-tool-name")?.textContent).toBe(toolName);
+    expect(document.querySelector(".vk-request-context-detail")?.textContent).toContain("description tail");
     expect(document.querySelector(".vk-request-context-detail pre")).toBeNull();
     // Results render model output while keeping the provider envelope available under Raw.
     // 工具返回呈现给模型的输出，并在原始内容里保留供应商信封。

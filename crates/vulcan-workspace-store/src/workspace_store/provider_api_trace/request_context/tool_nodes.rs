@@ -1,16 +1,13 @@
 //! Tool identities and readable arguments/results for context snapshots.
 //! 上下文快照中的工具标识与可读参数、返回。
 
-use super::{
-    CONTENT_BUDGET, LABEL_LIMIT, NodePreview, is_responses_tool_call, redact_prefix,
-    render_readable_context,
-};
+use super::{is_responses_tool_call, redact_context_text, render_raw_context};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// One invocation or result with its producer-derived name and bounded readable payload.
-/// 一条调用或返回，包含生产者提供的名称及有界可读载荷。
+/// One invocation or result with its producer-derived name and redacted readable payload.
+/// 一条调用或返回，包含生产者提供的名称及已脱敏的可读载荷。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ToolNodePart {
@@ -20,8 +17,8 @@ pub(super) struct ToolNodePart {
     /// Whether this block is a result rather than a call.
     /// 此块是否为工具返回。
     pub(super) result: bool,
-    /// Bounded tool arguments or model-visible return value.
-    /// 有界的工具参数或模型可见返回值。
+    /// Complete redacted tool arguments or model-visible return value.
+    /// 完整且已脱敏的工具参数或模型可见返回值。
     content: Option<String>,
 }
 
@@ -44,20 +41,16 @@ struct WireToolPart<'a> {
 
 /// Returns exact wire or simulated tool blocks and registers names by call ID for later results.
 /// 返回精确的实发或模拟工具块，并按调用标识登记工具名供后续返回使用。
-/// `names` belongs to one snapshot; `limit` bounds all readable tool payloads from the node.
-/// `names` 属于单份快照，`limit` 限制该节点所有可读工具载荷。
+/// `names` belongs to one snapshot and `credential` is masked in the returned blocks.
+/// `names` 属于单份快照，返回的工具块会遮蔽 `credential`。
 pub(super) fn project_tool_parts(
     value: &Value,
     names: &mut BTreeMap<String, String>,
-    limit: usize,
     credential: &str,
 ) -> Vec<ToolNodePart> {
     // Preserve independent call identities even when a single model message issues multiple calls.
     // 即使单条模型消息发出多次调用，也保留独立的调用标识。
     let parts = wire_tool_parts(value);
-    // Share the node budget among its tool blocks so one large payload does not hide the others.
-    // 在工具块间共享节点预算，避免单个大载荷遮挡其余工具块。
-    let part_limit = limit / parts.len().max(1);
     parts
         .into_iter()
         .map(|part| {
@@ -71,7 +64,7 @@ pub(super) fn project_tool_parts(
             let decoded = part
                 .content
                 .and_then(Value::as_str)
-                .filter(|text| text.len() <= CONTENT_BUDGET && text.starts_with(['{', '[']))
+                .filter(|text| text.starts_with(['{', '[']))
                 .and_then(|text| serde_json::from_str::<Value>(text).ok());
             // Simulated tool results retain the envelope as an object.
             // 模拟工具返回保留对象形式的信封。
@@ -89,14 +82,14 @@ pub(super) fn project_tool_parts(
                 .or_else(|| {
                     envelope.and_then(|value| value.get("tool_name").and_then(Value::as_str))
                 })
-                .map(|name| redact_prefix(name, LABEL_LIMIT, credential));
+                .map(|name| redact_context_text(name, credential).into_owned());
             // The result preview shows the value provided to the model rather than host diagnostics.
             // 返回预览显示提供给模型的值，宿主诊断保留在原始内容中。
             let content = envelope
                 .and_then(|value| value.get("model_output"))
                 .or(decoded.as_ref().filter(|_| !part.result))
                 .or(part.content)
-                .and_then(|value| render_tool_content(value, part_limit, credential));
+                .map(|value| render_tool_content(value, credential));
             ToolNodePart {
                 name,
                 result: part.result,
@@ -215,18 +208,9 @@ fn named_part<'a>(
 
 /// Projects strings as readable text and keeps structured payloads under the same redaction.
 /// 将字符串投影为可读文本，并对结构化载荷应用相同脱敏。
-fn render_tool_content(value: &Value, limit: usize, credential: &str) -> Option<String> {
-    if let Some(text) = value.as_str() {
-        return render_readable_context(&[text], limit, credential);
+fn render_tool_content(value: &Value, credential: &str) -> String {
+    match value {
+        Value::String(text) if text.starts_with("data:") => "{INLINE_MEDIA}".to_owned(),
+        _ => render_raw_context(value, credential),
     }
-    // Reuse the raw node writer so nested credentials receive the same filtering.
-    // 复用原始节点写入器，使嵌套凭据沿用相同过滤。
-    let mut preview = NodePreview {
-        text: String::new(),
-        limit,
-        truncated: false,
-        credential,
-    };
-    preview.render(value, 0);
-    Some(preview.text)
 }

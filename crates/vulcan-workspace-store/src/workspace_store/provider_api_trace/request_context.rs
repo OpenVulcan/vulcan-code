@@ -1,8 +1,9 @@
-//! Bounded view of one actual Provider dispatch for the local conversation inspector.
-//! 为本机会话检查面板提供一次实际供应商分派的有界视图。
+//! Redacted view of one actual Provider dispatch for the local conversation inspector.
+//! 为本机会话检查面板提供一次实际供应商分派的脱敏视图。
 
 use serde::Serialize;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::{
     Arc, Mutex,
@@ -17,11 +18,9 @@ use std::collections::BTreeMap;
 mod tool_nodes;
 use tool_nodes::{ToolNodePart, project_tool_parts};
 
-// Bound the snapshot independently of the model window, media bytes and archive trace settings.
-// 独立于模型窗口、媒体字节及追踪设置限制快照大小。
-const CONTENT_BUDGET: usize = 512 * 1024;
-const NODE_CONTENT_BUDGET: usize = 24 * 1024;
-const RESERVED_NODE_PREVIEW: usize = 1024;
+// Limit the number of rows in the inspector independently of the request's token window.
+// 独立于请求的令牌窗口限制检查面板的行数。
+const ORIGIN_LABEL_LIMIT: usize = 1024;
 const NODE_LIMIT: usize = 2048;
 const LABEL_LIMIT: usize = 96;
 /// Prefix fields acting as the system prompt across supported provider protocols.
@@ -170,11 +169,11 @@ struct ProviderRequestContextNode {
     /// Provider-specific node type, when encoded separately from the role.
     /// 与角色独立编码时，记录供应商节点类型。
     kind: Option<String>,
-    /// Bounded, credential-filtered text of the node.
-    /// 有界且已过滤凭据的节点文本。
+    /// Credential-filtered raw text of the node.
+    /// 已过滤凭据的节点原始文本。
     content: String,
-    /// Decoded, bounded text built before raw JSON truncation.
-    /// 在原始 JSON 截断前生成的已解码有界文本。
+    /// Decoded text used for the Markdown preview.
+    /// 用于 Markdown 预览的已解码正文。
     text: Option<String>,
     /// Displayable reasoning that prefixes the assistant content or tool invocation.
     /// 助手正文或工具调用之前的可显示思考。
@@ -184,8 +183,8 @@ struct ProviderRequestContextNode {
     /// 依据来源顺序排列的可读调用及返回块。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tool_parts: Vec<ToolNodePart>,
-    /// Whether this node's preview reached its display budget.
-    /// 此节点的预览是否达到显示预算。
+    /// Compatibility flag for clients that also read older, clipped snapshots.
+    /// 供同时读取旧版截断快照的客户端使用的兼容字段。
     truncated: bool,
 }
 
@@ -224,8 +223,8 @@ pub struct RequestContextRows {
     prompt_origins: Vec<PromptOrigin>,
 }
 
-/// Bounded visible assistant text from the session event matching the inspected request.
-/// 与受检请求匹配的会话事件中有界的可见 assistant 正文。
+/// Visible assistant text from the session event matching the inspected request.
+/// 与受检请求匹配的会话事件中的可见助手正文。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestContextAssistantResponse {
@@ -236,31 +235,19 @@ pub struct RequestContextAssistantResponse {
     /// 同一次实发响应产生的可显示思考。
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<String>,
-    /// Whether the original text exceeded the node display budget.
-    /// 原文是否超过节点显示预算。
+    /// Compatibility flag for clients that also read older, clipped responses.
+    /// 供同时读取旧版截断响应的客户端使用的兼容字段。
     truncated: bool,
 }
 
 impl RequestContextAssistantResponse {
-    /// Bounds the response body and its ordered reasoning prefix under the inspector node limit.
-    /// 在检查器节点上限内限制响应正文及其有序思考前缀。
+    /// Copies the complete `text` and ordered `reasoning_prefix` for the response preview.
+    /// 为响应预览复制完整的 `text` 和有序思考前缀 `reasoning_prefix`。
     pub fn from_text(text: &str, reasoning_prefix: &[&str]) -> Self {
-        // A bounded copy keeps the RPC cost independent of long model responses.
-        // 有界复制使 RPC 开销不依赖模型长回复的总长度。
-        let end =
-            text.floor_char_boundary(readable_body_limit(NODE_CONTENT_BUDGET, reasoning_prefix));
-        // Give reasoning the unused part of the same node budget after preserving the answer.
-        // 在保留回答后，将同一节点预算的剩余部分分配给思考。
-        let reasoning = render_readable_context(reasoning_prefix, NODE_CONTENT_BUDGET - end, "");
         Self {
-            content: text[..end].to_owned(),
-            truncated: end < text.len()
-                || reasoning_prefix
-                    .iter()
-                    .map(|text| text.len())
-                    .sum::<usize>()
-                    > reasoning.as_ref().map_or(0, String::len),
-            reasoning,
+            content: text.to_owned(),
+            truncated: false,
+            reasoning: render_readable_context(reasoning_prefix, ""),
         }
     }
 }
@@ -303,8 +290,8 @@ impl fmt::Debug for ProviderRequestContextSlot {
 }
 
 impl ProviderRequestContextSlot {
-    /// Publishes a bounded view of `body` with the exact `credential` masked.
-    /// 发布 `body` 的有界视图，并遮蔽精确 `credential`。
+    /// Publishes the latest inspector snapshot of `body`, masking the exact `credential`.
+    /// 发布最新的 `body` 检查快照，并遮蔽精确的 `credential`。
     pub(super) fn observe(
         &self,
         dispatch: ProviderRequestContextDispatch,
@@ -333,8 +320,8 @@ impl ProviderRequestContextSlot {
     }
 }
 
-/// Projects context-bearing fields in wire order and bounds the combined row content.
-/// 按传输顺序投影上下文字段，并限制行内容总量。
+/// Projects context-bearing fields in wire order with complete, redacted node details.
+/// 按传输顺序投影上下文字段，提供完整且已脱敏的节点详情。
 fn project_request_context(
     dispatch: ProviderRequestContextDispatch,
     body: &Value,
@@ -368,8 +355,8 @@ fn project_request_context(
     }
 }
 
-/// Returns a bounded display projection for ordered fields and their explicit item discriminator.
-/// 为有序字段及其明确的条目判别键返回有界展示投影。
+/// Returns inspector rows for ordered fields and their explicit item discriminator.
+/// 为有序字段及其明确的条目判别键返回检查面板的行数据。
 fn project_context_rows(
     body: &Value,
     context_fields: impl Iterator<Item = &'static str> + Clone,
@@ -377,17 +364,13 @@ fn project_context_rows(
     credential: &str,
     prefix: &[RequestContextPromptSource],
 ) -> RequestContextRows {
-    // Reserve space for later rows so an early tool log cannot hide every recent input.
-    // 为后续行留出空间，防止前面的工具日志占满预算而遮住近期输入。
     let node_count = context_fields
         .clone()
         .filter_map(|field| body.get(field).filter(|value| !value.is_null()))
         .map(|value| value.as_array().map_or(1, Vec::len))
         .sum::<usize>();
     let visible_count = node_count.min(NODE_LIMIT);
-    let reserved_per_row = (CONTENT_BUDGET / visible_count.max(1)).min(RESERVED_NODE_PREVIEW);
     let mut nodes = Vec::with_capacity(visible_count);
-    let mut remaining = CONTENT_BUDGET;
     // Each source is reported at most once, and only after matching the actual system body.
     // 每个来源最多报告一次，且必须匹配实际系统正文。
     let mut matched_origins = vec![false; prefix.len()];
@@ -398,19 +381,9 @@ fn project_context_rows(
         if nodes.len() == visible_count {
             return false;
         }
-        let reserved = (visible_count - nodes.len() - 1) * reserved_per_row;
-        let limit = remaining.saturating_sub(reserved).min(NODE_CONTENT_BUDGET);
-        let mut preview = NodePreview {
-            text: String::new(),
-            limit,
-            truncated: false,
-            credential,
-        };
-        preview.render(value, 0);
-        remaining -= preview.text.len();
         // The provider shapes keep textual message parts beside the structured raw node.
         // 供应商结构在原始节点中保留独立的文本消息片段。
-        let tool_parts = project_tool_parts(value, &mut tool_names, limit, credential);
+        let tool_parts = project_tool_parts(value, &mut tool_names, credential);
         let text_parts = context_node_text_parts(value);
         // Wire reasoning has its own presentation, independently of JSON property order.
         // 传输记录中的思考独立展示，与 JSON 属性顺序无关。
@@ -435,25 +408,6 @@ fn project_context_rows(
                         .any(|text| text.contains(source.text.trim()));
             }
         }
-        // Raw and readable projections are independently bounded so incomplete JSON still has a text preview.
-        // 原始与可读投影各自有界，保证不完整 JSON 也有正文预览。
-        let text = render_readable_context(
-            &text_parts,
-            readable_body_limit(limit, reasoning_parts),
-            credential,
-        );
-        // Bound the combined readable preview even when raw content was heavily truncated.
-        // 即使原始内容严重截断，也对可读预览的合计大小设限。
-        let reasoning = render_readable_context(
-            reasoning_parts,
-            limit.saturating_sub(text.as_ref().map_or(0, String::len)),
-            credential,
-        );
-        // Reasoning can be truncated independently of the raw item when it came from a prior node.
-        // 思考来自上一节点时，可能独立于当前原始项目被截断。
-        let truncated = preview.truncated
-            || reasoning_parts.iter().map(|text| text.len()).sum::<usize>()
-                > reasoning.as_ref().map_or(0, String::len);
         nodes.push(ProviderRequestContextNode {
             field,
             index,
@@ -465,11 +419,11 @@ fn project_context_rows(
                 .get(kind_key)
                 .and_then(Value::as_str)
                 .map(|kind| redact_prefix(kind, LABEL_LIMIT, credential)),
-            content: preview.text,
-            text,
-            reasoning,
+            content: render_raw_context(value, credential),
+            text: render_readable_context(&text_parts, credential),
+            reasoning: render_readable_context(reasoning_parts, credential),
             tool_parts,
-            truncated,
+            truncated: false,
         });
         true
     };
@@ -539,7 +493,7 @@ fn project_context_rows(
                 .origin
                 .source
                 .as_deref()
-                .map(|label| redact_prefix(label, RESERVED_NODE_PREVIEW, credential)),
+                .map(|label| redact_prefix(label, ORIGIN_LABEL_LIMIT, credential)),
             tag: source
                 .origin
                 .tag
@@ -654,129 +608,99 @@ fn is_responses_tool_call(item_type: Option<&str>) -> bool {
     matches!(item_type, Some("function_call" | "custom_tool_call"))
 }
 
-/// Reserves up to half of the node budget for the supplied thinking prefix.
-/// 为给定思考前缀最多预留一半的节点预算。
-fn readable_body_limit(limit: usize, reasoning: &[&str]) -> usize {
-    limit
-        - (limit / 2).min(
-            reasoning.iter().map(|text| text.len()).sum::<usize>()
-                + reasoning.len().saturating_sub(1) * 2,
-        )
-}
-
-/// Renders readable text within the node budget using the same credential and binary filtering.
-/// 在节点预算内生成可读文本，沿用相同的凭据与二进制过滤。
-fn render_readable_context(parts: &[&str], limit: usize, credential: &str) -> Option<String> {
+/// Joins readable `parts` after masking the exact `credential` and inline binary data.
+/// 遮蔽确切的 `credential` 和内联二进制数据后拼接可读文本片段 `parts`。
+fn render_readable_context(parts: &[&str], credential: &str) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    // Use the same bounded writer to keep multi-part text within its per-row limit.
-    // 用相同的有界写入器限制多片段正文的单行预算。
-    let mut preview = NodePreview {
-        text: String::new(),
-        limit,
-        credential,
-        truncated: false,
-    };
+    // Keep paragraph boundaries between independently encoded text parts.
+    // 保留独立编码的文本片段之间的段落边界。
+    let mut content = String::new();
     for (index, text) in parts.iter().enumerate() {
-        if preview.text.len() >= limit {
-            break;
-        }
         if index > 0 {
-            preview.push("\n\n");
+            content.push_str("\n\n");
         }
         if text.starts_with("data:") {
-            preview.push("{INLINE_MEDIA}");
+            content.push_str("{INLINE_MEDIA}");
         } else {
-            let safe = redact_prefix(text, limit.saturating_sub(preview.text.len()), credential);
-            preview.push(&safe);
+            content.push_str(&redact_context_text(text, credential));
         }
     }
-    Some(preview.text)
+    Some(content)
 }
 
-/// Writes a bounded JSON-like preview without cloning or encoding the original node in full.
-/// 写入有界的类 JSON 预览，无需完整克隆或编码原节点。
-struct NodePreview<'a> {
-    // The output buffer and its remaining display budget are owned by one row.
-    // 输出缓冲区及显示预算由单行持有。
+/// Formats the full `value` after masking `credential` and structured sensitive fields.
+/// 遮蔽 `credential` 和结构化敏感字段后格式化完整 `value`。
+fn render_raw_context(value: &Value, credential: &str) -> String {
+    // Filter during traversal so the raw formatter never copies omitted binary fields.
+    // 在遍历时过滤，使原始内容格式化过程不会复制被遮蔽的二进制字段。
+    let mut writer = ContextWriter {
+        text: String::new(),
+        credential,
+    };
+    writer.render(value, 0);
+    writer.text
+}
+
+/// Writes a redacted JSON or a plain top-level text node.
+/// 写入已脱敏的 JSON 或顶层纯文本节点。
+struct ContextWriter<'a> {
+    // The formatted output for one node.
+    // 单个节点格式化后的输出。
     text: String,
-    limit: usize,
-    // Indicates an omitted suffix or deeply nested subtree.
-    // 标识已省略的后缀或深层子树。
-    truncated: bool,
     // The exact credential is borrowed for masking and is never stored in the snapshot.
     // 仅借用精确凭据用于遮蔽，从不写入快照。
     credential: &'a str,
 }
 
-impl NodePreview<'_> {
-    /// Appends at most the remaining number of UTF-8 bytes.
-    /// 追加至多剩余的 UTF-8 字节数。
-    fn push(&mut self, text: &str) {
-        let end = text.floor_char_boundary(self.limit.saturating_sub(self.text.len()));
-        self.text.push_str(&text[..end]);
-        self.truncated |= end < text.len();
-    }
-
+impl ContextWriter<'_> {
     /// Writes one value and omits sensitive structured fields and inline binary data.
     /// 写入单个值，省略敏感结构字段及内联二进制数据。
+    /// `depth` tracks indentation and distinguishes the plain top-level string from JSON strings.
+    /// `depth` 用来确定缩进，并区分顶层纯文本与 JSON 字符串。
     fn render(&mut self, value: &Value, depth: usize) {
-        if depth == 32 || self.text.len() == self.limit {
-            self.truncated = true;
-            return;
-        }
         match value {
-            Value::String(text) if text.starts_with("data:") => self.push("\"{INLINE_MEDIA}\""),
+            Value::String(text) if text.starts_with("data:") => {
+                self.text.push_str("\"{INLINE_MEDIA}\"");
+            }
             Value::String(text) => {
-                // Inspect enough source to cover a credential spanning the preview cutoff.
-                // 检查足够多的来源，覆盖跨越预览截止位置的凭据。
-                let remaining = self.limit - self.text.len();
-                let safe = redact_prefix(text, remaining, self.credential);
-                self.truncated |= text.len() > remaining;
+                // Mask the full string before JSON escaping can alter the credential's bytes.
+                // 在 JSON 转义可能改变凭据字节前，先对完整字符串脱敏。
+                let safe = redact_context_text(text, self.credential);
                 if depth == 0 {
-                    self.push(&safe);
+                    self.text.push_str(&safe);
                 } else if let Ok(quoted) = serde_json::to_string(&safe) {
-                    self.push(&quoted);
+                    self.text.push_str(&quoted);
                 }
             }
             Value::Array(items) => {
-                self.push("[");
+                self.text.push('[');
                 for (index, item) in items.iter().enumerate() {
-                    if self.text.len() == self.limit {
-                        self.truncated = true;
-                        break;
-                    }
-                    self.push(if index == 0 { "\n" } else { ",\n" });
-                    self.push(&"  ".repeat(depth + 1));
+                    self.text.push_str(if index == 0 { "\n" } else { ",\n" });
+                    self.text.push_str(&"  ".repeat(depth + 1));
                     self.render(item, depth + 1);
                 }
                 if !items.is_empty() {
-                    self.push("\n");
-                    self.push(&"  ".repeat(depth));
+                    self.text.push('\n');
+                    self.text.push_str(&"  ".repeat(depth));
                 }
-                self.push("]");
+                self.text.push(']');
             }
             Value::Object(fields) => {
-                self.push("{");
+                self.text.push('{');
                 for (index, (key, child)) in fields.iter().enumerate() {
-                    if self.text.len() == self.limit {
-                        self.truncated = true;
-                        break;
-                    }
-                    self.push(if index == 0 { "\n" } else { ",\n" });
-                    self.push(&"  ".repeat(depth + 1));
-                    // The key uses the remaining node budget, just like its value.
-                    // 字段名与字段值一样使用节点的剩余预算。
-                    let remaining = self.limit - self.text.len();
-                    let safe_key = redact_prefix(key, remaining, self.credential);
-                    self.truncated |= key.len() > remaining;
+                    self.text.push_str(if index == 0 { "\n" } else { ",\n" });
+                    self.text.push_str(&"  ".repeat(depth + 1));
+                    // Keys can contain the exact credential as well as values.
+                    // 字段名和字段值都可能包含精确凭据。
+                    let safe_key = redact_context_text(key, self.credential);
                     if let Ok(quoted) = serde_json::to_string(&safe_key) {
-                        self.push(&quoted);
+                        self.text.push_str(&quoted);
                     }
-                    self.push(": ");
+                    self.text.push_str(": ");
                     if is_sensitive_json_key(key) {
-                        self.push("\"{APIKEY}\"");
+                        self.text.push_str("\"{APIKEY}\"");
                     } else if key == "encrypted_content"
                         || key == "file_data"
                         || (key == "data"
@@ -784,19 +708,29 @@ impl NodePreview<'_> {
                                 || fields.contains_key("mimeType")
                                 || fields.get("type").and_then(Value::as_str) == Some("base64")))
                     {
-                        self.push("\"{INLINE_DATA}\"");
+                        self.text.push_str("\"{INLINE_DATA}\"");
                     } else {
                         self.render(child, depth + 1);
                     }
                 }
                 if !fields.is_empty() {
-                    self.push("\n");
-                    self.push(&"  ".repeat(depth));
+                    self.text.push('\n');
+                    self.text.push_str(&"  ".repeat(depth));
                 }
-                self.push("}");
+                self.text.push('}');
             }
-            scalar => self.push(&scalar.to_string()),
+            scalar => self.text.push_str(&scalar.to_string()),
         }
+    }
+}
+
+/// Returns all of `text`, replacing occurrences of the exact nonempty `credential`.
+/// 返回完整 `text`，并替换其中与非空 `credential` 精确匹配的内容。
+fn redact_context_text<'a>(text: &'a str, credential: &str) -> Cow<'a, str> {
+    if credential.is_empty() || !text.contains(credential) {
+        Cow::Borrowed(text)
+    } else {
+        Cow::Owned(text.replace(credential, REDACTED_PROVIDER_SECRET))
     }
 }
 
@@ -984,14 +918,17 @@ mod tests {
         }
     }
 
-    /// Shows actual incremental input in wire order and keeps only the newest bounded snapshot.
-    /// 按传输顺序展示实际增量输入，并只保留最新的有界快照。
+    /// Shows actual incremental input in wire order and only retains the newest redacted snapshot.
+    /// 按传输顺序展示实际增量输入，并只保留最新的脱敏快照。
     #[test]
     fn latest_context_uses_wire_nodes_and_masks_secrets() {
         let slot = ProviderRequestContextSlot::default();
         // The non-ASCII fixture verifies UTF-8 preservation independently of UI wording.
         // 非 ASCII 夹具验证 UTF-8 内容保留，与界面文案无关。
         let user_text = "中文";
+        // Put text and secrets beyond the previous node boundary.
+        // 将正文和凭据放在原来的节点上限之后。
+        let tool_output = format!("{} credential-value tail", "x".repeat(48 * 1024));
         assert!(slot.latest().is_none());
         slot.observe(
             dispatch("previous"),
@@ -999,12 +936,17 @@ mod tests {
             "",
             &[],
         );
-        slot.observe(dispatch("current"), &json!({
-            "previous_response_id":"cursor", "instructions":"instructions", "input":[
-                    {"role":"user","content":format!("{user_text} credential-value")},
-                {"type":"function_call_output","output":"x".repeat(NODE_CONTENT_BUDGET),"api_key":"masked-by-key"},
-            ]
-        }), "credential-value", &[]);
+        slot.observe(
+            dispatch("current"),
+            &json!({
+                "previous_response_id":"cursor", "instructions":"instructions", "input":[
+                        {"role":"user","content":format!("{user_text} credential-value")},
+                    {"type":"function_call_output","output":tool_output,"api_key":"masked-by-key"},
+                ]
+            }),
+            "credential-value",
+            &[],
+        );
         let latest = slot.latest().unwrap();
         assert_eq!(latest.dispatch.execution_id, "current");
         assert_eq!(
@@ -1018,11 +960,18 @@ mod tests {
         assert!(latest.nodes[2].content.contains(user_text));
         assert!(!latest.nodes[2].content.contains("credential-value"));
         assert!(!latest.nodes[3].content.contains("masked-by-key"));
-        assert!(latest.nodes[3].truncated);
+        assert!(!latest.nodes[3].content.contains("credential-value"));
+        assert!(
+            serde_json::from_str::<Value>(&latest.nodes[3].content).unwrap()["output"]
+                .as_str()
+                .unwrap()
+                .ends_with(" tail")
+        );
+        assert!(!latest.nodes[3].truncated);
     }
 
-    /// Verifies origins follow encoded system text and readable content survives raw JSON clipping.
-    /// 验证来源依照已编码系统正文，且原始 JSON 截短时仍可预览正文。
+    /// Verifies origin attribution and full Markdown and raw JSON beyond the former snapshot budget.
+    /// 验证来源标记，以及超出原快照预算时仍完整保留 Markdown 和原始 JSON。
     #[test]
     fn request_context_projects_readable_text_and_verified_origins() {
         // Construct one framed memory origin and one origin omitted by the encoder.
@@ -1040,11 +989,19 @@ mod tests {
                 "omitted".into(),
             ),
         ];
-        let body = json!({ "messages": [{
-            "role": "system", "content": format!("{profile}\n\n## fixture\n{}", "\n".repeat(NODE_CONTENT_BUDGET))
-        }, {
-            "role": "user", "content": "omitted"
-        }] });
+        // Exercise both the former per-node and combined display limits.
+        // 让测试同时超出原有的单节点与总体显示上限。
+        let long_prompt = format!(
+            "{profile}\n\n{}\n\n## End of system prompt",
+            "中\n".repeat(160 * 1024)
+        );
+        // Schema description precedes its name in sorted JSON and must leave the name intact.
+        // 在排序后的 JSON 中，Schema 说明先于名称，名称仍必须保持完整。
+        let tool_name = "long_tool_name_".repeat(10);
+        let body = json!({
+            "messages": [{"role":"system","content":long_prompt}, {"role":"user","content":"omitted"}],
+            "tools": [{"type":"function","function":{"name":tool_name,"description":"x".repeat(32 * 1024)}}]
+        });
         let projected = project_request_context(dispatch("fixture"), &body, "", &prefix);
         assert_eq!(projected.prompt_origins.len(), 1);
         assert_eq!(
@@ -1056,8 +1013,23 @@ mod tests {
             .iter()
             .find(|node| node.role.as_deref() == Some("system"))
             .unwrap();
-        assert!(system.truncated);
-        assert!(system.text.as_deref().unwrap().contains("\n## fixture\n"));
-        assert!(system.content.contains("\\n## fixture\\n"));
+        assert!(!system.truncated);
+        assert_eq!(system.text.as_deref(), Some(long_prompt.as_str()));
+        assert_eq!(
+            serde_json::from_str::<Value>(&system.content).unwrap()["content"],
+            long_prompt
+        );
+        // A large prompt must not consume any of the tool schema's data.
+        // 较大的提示词不能消耗掉工具 Schema 的任何数据。
+        let tool = projected
+            .nodes
+            .iter()
+            .find(|node| node.field == "tools")
+            .unwrap();
+        assert!(!tool.truncated);
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool.content).unwrap()["function"]["name"],
+            tool_name
+        );
     }
 }

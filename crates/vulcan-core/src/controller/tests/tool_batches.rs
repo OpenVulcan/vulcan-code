@@ -459,6 +459,83 @@ fn final_answer_response() -> ProviderTurnResponse {
     }
 }
 
+/// Verifies missing names are rejected before JSON parsing, without dispatching their tool bodies.
+/// 验证未知名称先于 JSON 解析错误被拒绝，且不会分派对应工具主体。
+#[tokio::test]
+async fn unknown_tool_names_take_precedence_over_argument_errors_in_a_batch() {
+    // Send a registered malformed call, two unknown calls with different argument validity,
+    // and one registered executable sibling through the actual controller loop.
+    // 通过真实控制器循环提交一个参数有误的已注册调用、两个参数有效性不同的未知调用，
+    // 以及一个可以执行的同批已注册调用。
+    let mut response = malformed_edit_response("known");
+    for (tool_call_id, tool_name, argument_parse_error) in [
+        ("unknown-invalid", "ui-metrics", Some("incomplete JSON")),
+        ("unknown-valid", "invented_tool", None),
+        ("known-valid", "file_read", None),
+    ] {
+        response.tool_calls.push(ConversationToolCall {
+            id: format!("item-{tool_call_id}"),
+            tool_call_id: Some(tool_call_id.to_owned()),
+            tool_name: tool_name.to_owned(),
+            arguments: json!({}),
+            argument_parse_error: argument_parse_error.map(str::to_owned),
+            raw_arguments: Default::default(),
+        });
+    }
+    // The second request contains the terminal results that were returned to the model.
+    // 第二次请求包含返回给模型的终态结果。
+    let adapter = MockStreamingProviderAdapter::new(vec![
+        (Vec::new(), response),
+        (Vec::new(), final_answer_response()),
+    ]);
+    // Explicit registration separates known malformed calls from nonexistent names.
+    // 显式注册区分已知但参数错误的调用与不存在的名称。
+    let executor = MockToolExecutor {
+        registered_tools: Some(["file_edit".to_owned(), "file_read".to_owned()].into()),
+        ..MockToolExecutor::new().with_outcome("file_read", "read", None, false)
+    };
+    // Use a normal controller so malformed calls exercise preparation, settlement, and replay.
+    // 使用常规控制器，让参数有误的调用经过准备、结算和重放。
+    let mut controller =
+        VulcanCoreController::new(build_test_config(8), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
+    controller
+        .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "List tools.")
+        .await
+        .expect("unknown calls should be recoverable tool errors");
+    assert_eq!(controller.phase(), ControllerPhase::Completed);
+    assert_eq!(executor.executed_requests().len(), 1);
+    assert_eq!(executor.executed_requests()[0].tool_call_id, "known-valid");
+    assert_eq!(executor.settled_requests().len(), 3);
+    assert_eq!(argument_parse_error_results(&controller), 1);
+    // The model receives one error result for each unknown call, with no parse diagnostic suffix.
+    // 模型对每个未知调用只收到一条错误结果，无参数解析诊断后缀。
+    let requests = adapter.built_requests();
+    for (call_id, name) in [
+        ("unknown-invalid", "ui-metrics"),
+        ("unknown-valid", "invented_tool"),
+    ] {
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .history
+                .iter()
+                .any(|message| matches!(
+                    &message.payload,
+                    ConversationPayload::ToolResult { tool_call_id, is_error: true, text }
+                        if tool_call_id.as_deref() == Some(call_id)
+                            && text.contains(name) && text.lines().count() == 1
+                ))
+        );
+        assert!(controller.events().iter().any(|event| {
+            event.metadata.as_ref().is_some_and(|metadata| {
+                metadata["tool_call_id"] == call_id && metadata["kind"] == "unknown_tool"
+            })
+        }));
+    }
+}
+
 /// Counts the model-visible argument-parse errors recorded in the snapshot.
 /// 统计快照中记录的模型可见参数解析错误。
 fn argument_parse_error_results(controller: &VulcanCoreController) -> usize {

@@ -9,6 +9,14 @@ use std::collections::BTreeSet;
 /// 表示一个可以满足助手工具调用的宿主侧工具执行器。
 #[async_trait]
 pub trait VulcanToolExecutor: Send + Sync {
+    /// Checks whether `tool_name` is registered in the executor's tool set.
+    /// 检查 `tool_name` 是否在执行器的工具集中注册。
+    /// Executors without a catalog leave name validation to their dispatch implementation.
+    /// 没有工具清单的执行器将名称校验交给其分派实现。
+    fn is_tool_registered(&self, _tool_name: &str) -> bool {
+        true
+    }
+
     /// Persists or validates one complete tool batch before any invocation body may start.
     /// 在任何调用主体启动前持久化或校验一批完整工具请求。
     async fn prepare_tool_batch(

@@ -99,7 +99,14 @@
 .vk-request-context-row[data-tone="assistant"],
 .vk-request-context-row[data-tone="assistant_text"] { --vk-context-role: var(--vk-ember); }
 .vk-request-context-row[data-tone="tool"] { color: var(--vk-warn); }
-.vk-request-context-row[data-tone="tool"] > code.vk-request-context-preview { color: inherit; }
+/* Prioritize the exact name over its description, wrapping only when the full pane is too narrow. */
+/* 优先显示精确工具名，仅当整个详情栏过窄时换行。 */
+.vk-request-context-catalog-tool-name {
+  flex: none;
+  max-inline-size: calc(100% - var(--vk-icon) - 2 * var(--vk-u));
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .vk-request-context-row[data-tone="system"] { background: var(--vk-sunken); }
 .vk-request-context-row[data-tone="system"]:is(:hover, [aria-pressed="true"]) { background: var(--vk-select); }
 

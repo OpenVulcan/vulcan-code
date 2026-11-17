@@ -146,8 +146,8 @@ function ContextRow({ node, selected, onSelect }: {
   );
 }
 
-/** Renders the selected node with optional access to its original bounded payload. */
-/** 展示所选节点，并可查看其有界原始正文。 */
+/** Renders the selected node and makes its redacted raw payload available. */
+/** 展示所选节点，并可查看其脱敏后的原始正文。 */
 function NodeDetails({ node }: { node: RequestContextNode }) {
   const { t } = useI18n();
   // Tagged nodes show the host metadata separately from the Markdown body.
@@ -221,16 +221,16 @@ function ToolDefinition({ node, open, onToggle }: {
       <button type="button" className="vk-request-context-row" aria-expanded={open} data-tone="tool"
         onClick={() => onToggle(open ? null : path)}>
         <Wrench aria-hidden="true" />
-        <code className="vk-request-context-preview">{declarations.length ? declarations.map((tool) => tool.name).join(", ") : path}</code>
-        {description ? <span className="vk-request-context-preview">{description.slice(0, 256)}</span> : null}
+        <code className="vk-request-context-catalog-tool-name">{declarations.length ? declarations.map((tool) => tool.name).join(", ") : path}</code>
+        {description ? <span className="vk-request-context-preview">{description}</span> : null}
       </button>
       {open ? <ToolDefinitionDetails node={node} declarations={declarations} /> : null}
     </>
   );
 }
 
-/** Shows a structured tool declaration by default with a verbatim bounded source tab. */
-/** 默认展示结构化工具声明，并通过标签页提供逐字有界原始内容。 */
+/** Shows the tool declaration and lets the reader switch to its redacted raw source. */
+/** 展示工具声明，并允许读者切换至脱敏后的原始内容。 */
 function ToolDefinitionDetails({ node, declarations }: {
   /** The exact encoded node selected in the catalog. */
   /** 工具清单中选中的精确编码节点。 */
@@ -291,15 +291,15 @@ function InitialPromptDetails({ nodes, origins }: { nodes: RequestContextNode[];
   );
 }
 
-/** Shows Markdown by default and keeps the bounded original available in a separate tab. */
-/** 默认展示 Markdown，并在独立标签页中保留有界原文。 */
+/** Shows Markdown by default and keeps redacted raw content available in a separate tab. */
+/** 默认展示 Markdown，并在独立标签页中保留脱敏后的原始内容。 */
 function PreviewBody({ markdown, raw, truncated, path, reasoning, tools }: {
   markdown: string | null;
   raw: string;
   truncated: boolean;
   path?: string;
-  /** Optional bounded thinking text that precedes the main preview. */
-  /** 位于主要预览之前的可选有界思考文本。 */
+  /** Optional thinking text that precedes the main preview. */
+  /** 位于主要预览之前的可选思考文本。 */
   reasoning?: string;
   /** Producer-defined tool blocks belonging to the same response node. */
   /** 属于同一响应节点的生产者定义工具块。 */

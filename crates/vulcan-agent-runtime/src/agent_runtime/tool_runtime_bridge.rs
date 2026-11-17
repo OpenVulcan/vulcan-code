@@ -1519,6 +1519,12 @@ fn project_shell_job_stop_receipt(
 
 #[async_trait::async_trait]
 impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
+    /// Returns whether `tool_name` has a resolved definition for this execution.
+    /// 返回 `tool_name` 在本次执行中是否存在已解析的定义。
+    fn is_tool_registered(&self, tool_name: &str) -> bool {
+        self.definitions_by_id.contains_key(tool_name)
+    }
+
     /// Executes one controller-owned tool request through the shared host-managed tool bridge.
     /// 通过共享宿主管理工具桥接层执行一次控制器自有工具请求。
     async fn execute_tool(
