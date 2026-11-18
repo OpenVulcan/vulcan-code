@@ -6066,9 +6066,9 @@ dependencies = [
 
 [[package]]
 name = "luaskills"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3993b8ff5960b80f3bef2f7c923b2b1c0c1963b4b9499331a0d5450c7a5c9ce0"
+checksum = "b11c84451c1f1aaa25bbf30e24da7f44cd96fbce74b3429230b90bf4d604858b"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -8899,7 +8899,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

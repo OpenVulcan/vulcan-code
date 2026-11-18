@@ -2,17 +2,14 @@
 
 ## 1. 适用范围
 
-本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.9.0 注册表依赖，其版本和来源以根清单与实际锁为准。
+本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。正式依赖的版本和来源以根目录的 `Cargo.toml` 与 `Cargo.lock` 为准。
 
 技能配置声明以当前上游源码及已有生成技能配置契约为准，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。本文后续零点五点九版本引用保留历史契约与验证背景；不能用于证明零点六候选的构建来源。正式插件执行契约另见[插件执行引擎归属](plugin-execution-engine.md)。
 
 ### 1.1 当前正式依赖与本地验证边界
 
-根 `Cargo.toml` 精确声明 `luaskills = "=0.9.0"`，没有 LuaSkills 本地 path patch。实际锁的来源为
-`registry+https://github.com/rust-lang/crates.io-index`，校验和为
-`3993b8ff5960b80f3bef2f7c923b2b1c0c1963b4b9499331a0d5450c7a5c9ce0`。该版本在 Core 五平台 GitHub
-发布（标签 `v0.9.0`）全部门禁通过后才发布到 crates.io。`workspace-hack/Cargo.toml` 中的 `luaskills`
-条目由 `cargo hakari generate` 维护，升级后用 `cargo hakari generate --diff` 确认无差异。
+根 `Cargo.toml` 精确声明 `luaskills = "=0.9.1"`，`Cargo.lock` 记录 crates.io 注册表来源和校验和。
+正式构建使用该锁文件解析依赖。升级后用 `cargo hakari generate --diff` 检查工作区功能统一配置。
 
 0.7.3 起 LuaSkills 不再拥有数据库存储：SQLite 只经宿主注册的回调承载，LanceDB 能力与
 `vldb-controller-client` 依赖均已移除。宿主在创建引擎前通过
@@ -191,7 +188,7 @@ LuaSkills 技能列表仅对声明了配置的技能显示配置入口，并显�
 并声明默认语言、各语言的包介绍和随包指南。包介绍用于管理卡片，指南介绍用于包详情与提示词 Skill
 发现。语言选择复用共享语言匹配，缺译回退到包声明的默认语言。工具和指南标识与语言无关。
 
-开发联调使用包含包注册 API 的本地 LuaSkills 源码。当前登记的正式 0.9.0 尚无这些接口，正式构建须在上游发布后更新依赖版本与锁文件。
+LuaSkills 0.9.1 的 crates.io 发行包提供包注册 API，Vulcan Code 通过这些接口加载随包指南并调用隐式工具。
 
 - 旧包可以继续作为直接工具使用，旧帮助字段只为读取旧清单而接受。Vulcan Code 不注册
   `luaskill_help`，也不将包正文或参数 Schema 注入开发者提示词。
@@ -200,8 +197,7 @@ LuaSkills 技能列表仅对声明了配置的技能显示配置入口，并显�
 - 随包指南从已声明的 `skills/<name>/SKILL.md` 注册到提示词 Skill 目录。请求只携带发现描述，
   模型通过 `skill` 按需读取正文、示例和具体说明。
 
-本地联调可通过 Cargo `--config` 为注册表依赖指定上游工作区覆盖。公开版本号保持原样，联调通过后
-再决定版本和发布方式。
+本地联调可通过 Cargo `--config` 临时覆盖上游工作区路径。正式构建以注册表锁定的版本为准。
 
 ## 7. 配置缺失处理
 
