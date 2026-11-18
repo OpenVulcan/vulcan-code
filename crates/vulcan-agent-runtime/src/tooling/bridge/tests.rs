@@ -279,13 +279,13 @@ fn plan_mode_admits_dispatch_by_target_entry() {
     };
 
     assert!(
-        !blocks("vulcan-codekit-ast-tree"),
+        !blocks("vulcan_codekit_ast_tree"),
         "built-in read-only entry"
     );
-    assert!(!blocks("demo-search-notes"), "read-only by name");
-    assert!(blocks("vulcan-codekit-patch"), "writing entry");
+    assert!(!blocks("demo_search_notes"), "read-only by name");
+    assert!(blocks("vulcan_codekit_patch"), "writing entry");
     assert!(
-        blocks("unregistered-search"),
+        blocks("unregistered_search"),
         "entry outside the dispatch set"
     );
 }

@@ -3,7 +3,7 @@ import React, { act, Suspense, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { RenderErrorBoundary } from "./render-error-boundary";
-import { BootErrorScreen } from "./boot-startup-screen";
+import { BootErrorScreen, loadBootText } from "./boot-startup-screen";
 
 // host and root isolate React import failures from the real application window.
 // host 与 root 将 React 导入失败与真实应用窗口隔离。
@@ -64,10 +64,13 @@ it("retains the React component stack in the visible diagnostic", async () => {
 });
 
 it("exposes explicit localized boot recovery without reloading automatically", async () => {
+  // Load the selected catalog before checking the recovery control.
+  // 检查恢复按钮前先加载所选的语言目录。
+  const localeText = await loadBootText("zh-CN");
   const reload = vi.fn();
   await act(async () => root.render(<BootErrorScreen error="合成启动失败" uiLocale="zh-CN" onReload={reload} />));
   expect(reload).not.toHaveBeenCalled();
-  expect(host.querySelector("button")?.textContent).toBe("重新加载应用");
+  expect(host.querySelector("button")?.textContent).toBe(localeText.reloadApplication);
   await act(async () => host.querySelector("button")!.click());
   expect(reload).toHaveBeenCalledTimes(1);
 });
