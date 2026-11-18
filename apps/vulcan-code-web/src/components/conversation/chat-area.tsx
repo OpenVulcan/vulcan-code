@@ -379,7 +379,7 @@ export function ChatArea(props: ChatAreaProps) {
     && normalizedSessionRunPhase(surfaceConversation?.runPhase) === "toolrunning";
   const runtimeCue = visibleThinkingOverlaySessionId === selectedConversation?.id || suppressSubagentOnlyMainCue
     ? null
-    : conversationRuntimeCue(surfaceConversation, t);
+    : conversationRuntimeCue(surfaceConversation, t, eventWindowFacts.activeRequestStartedAtMs);
   // composerRuntimeStatus floats over the composer's top-left edge instead of entering the transcript, so its
   // appearance, phase changes and removal never reflow the conversation; a retry wait or reasoning status still
   // takes precedence over it exactly as when they shared the transcript tail.

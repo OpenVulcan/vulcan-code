@@ -117,6 +117,9 @@ export interface RuntimeCue {
   // Localized text shown in the badge.
   // 徽标中展示的本地化文本。
   text: string;
+  // Core request timestamp, null while awaiting that fact, or omitted for a phase-local clock.
+  // Core 请求时间戳，等待该事实时使用 null，阶段本地计时时省略。
+  startedAtMs?: number | null;
 }
 
 // ConversationRenderItem describes one row rendered after transcript projection.

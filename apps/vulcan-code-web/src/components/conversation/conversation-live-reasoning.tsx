@@ -31,28 +31,34 @@ const RUNTIME_CUE_TICK_MS = 1000;
 
 // RuntimeCueLine renders a session's current phase and elapsed time in the composer dock.
 // RuntimeCueLine 在输入区停靠层显示会话的当前阶段与已持续时长。
-// The clock starts when the cue mounts; callers key it by the cue text so each phase counts from zero.
-// 计时从提示挂载开始；调用方以提示文本作为 key，使每个阶段从零计时。
+// A request clock reads the Core start timestamp even when the composer remounts.
+// 输入区重挂载后，仍从 Core 请求起始时间计时。
 export function RuntimeCueLine(props: {
   // Cue resolved from the backend session run phase.
   // 由后端会话运行阶段解析出的提示。
   cue: RuntimeCue;
 }) {
   const { locale } = useI18n();
-  const [startedAtMs] = React.useState(() => Date.now());
-  const [nowMs, setNowMs] = React.useState(startedAtMs);
+  // Keep local timing for phase cues and wait for the canonical start on request cues.
+  // 阶段提示沿用本地计时，请求提示等待规范起点。
+  const [mountedAtMs] = React.useState(() => Date.now());
+  const startedAtMs = props.cue.startedAtMs === undefined ? mountedAtMs : props.cue.startedAtMs;
+  const [nowMs, setNowMs] = React.useState(mountedAtMs);
   React.useEffect(() => {
+    if (startedAtMs === null) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), RUNTIME_CUE_TICK_MS);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [startedAtMs]);
   // The ticking elapsed time stays out of the live region so assistive technology announces phase changes only.
   // 每秒变化的时长不进入实时区域，使辅助技术只播报阶段变化。
   return (
     <div aria-busy="true" aria-live="polite" className="vk-runtime-cue" data-runtime-cue="" role="status">
       <span className="vk-shimmer-text">{props.cue.text}</span>
-      <span aria-hidden="true" className="vk-runtime-cue-elapsed">
-        {formatWorkProcessDuration(nowMs - startedAtMs, locale)}
-      </span>
+      {startedAtMs !== null ? (
+        <span aria-hidden="true" className="vk-runtime-cue-elapsed">
+          {formatWorkProcessDuration(Math.max(0, nowMs - startedAtMs), locale)}
+        </span>
+      ) : null}
     </div>
   );
 }

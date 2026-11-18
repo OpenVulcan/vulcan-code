@@ -14,6 +14,7 @@ import {
   createConversationEventWindowExternalStore,
 } from "@/state/conversation-event-window-react";
 import { THINKING_OVERLAY_EXIT_MS } from "@/components/conversation/chat-area/visual-state";
+import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import type { TransientReasoningStatus } from "@/types";
@@ -171,7 +172,7 @@ describe("session runtime cue placement", () => {
   afterEach(async () => {
     await React.act(async () => root.unmount());
     host.remove();
-    eventWindow = { ...eventWindow, owner: initialOwner, events: initialEvents, session_config: null };
+    eventWindow = { ...eventWindow, owner: initialOwner, events: initialEvents, open_turn_id: null, open_turn_start_seq: null, session_config: null };
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -408,13 +409,43 @@ describe("session runtime cue placement", () => {
     expect(host.querySelector(".vk-think-float")).toBeNull();
   });
 
-  it("keeps the ticking elapsed time out of the live region", async () => {
-    await render(chatAreaProps("toolCalling"));
+  it("resumes the Core request clock on a session switch and hides elapsed time after terminal stats", async () => {
+    vi.useFakeTimers();
+    // The window retains one precise API start that predates mounting the composer.
+    // 窗口保留一条先于输入区挂载的精确 API 起点。
+    const startedAtMs = Date.now() - 65_000;
+    const started: ConversationEventSummary = {
+      seq: 2, turn_id: 1, event_revision: 1, created_at_ms: startedAtMs, updated_at_ms: startedAtMs,
+      visibility: "host_only",
+      event: { kind: "api_started", api_call_id: 3, purpose: "main_generation", request: { provider: "test", model: "test" } },
+    };
+    const originalWindow = { ...eventWindow, events: [...initialEvents, started], open_turn_id: 1, open_turn_start_seq: 1 };
+    await React.act(async () => publishWindow(originalWindow));
+    await render(chatAreaProps("requesting"));
+    expect(host.querySelector(".vk-runtime-cue-elapsed")?.textContent).toBe(formatWorkProcessDuration(65_000, "en-US"));
+
+    // Switch to a different session with no physical request and later hydrate the original one again.
+    // 切换至没有物理请求的另一会话，随后重新水合原会话。
+    const other = { ...chatAreaProps("idle"), selectedConversationId: "test-tools" };
+    await React.act(async () => publishWindow({ ...originalWindow, owner: { session_id: "test-tools", window_generation: 1 }, events: initialEvents, open_turn_id: null, open_turn_start_seq: null }));
+    await render(other);
+    await React.act(async () => vi.advanceTimersByTimeAsync(5_000));
+    await React.act(async () => publishWindow(originalWindow));
+    await render(chatAreaProps("requesting"));
+    expect(host.querySelector(".vk-runtime-cue-elapsed")?.textContent).toBe(formatWorkProcessDuration(70_000, "en-US"));
+
     const cue = host.querySelector("[data-runtime-cue]")!;
     // The live region announces only the phase text; every other child is hidden from assistive technology.
     // 实时区域只播报阶段文本；其余子节点都对辅助技术隐藏。
     const announced = [...cue.children].filter((child) => child.getAttribute("aria-hidden") !== "true");
     expect(announced).toHaveLength(1);
+    await stream([...originalWindow.events, {
+      ...started, seq: 3, visibility: "ui_only", event: {
+        kind: "api_stats", api_call_id: 3, purpose: "main_generation", provider: "test", model: "test",
+        usage: {}, status: "completed", continuation_eligibility: "forbidden", timing: {},
+      },
+    }]);
+    expect(host.querySelector(".vk-runtime-cue-elapsed")).toBeNull();
   });
 });
 

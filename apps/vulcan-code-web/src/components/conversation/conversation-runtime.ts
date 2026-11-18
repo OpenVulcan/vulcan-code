@@ -9,6 +9,7 @@ import type {
 export function conversationRuntimeCue(
   conversation: ConversationSummary | undefined,
   t: ReturnType<typeof useI18n>["t"],
+  activeRequestStartedAtMs: number | null,
 ): RuntimeCue | null {
   if (!conversation) {
     return null;
@@ -16,7 +17,7 @@ export function conversationRuntimeCue(
   if (conversation.status.toLowerCase() !== "running") {
     return null;
   }
-  const phaseCue = sessionRunPhaseCue(conversation.runPhase, t);
+  const phaseCue = sessionRunPhaseCue(conversation.runPhase, t, activeRequestStartedAtMs);
   if (phaseCue) {
     return phaseCue;
   }
@@ -51,6 +52,7 @@ export function normalizedSessionRunPhase(runPhase?: string | null): string | nu
 function sessionRunPhaseCue(
   runPhase: string | null | undefined,
   t: ReturnType<typeof useI18n>["t"],
+  activeRequestStartedAtMs: number | null,
 ): RuntimeCue | null {
   const normalized = normalizedSessionRunPhase(runPhase);
   if (!normalized || normalized === "idle" || normalized === "ready" || normalized === "failed" || normalized === "stopped") {
@@ -68,5 +70,9 @@ function sessionRunPhaseCue(
   if (normalized === "toolrunning") {
     return null;
   }
-  return { kind: "default", text: t("runtime.requesting") };
+  return {
+    kind: "default",
+    text: t("runtime.requesting"),
+    startedAtMs: normalized === "requesting" ? activeRequestStartedAtMs : null,
+  };
 }

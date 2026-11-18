@@ -1,7 +1,7 @@
 import React from "react";
 import { selectConversationContinueCandidateV1, selectQueuedTurnDispatchCandidateV1 } from "@/service/conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
-import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
+import { isTerminalApiStatsStatus, type ConversationEventSummary } from "@/service/conversation-event-window-store";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 
@@ -53,6 +53,9 @@ export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOpt
     selectRecoverableTurn,
     conversationSelectionEqual,
   );
+  // The request clock follows the canonical start in the selected open turn.
+  // 请求计时使用选中开放回合的规范起点。
+  const activeRequestStartedAtMs = useSelectedConversationEventWindowSelector(selectActiveRequestStartedAtMs);
   return {
     owner,
     ownerReady,
@@ -61,7 +64,29 @@ export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOpt
     submissionCorrelated: ownerReady && submissionCorrelated,
     sessionTodolist,
     continuationCandidate,
+    activeRequestStartedAtMs: ownerReady ? activeRequestStartedAtMs : null,
   };
+}
+
+/** Returns the Core timestamp of the current physical API in the open turn, or null if no such API is visible.
+ * 返回开放回合当前物理 API 的 Core 时间戳；该 API 不可见时返回 null。 */
+function selectActiveRequestStartedAtMs(snapshot: ConversationEventWindowControllerSnapshot): number | null {
+  if (snapshot.open_turn_id === null) return null;
+  // Match terminals to their physical API, since idle or auxiliary events can share the turn.
+  // 按物理 API 匹配终态，因为同一回合可能包含空闲或辅助事件。
+  const terminalApiCallIds = new Set<number>();
+  for (let index = snapshot.events.length - 1; index >= 0; index -= 1) {
+    const summary = snapshot.events[index];
+    if (summary.turn_id !== snapshot.open_turn_id) continue;
+    if (summary.event.kind === "turn_boundary") return null;
+    if (summary.event.kind === "api_stats" && isTerminalApiStatsStatus(summary.event.status)) {
+      terminalApiCallIds.add(summary.event.api_call_id);
+    }
+    if (summary.event.kind === "api_started") {
+      return terminalApiCallIds.has(summary.event.api_call_id) ? null : summary.created_at_ms;
+    }
+  }
+  return null;
 }
 
 /** Selects the exact business continuation or an undispatched queued root in this window.

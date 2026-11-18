@@ -13,7 +13,7 @@ import { conversationSelectionEqual, useEqualValue } from "@/state/conversation-
 export function useComposerRuntimeStatus(cue: RuntimeCue | null): React.ReactNode {
   const stableCue = useEqualValue(cue, conversationSelectionEqual);
   return React.useMemo(
-    () => stableCue && <RuntimeCueLine cue={stableCue} key={stableCue.text} />,
+    () => stableCue && <RuntimeCueLine cue={stableCue} key={`${stableCue.text}:${stableCue.startedAtMs ?? ""}`} />,
     [stableCue],
   );
 }
