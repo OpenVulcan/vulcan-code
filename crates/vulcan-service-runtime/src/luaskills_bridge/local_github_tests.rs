@@ -727,6 +727,7 @@ fn root_bootstrap_moves_github_installs_to_the_configured_hub() {
         skill_id: String::from(FIXTURE_SKILL_ID),
         source: String::from(source),
         source_type,
+        minimum_version: None,
     };
     let bootstrap = |entries: Vec<RootSkillBootstrapEntry>| {
         let mut engine = handle.engine.write().expect("lock fixture engine");
@@ -792,6 +793,56 @@ fn root_bootstrap_moves_github_installs_to_the_configured_hub() {
         recorded().source.source_type,
         SkillInstallSourceType::OfficialHub
     );
+}
+
+/// Exercises a restart with an existing Hub install below the new release's minimum version.
+/// 验证已从 Hub 安装的版本低于新发行版门槛时的重启行为。
+#[test]
+fn root_bootstrap_upgrades_existing_managed_skill_below_minimum() {
+    let root = TestRoot::new();
+    let server = LocalGithubServer::start();
+    let handle = isolated_handle(&root.path.join("upgrade"), &server, true);
+    let target = handle.skill_roots[0].clone();
+    let bootstrap = |minimum_version| {
+        let mut engine = handle.engine.write().expect("lock fixture engine");
+        ensure_configured_root_skills_installed(
+            &handle.skill_roots,
+            vec![RootSkillBootstrapEntry {
+                skill_id: String::from(FIXTURE_SKILL_ID),
+                source: String::from(FIXTURE_SKILL_ID),
+                source_type: RootSkillBootstrapSourceType::OfficialHub,
+                minimum_version,
+            }],
+            &mut engine,
+            &mut |_, _, _| {},
+        )
+        .expect("ROOT bootstrap must allow startup to continue");
+        let manager = read_only_skill_manager(target.clone());
+        manager
+            .install_record(FIXTURE_SKILL_ID)
+            .expect("read installed ROOT skill record")
+            .expect("ROOT skill must keep an install record")
+            .version
+    };
+    let minimum = || Some(Version::new(1, 5, 0));
+
+    // Install the old Hub release, then encounter a stale Hub and an invalid newer archive.
+    // 安装旧版 Hub 技能，随后模拟 Hub 尚无新版本，以及新版本归档无效的情况。
+    assert_eq!(bootstrap(None), "1.0.0");
+    let requests_before_stale = server.request_count();
+    assert_eq!(bootstrap(minimum()), "1.0.0");
+    assert!(server.request_count() > requests_before_stale);
+    server.select_latest(2);
+    assert_eq!(bootstrap(minimum()), "1.0.0");
+
+    // A successful next startup upgrades the same-source install. Later starts are local.
+    // 下次启动成功升级同源安装。达到门槛后的启动只读取本地状态。
+    server.select_latest(1);
+    assert_eq!(bootstrap(minimum()), "2.0.0");
+    let requests_after_update = server.request_count();
+    assert_eq!(bootstrap(Some(Version::new(2, 0, 0))), "2.0.0");
+    assert_eq!(bootstrap(Some(Version::new(1, 9, 0))), "2.0.0");
+    assert_eq!(server.request_count(), requests_after_update);
 }
 
 /// Proves real typed plugin execution survives an ordinary-engine write lock and catalog reload.

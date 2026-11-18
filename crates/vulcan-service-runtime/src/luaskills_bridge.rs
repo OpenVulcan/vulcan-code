@@ -29,6 +29,9 @@ use vulcan_luaskills_config::{
     runtime_settings_file_path, save_runtime_settings,
 };
 
+use semver::Version;
+use serde::Deserialize;
+
 /// Declarative bootstrap configuration for host-managed ROOT skills.
 /// 宿主管理 ROOT 技能使用的声明式引导配置。
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -51,6 +54,26 @@ struct RootSkillBootstrapEntry {
     /// Managed-install source type used to interpret the source locator.
     /// 用于解释来源定位值的受管安装来源类型。
     source_type: RootSkillBootstrapSourceType,
+    /// Versions below this threshold trigger an update from the configured source.
+    /// 已装版本低于此门槛时，从配置的来源更新。
+    #[serde(default, deserialize_with = "deserialize_root_skill_minimum_version")]
+    minimum_version: Option<Version>,
+}
+
+/// Reads an optional semantic version from a ROOT bootstrap declaration.
+/// 从 ROOT 引导声明读取可选的语义版本。
+///
+/// The deserializer supplies the YAML value. Invalid versions return a configuration error.
+/// 反序列化器提供 YAML 值。非法版本返回配置错误。
+fn deserialize_root_skill_minimum_version<'de, D>(
+    deserializer: D,
+) -> Result<Option<Version>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(|version| Version::parse(&version).map_err(serde::de::Error::custom))
+        .transpose()
 }
 
 /// Supported source-type values for host-managed ROOT bootstrap skills.
@@ -1657,7 +1680,7 @@ fn ensure_configured_root_skills_installed(
                 )
             })?;
         if installed_root_skill_ids.contains(configured_skill.skill_id.as_str()) {
-            if migrate_root_skill_source(
+            if reconcile_managed_root_skill(
                 skill_roots,
                 &root_target,
                 &root_manager,
@@ -1772,20 +1795,21 @@ fn load_root_skill_bootstrap_entries() -> Result<Vec<RootSkillBootstrapEntry>, S
             skill_id,
             source,
             source_type: entry.source_type,
+            minimum_version: entry.minimum_version,
         });
     }
 
     Ok(entries)
 }
 
-/// Moves one installed ROOT skill to its configured source when its install record differs.
-/// 当已安装 ROOT 技能的安装记录与配置来源不同时，将其迁到配置来源。
+/// Reconciles an installed ROOT skill with its configured source and minimum version.
+/// 按配置的来源和最低版本协调已安装的 ROOT 技能。
 ///
-/// Returns whether the engine changed the installed package, so the caller reloads the roots.
-/// Every failure is reported through `progress` and leaves the current installation in place.
-/// 返回引擎是否改动了已安装的技能包，供调用方决定是否重载技能根。所有失败都经 `progress` 报告，
-/// 并保留当前安装。
-fn migrate_root_skill_source(
+/// The mounted roots and ROOT target scope the operation. The manager reads installation metadata,
+/// the engine applies the update, and progress reports its outcome. Returns true if the package changed.
+/// 挂载根和 ROOT 目标限定操作范围。管理器读取安装元数据，引擎执行更新，进度回调报告结果。
+/// 技能包发生变化时返回 true。
+fn reconcile_managed_root_skill(
     skill_roots: &[RuntimeSkillRoot],
     root_target: &RuntimeSkillRoot,
     root_manager: &SkillManager,
@@ -1806,37 +1830,59 @@ fn migrate_root_skill_source(
                 "refreshing-skill-roots",
                 None,
                 &format!(
-                    "Skipped the source check of ROOT skill `{skill_id}`: reading its install record failed: {error}"
+                    "Skipped the update check of ROOT skill `{skill_id}`: reading its install record failed: {error}"
                 ),
             );
             return false;
         }
     };
-    if recorded_source_matches(
+    // Reuse the recorded source for an ordinary version update and replace it only for a source migration.
+    // 普通版本更新沿用已记录来源，仅在来源迁移时替换它。
+    let replace_source = !recorded_source_matches(
         record.source.source_type,
         &record.source.locator,
         configured_type,
         &configured_skill.source,
-    ) {
-        return false;
+    );
+    if !replace_source {
+        // A satisfied floor is a purely local decision, with no Hub request on normal startup.
+        // 是否达到门槛由本地判断，正常启动时无需请求 Hub。
+        let Some(minimum) = &configured_skill.minimum_version else {
+            return false;
+        };
+        match Version::parse(&record.version) {
+            Ok(installed) if installed.cmp_precedence(minimum).is_lt() => {}
+            Ok(_) => return false,
+            Err(error) => {
+                progress(
+                    "refreshing-skill-roots",
+                    None,
+                    &format!(
+                        "Skipped the update of ROOT skill `{skill_id}`: its installed version is invalid: {error}"
+                    ),
+                );
+                return false;
+            }
+        }
     }
 
+    // Use the existing system update transaction for both migration and version upgrades.
+    // 来源迁移和版本升级均复用现有的系统技能更新事务。
     progress(
         "installing-skill",
         Some(skill_id),
         &format!(
-            "Moving LuaSkills skill `{skill_id}` from {} `{}` to {} `{}`",
-            skill_install_source_type_label(record.source.source_type),
-            record.source.locator,
+            "Updating LuaSkills skill `{skill_id}` from version {} using {} `{}`",
+            record.version,
             skill_install_source_type_label(configured_type),
-            configured_skill.source
+            configured_skill.source,
         ),
     );
     let request = SkillInstallRequest {
         skill_id: Some(configured_skill.skill_id.clone()),
-        source: Some(configured_skill.source.clone()),
+        source: replace_source.then(|| configured_skill.source.clone()),
         source_type: configured_type,
-        replace_source: true,
+        replace_source,
     };
     match engine.system_update_skill_in_root(
         skill_roots,
@@ -1844,12 +1890,23 @@ fn migrate_root_skill_source(
         SkillManagementAuthority::System,
         &request,
     ) {
+        Ok(result) if result.status == "up_to_date" => {
+            progress(
+                "refreshing-skill-roots",
+                None,
+                &format!(
+                    "No newer version is available for LuaSkills skill `{skill_id}`; checking again on the next start: {}",
+                    result.message,
+                ),
+            );
+            false
+        }
         Ok(result) => {
             progress(
                 "installed-skill",
                 Some(skill_id),
                 &format!(
-                    "Moved LuaSkills skill `{skill_id}` to the configured source ({}): {}",
+                    "Updated LuaSkills skill `{skill_id}` ({}): {}",
                     result.status, result.message
                 ),
             );
@@ -1860,7 +1917,7 @@ fn migrate_root_skill_source(
                 "refreshing-skill-roots",
                 None,
                 &format!(
-                    "Keeping LuaSkills skill `{skill_id}` on its recorded source; moving it to the configured source failed and will be retried on the next start: {error}"
+                    "Keeping the installed LuaSkills skill `{skill_id}`; the update failed and will be retried on the next start: {error}"
                 ),
             );
             false

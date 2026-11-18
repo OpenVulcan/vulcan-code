@@ -390,6 +390,7 @@ Vulcan 的**配置侧已齐备**：`enable_private_url_skill_install` 与 `priva
 ### 13.6 `official_hub` 来源与 LuaSkills Hub 搜索
 
 - **来源值**：`official_hub` 的 `source` 是 Hub 扁平技能标识（如 `weather`），由 LuaSkills 引擎经 `{Hub}/api/v1/skills/{id}/resolve?version=latest` 解析下载地址；宿主不自行下载或校验压缩包。
+- **系统技能随版本升级**：发行目录的 `config/luaskills_root_skills.yaml` 可为每个 ROOT 技能声明 `minimum_version`，值为语义版本。Core 启动时读取已有受管安装记录。已装版本低于门槛时，通过上游更新事务从声明来源获取最新版本。达标且来源一致时只查本地。来源改变仍走原有迁移流程，旧配置缺少门槛时保留原行为。新包未发布、下载失败或更新校验失败时，继续使用可用的旧包，并在下次启动重试。手工放置的 ROOT 技能和 USER 技能不参与自动升级。
 - **Hub 基础地址只有一处定义**：`vulcan-luaskills-config` 的 `DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL`（`https://hub.luaskills.com`）。`LuaSkillsNetworkSettings::effective_official_skill_hub_base_url` 在用户未填写 `official_skill_hub_base_url` 时只在内存中返回该默认值，**不回写**用户配置；引擎宿主选项与搜索客户端都使用这一结果。中国大陆用户可在“Hub 与下载源”页选择中国站 `https://hub.luaskills.cn`；宿主不按地区静默切换，账号区域提示见 §13.7，也不随 Hub 改写 GitHub 镜像地址。
 - **首次安装**：安装器按已选线路初始化 `<application_data_root>/config/luaskills-runtime-setting.json` 中的官方 Hub 和 GitHub 下载源。
   国内使用 `hub.luaskills.cn` 与 `https://gh-proxy.com/https://github.com`，国际使用 `hub.luaskills.com` 与 GitHub 直连。
