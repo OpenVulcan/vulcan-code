@@ -865,10 +865,11 @@ fn resolve_luaskills_registrations(
     let mut prompt_skills = BTreeMap::new();
     let mut invalid_guides = BTreeSet::new();
     for package in packages {
-        // An implicit package must have a valid guide before its entries can be dispatched.
-        // 隐式包必须具有有效指南才允许调度其入口。
+        // The declaration supplies separate facts for default mode and guide-backed support.
+        // 声明分别提供默认方式及随包指南支持状态。
         let key = (package.skill_id.clone(), package.root_name.clone());
-        modes.insert(key.clone(), package.declaration.mode);
+        let supports_implicit = package.declaration.supports_implicit();
+        modes.insert(key.clone(), (package.declaration.mode, supports_implicit));
         match package
             .declaration
             .prompt_skills
@@ -896,9 +897,15 @@ fn resolve_luaskills_registrations(
         // Resolve against the specific installation that owns this entry.
         // 按实际拥有此入口的安装实例解析。
         let key = (entry.skill_id.clone(), entry.root_name.clone());
-        let default_implicit = modes.get(&key) == Some(&SkillRegistrationMode::Implicit);
-        match settings.tool_registration_state(&entry.skill_id, &entry.local_name, default_implicit)
-        {
+        let default_implicit =
+            matches!(modes.get(&key), Some((SkillRegistrationMode::Implicit, _)));
+        let supports_implicit = matches!(modes.get(&key), Some((_, true)));
+        match settings.tool_registration_state(
+            &entry.skill_id,
+            &entry.local_name,
+            default_implicit,
+            supports_implicit,
+        ) {
             PersistedLuaSkillToolRegistrationState::Explicit => direct.push(entry),
             PersistedLuaSkillToolRegistrationState::Implicit if !invalid_guides.contains(&key) => {
                 implicit.push(entry)

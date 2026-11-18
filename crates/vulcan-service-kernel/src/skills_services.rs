@@ -2170,7 +2170,7 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
         let next_state = parse_luaskill_tool_registration_state(&registration_state)?;
         // Use the active catalog to confirm the entry and its owning package declaration.
         // 使用生效目录确认入口及其所属包声明。
-        let default_implicit = {
+        let (default_implicit, supports_implicit) = {
             let guard = state.lock().map_err(|error| error.to_string())?;
             let catalog =
                 crate::workspace_persistence_versions::cached_luaskills_catalog_from_state(&guard);
@@ -2186,13 +2186,17 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
             {
                 return Err(format!("Unknown LuaSkills entry {skill_id}/{local_name}"));
             }
-            package
-                .registration
-                .as_ref()
-                .is_some_and(|value| value.mode == luaskills::SkillRegistrationMode::Implicit)
+            // A package can supply a guide and still choose explicit registration as its default.
+            // 包可以提供随包指南，同时选择显式注册作为默认方式。
+            let registration = package.registration.as_ref();
+            (
+                registration
+                    .is_some_and(|value| value.mode == luaskills::SkillRegistrationMode::Implicit),
+                registration.is_some_and(luaskills::SkillRegistration::supports_implicit),
+            )
         };
         if next_state == crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit
-            && !default_implicit
+            && !supports_implicit
         {
             return Err(format!(
                 "LuaSkills package {skill_id} does not declare implicit registration."
@@ -2207,6 +2211,7 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
                     &local_name,
                     next_state,
                     default_implicit,
+                    supports_implicit,
                 );
                 Ok(())
             },

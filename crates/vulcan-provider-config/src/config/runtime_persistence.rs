@@ -267,16 +267,17 @@ impl PersistedLuaSkillsConfiguration {
             || before_disabled != self.disabled_vulcan_plugins
     }
 
-    /// Resolve a saved override against the package's declared default registration mode.
-    /// 根据包声明的默认注册方式解析已保存的覆盖值。
+    /// Resolve a saved override for the named entry using its package default and current implicit support.
+    /// 根据包默认值及当前隐式支持状态，解析指定入口已保存的覆盖值。
     pub fn tool_registration_state(
         &self,
         skill_id: &str,
         local_name: &str,
         default_implicit: bool,
+        supports_implicit: bool,
     ) -> PersistedLuaSkillToolRegistrationState {
-        // Missing or explicit declarations cannot be made implicit by an old saved setting.
-        // 缺少包声明或显式声明的入口不能被旧设置改为隐式。
+        // Ignore stale implicit overrides after a package loses its bundled guide.
+        // 技能包失去随包指南时，忽略旧的隐式覆盖设置。
         let override_state = self
             .tool_registration_by_skill
             .get(skill_id.trim())
@@ -289,19 +290,25 @@ impl PersistedLuaSkillsConfiguration {
             Some(PersistedLuaSkillToolRegistrationState::Explicit) => {
                 PersistedLuaSkillToolRegistrationState::Explicit
             }
-            _ if default_implicit => PersistedLuaSkillToolRegistrationState::Implicit,
+            Some(PersistedLuaSkillToolRegistrationState::Implicit) if supports_implicit => {
+                PersistedLuaSkillToolRegistrationState::Implicit
+            }
+            _ if default_implicit && supports_implicit => {
+                PersistedLuaSkillToolRegistrationState::Implicit
+            }
             _ => PersistedLuaSkillToolRegistrationState::Explicit,
         }
     }
 
-    /// Persist a per-entry override using the mode declared by its package as the default.
-    /// 以包声明的默认方式为基准持久化单个入口的覆盖值。
+    /// Persists the entry override when supported and returns whether storage changed.
+    /// 在入口支持时持久化覆盖设置，并返回存储内容是否变化。
     pub fn set_tool_registration_state(
         &mut self,
         skill_id: &str,
         local_name: &str,
         state: PersistedLuaSkillToolRegistrationState,
         default_implicit: bool,
+        supports_implicit: bool,
     ) -> bool {
         // Stable lookup keys are shared by catalog projection and tool exposure.
         // 目录投影和工具暴露共享稳定查询键。
@@ -309,13 +316,13 @@ impl PersistedLuaSkillsConfiguration {
         let local_name = local_name.trim();
         if skill_id.is_empty()
             || local_name.is_empty()
-            || (state == PersistedLuaSkillToolRegistrationState::Implicit && !default_implicit)
+            || (state == PersistedLuaSkillToolRegistrationState::Implicit && !supports_implicit)
         {
             return false;
         }
         // Clearing a default override lets future package declarations take effect.
         // 清除与默认值相同的覆盖，让将来的包声明可正常生效。
-        let default_state = if default_implicit {
+        let default_state = if default_implicit && supports_implicit {
             PersistedLuaSkillToolRegistrationState::Implicit
         } else {
             PersistedLuaSkillToolRegistrationState::Explicit
@@ -778,18 +785,24 @@ mod luaskill_registration_tests {
         // 使用没有用户覆盖时的同一份空配置。
         let mut config = PersistedLuaSkillsConfiguration::default();
         assert_eq!(
-            config.tool_registration_state("vulcan-work", "pdf-inspect", true),
+            config.tool_registration_state("vulcan-work", "pdf-inspect", true, true),
             Implicit
         );
         assert_eq!(
-            config.tool_registration_state("vulcan-work", "pptx-create", true),
+            config.tool_registration_state("vulcan-work", "pptx-create", true, true),
             Implicit
         );
         assert_eq!(
-            config.tool_registration_state("vulcan-codekit", "rg", false),
+            config.tool_registration_state("vulcan-codekit", "rg", false, true),
             Explicit
         );
-        assert!(!config.set_tool_registration_state("vulcan-work", "pdf-inspect", Implicit, true));
+        assert!(!config.set_tool_registration_state(
+            "vulcan-work",
+            "pdf-inspect",
+            Implicit,
+            true,
+            true
+        ));
         assert!(config.is_default());
     }
 
@@ -800,8 +813,20 @@ mod luaskill_registration_tests {
         // Office tools can be explicitly enabled or disabled independently.
         // 办公入口可分别设置为显式注册或停用。
         let mut config = PersistedLuaSkillsConfiguration::default();
-        assert!(config.set_tool_registration_state("vulcan-work", "pdf-inspect", Explicit, true));
-        assert!(config.set_tool_registration_state("vulcan-work", "pptx-create", Disabled, true));
+        assert!(config.set_tool_registration_state(
+            "vulcan-work",
+            "pdf-inspect",
+            Explicit,
+            true,
+            true
+        ));
+        assert!(config.set_tool_registration_state(
+            "vulcan-work",
+            "pptx-create",
+            Disabled,
+            true,
+            true
+        ));
         // Decode through the persisted shape and run the same normalization as saving.
         // 通过持久化结构解码并执行与保存时相同的归一化。
         let mut decoded: PersistedLuaSkillsConfiguration =
@@ -809,16 +834,57 @@ mod luaskill_registration_tests {
                 .expect("decode registration");
         assert!(!decoded.normalize());
         assert_eq!(
-            decoded.tool_registration_state("vulcan-work", "pdf-inspect", true),
+            decoded.tool_registration_state("vulcan-work", "pdf-inspect", true, true),
             Explicit
         );
         assert_eq!(
-            decoded.tool_registration_state("vulcan-work", "pptx-create", true),
+            decoded.tool_registration_state("vulcan-work", "pptx-create", true, true),
             Disabled
         );
-        assert!(decoded.set_tool_registration_state("vulcan-work", "pdf-inspect", Implicit, true));
-        assert!(decoded.set_tool_registration_state("vulcan-work", "pptx-create", Implicit, true));
+        assert!(decoded.set_tool_registration_state(
+            "vulcan-work",
+            "pdf-inspect",
+            Implicit,
+            true,
+            true
+        ));
+        assert!(decoded.set_tool_registration_state(
+            "vulcan-work",
+            "pptx-create",
+            Implicit,
+            true,
+            true
+        ));
         assert!(decoded.is_default());
+    }
+
+    /// Verifies an explicit default can persist an implicit override while its guide exists.
+    /// 验证显式默认包可在指南存在时持久化隐式覆盖。
+    #[test]
+    fn explicit_registration_supports_implicit_override_when_guide_exists() {
+        // The user opts in only for the chosen entry in a guide-backed package.
+        // 用户只为附带指南的包中选定入口启用隐式调用。
+        let mut config = PersistedLuaSkillsConfiguration::default();
+        assert!(!config.set_tool_registration_state(
+            "vulcan-codekit",
+            "rg",
+            Implicit,
+            false,
+            false
+        ));
+        assert!(config.set_tool_registration_state("vulcan-codekit", "rg", Implicit, false, true));
+        assert_eq!(
+            config.tool_registration_state("vulcan-codekit", "rg", false, true),
+            Implicit
+        );
+        assert_eq!(
+            config.tool_registration_state("vulcan-codekit", "ast-tree", false, true),
+            Explicit
+        );
+        assert_eq!(
+            config.tool_registration_state("vulcan-codekit", "rg", false, false),
+            Explicit
+        );
     }
 }
 

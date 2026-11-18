@@ -221,8 +221,8 @@ export interface LuaSkillIntroduction {
 // LuaSkillPackageRegistration carries localized introductions and the declared default.
 // LuaSkillPackageRegistration 携带本地化介绍和声明的默认方式。
 export interface LuaSkillPackageRegistration {
-  // Whether implicit registration is available.
-  // 是否支持隐式注册。
+  // Whether the package defaults to implicit registration.
+  // 该技能包是否默认采用隐式注册。
   defaultImplicit: boolean;
   // Fallback language declared by the package.
   // 包声明的回退语言。

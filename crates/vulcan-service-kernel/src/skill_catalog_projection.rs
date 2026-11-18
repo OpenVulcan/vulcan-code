@@ -445,6 +445,12 @@ pub(crate) fn lua_skills_catalog_summary(
                 let default_implicit = registration
                     .as_ref()
                     .is_some_and(|value| value.default_implicit);
+                // A validated bundled guide grants the option even for an explicit default.
+                // 随包指南经过校验后提供隐式选项，显式默认也适用。
+                let supports_implicit = skill
+                    .registration
+                    .as_ref()
+                    .is_some_and(luaskills::SkillRegistration::supports_implicit);
                 LuaSkillSummary {
                     skill_id: skill.skill_id.clone(),
                     display_name: skill.display_name.clone(),
@@ -467,6 +473,7 @@ pub(crate) fn lua_skills_catalog_summary(
                                 &skill.skill_id,
                                 &tool.local_name,
                                 default_implicit,
+                                supports_implicit,
                             );
                             LuaSkillToolSummary {
                                 canonical_name: tool.canonical_name.clone(),

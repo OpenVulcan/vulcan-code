@@ -357,7 +357,7 @@ export function LuaSkillToolsDialog(props: {
             <LuaSkillToolRow
               actions={props.actions}
               busy={props.busy || writing}
-              supportsImplicit={skill.registration?.defaultImplicit === true}
+              supportsImplicit={skill.registration !== undefined && Object.keys(skill.registration.promptSkills).length > 0}
               onWritingChange={onWritingChange}
               key={`${skill.skillId}-${tool.localName}`}
               skillId={skill.skillId}
@@ -379,8 +379,8 @@ function LuaSkillToolRow(props: {
   // Whether another skill action is running.
   // 是否已有其他技能动作正在运行。
   busy: boolean;
-  // Whether the package declares native implicit registration.
-  // 包是否声明原生隐式注册。
+  // Whether the package supplies a bundled guide for implicit dispatch.
+  // 包是否提供隐式调用所需的随包指南。
   supportsImplicit: boolean;
   // Parent Lua Skill identifier.
   // 父级 Lua Skill 标识。

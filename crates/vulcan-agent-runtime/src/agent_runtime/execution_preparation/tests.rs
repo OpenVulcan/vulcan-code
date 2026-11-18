@@ -1700,6 +1700,19 @@ fn request_context_tool_preview_matches_prepared_tools_without_leasing() {
 /// 验证隐式包的生产请求和实际工具调用链路。
 #[tokio::test]
 async fn implicit_luaskills_registers_guide_and_dispatches_without_provider_schema() {
+    exercise_implicit_luaskill_dispatch(true).await;
+}
+
+/// Verifies that a guide-backed package with an explicit default can be opted into implicit dispatch.
+/// 验证默认显式且附带指南的技能包可以手动启用隐式派发。
+#[tokio::test]
+async fn explicit_luaskills_with_guide_can_dispatch_implicitly() {
+    exercise_implicit_luaskill_dispatch(false).await;
+}
+
+/// Exercises the production request and tool executor with the selected package default.
+/// 用指定的技能包默认模式验证生产请求和工具执行器。
+async fn exercise_implicit_luaskill_dispatch(default_implicit: bool) {
     use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
     use luaskills::{
         LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig, RuntimeSkillRoot,
@@ -1716,6 +1729,13 @@ async fn implicit_luaskills_registers_guide_and_dispatches_without_provider_sche
     let package = roots.join("vulcan-work");
     fs::create_dir_all(package.join("runtime")).unwrap();
     fs::create_dir_all(package.join("skills/office-workflow")).unwrap();
+    // The same entry and guide are used in both registration modes.
+    // 两种注册模式使用同一个入口和指南。
+    let mode = if default_implicit {
+        "implicit"
+    } else {
+        "explicit"
+    };
     fs::write(
         package.join("skill.yaml"),
         r#"name: vulcan-work
@@ -1741,7 +1761,8 @@ entries:
       properties:
         fixture_path: {type: string}
       required: [fixture_path]
-"#,
+"#
+        .replace("mode: implicit", &format!("mode: {mode}")),
     )
     .unwrap();
     fs::write(
@@ -1779,7 +1800,18 @@ entries:
         1,
         1,
     );
-    let config = test_provider_config();
+    // Explicit defaults need an entry-level override to expose the same implicit action.
+    // 默认显式时需要通过入口级覆盖设置公开同一个隐式动作。
+    let mut config = test_provider_config();
+    if !default_implicit {
+        assert!(config.luaskills.set_tool_registration_state(
+            "vulcan-work",
+            "pdf-inspect",
+            crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit,
+            false,
+            true,
+        ));
+    }
     let foundation =
         test_runtime_foundation_with_extensions(&config, None, Some(handle.clone()), None);
     let request = test_execution_preparation_request();

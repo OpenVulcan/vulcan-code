@@ -267,8 +267,8 @@ pub struct LuaSkillSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LuaSkillRegistrationSummary {
-    /// Whether the package supports implicit registration.
-    /// 包是否支持隐式注册。
+    /// Whether implicit registration is the package default.
+    /// 隐式注册是否为此包默认方式。
     pub default_implicit: bool,
     /// Locale used for missing translations.
     /// 译文缺失时使用的语言。
