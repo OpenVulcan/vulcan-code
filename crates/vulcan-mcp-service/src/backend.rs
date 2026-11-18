@@ -361,6 +361,31 @@ pub struct McpMediaOutcome {
 /// MCP 端点背后的服务操作。
 #[async_trait]
 pub trait McpServiceBackend: Send + Sync + 'static {
+    /// Stores the authenticated call before dispatch when auditing is enabled.
+    /// 审计启用时在调度前保存认证调用。
+    async fn begin_tool_log(
+        &self,
+        _client: &vulcan_provider_config::provider_config::McpServiceClient,
+        _params: &Value,
+    ) -> Result<Option<i64>, String> {
+        Ok(None)
+    }
+
+    /// Finalizes a call record with its projected response.
+    /// 使用投影响应更新调用记录。
+    async fn finish_tool_log(
+        &self,
+        _id: i64,
+        _status: &str,
+        _response: Value,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Closes client-owned workspace resources after revoking the client.
+    /// 撤销客户端后关闭其工作区资源。
+    async fn retire_external_client(&self, _client_id: &str) {}
+
     /// Returns the persisted MCP settings, read fresh for every request.
     /// 返回持久化 MCP 设置，每次请求都重新读取。
     fn configuration(&self) -> Result<PersistedMcpServiceConfiguration, String>;

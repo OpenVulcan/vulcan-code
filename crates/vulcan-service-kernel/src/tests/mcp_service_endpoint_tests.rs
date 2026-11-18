@@ -89,15 +89,20 @@ async fn external_knowledge_tools_enforce_each_library_grant() {
         ]);
         client.knowledge_libraries.insert(granted.id.clone(), false);
     }
-    let server =
-        crate::mcp_service::install_mcp_server(ServiceEventEmitter::new(Vec::new()), &state)
-            .expect("install MCP server");
+    let storage = tempfile::tempdir().expect("isolated MCP storage");
+    let server = crate::mcp_service::install_mcp_server_in(
+        ServiceEventEmitter::new(Vec::new()),
+        &state,
+        storage.path().to_path_buf(),
+    )
+    .expect("install MCP server");
+    let (_, sid) = new_context(&server, root.data_root()).await;
     let (_, listed) = post(
         &server,
         READER_TOKEN,
         "tools/call",
         json!({
-            "name":"knowledge_list","arguments":{"project_id":"project-a"},
+            "name":"knowledge_list","arguments":{"sid":sid},
         }),
     )
     .await;
@@ -110,7 +115,7 @@ async fn external_knowledge_tools_enforce_each_library_grant() {
         READER_TOKEN,
         "tools/call",
         json!({
-            "name":"knowledge_list","arguments":{"project_id":"project-a","libraryId":hidden.id},
+            "name":"knowledge_list","arguments":{"sid":sid,"libraryId":hidden.id},
         }),
     )
     .await;
@@ -118,7 +123,7 @@ async fn external_knowledge_tools_enforce_each_library_grant() {
 
     let write = json!({
         "name":"knowledge_write", "arguments":{
-            "project_id":"project-a","libraryId":granted.id,"action":"create",
+            "sid":sid,"libraryId":granted.id,"action":"create",
             "path":"note.md","title":"Note","summary":"Fixture","body":"mcp write fixture",
             "provenance":[{"kind":"session","ref":"fixture","observedAtMs":1}],
         },
@@ -144,7 +149,7 @@ async fn external_knowledge_tools_enforce_each_library_grant() {
         "tools/call",
         json!({
             "name":"knowledge_read", "arguments":{
-                "project_id":"project-a","libraryId":granted.id,"path":"note.md",
+                "sid":sid,"libraryId":granted.id,"path":"note.md",
             },
         }),
     )
@@ -192,6 +197,7 @@ fn mcp_test_state() -> SharedServiceBridgeState {
             },
             media_targets: Vec::new(),
             tool_ids: None,
+            record_calls: false,
             tool_project_ids: Vec::new(),
             knowledge_libraries: Default::default(),
         }],
@@ -257,6 +263,28 @@ fn structured(result: &Value) -> &Value {
         "tool call failed: {result}"
     );
     &result["result"]["structuredContent"]
+}
+
+/// Creates a live MCP project and an annotated session for this test client.
+/// 为此测试客户端创建活跃 MCP 项目及带备注的会话。
+async fn new_context(
+    server: &Arc<vulcan_mcp_service::McpServer>,
+    path: &std::path::Path,
+) -> (String, String) {
+    let (_, project) = post(server, READER_TOKEN, "tools/call", json!({
+        "name":"vc_mcp_project","arguments":{"type":"new","name":"Test","path":path,"note":"Project fixture"}
+    })).await;
+    let project_id = structured(&project)["project_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, session) = post(server, READER_TOKEN, "tools/call", json!({
+        "name":"vc_mcp_session","arguments":{"type":"new","project_id":project_id,"note":"Session fixture"}
+    })).await;
+    let sid = structured(&session)["sid"].as_str().unwrap().to_owned();
+    assert_eq!(structured(&session)["note"], "Session fixture");
+    assert!(structured(&session).get("uuid").is_none());
+    (project_id, sid)
 }
 
 // The endpoint runs on the kernel backend: tokens authenticate, tools follow the grants, and
@@ -372,10 +400,46 @@ async fn external_workspace_tools_follow_individual_grants() {
             "shell_command".into(),
         ]);
         client.tool_project_ids = vec!["project-a".into()];
+        let mut other = client.clone();
+        other.id = "other".into();
+        other.token_sha256 = vulcan_mcp_service::token_sha256_hex("vmcp_kernel_other");
+        guard
+            .agent_runtime
+            .as_mut()
+            .unwrap()
+            .provider_configuration
+            .mcp_service
+            .clients
+            .push(other);
     }
-    let server =
-        crate::mcp_service::install_mcp_server(ServiceEventEmitter::new(Vec::new()), &state)
-            .expect("install MCP server");
+    let storage = tempfile::tempdir().expect("isolated MCP storage");
+    let server = crate::mcp_service::install_mcp_server_in(
+        ServiceEventEmitter::new(Vec::new()),
+        &state,
+        storage.path().to_path_buf(),
+    )
+    .expect("install MCP server");
+    let (_, scoped_sid) = new_context(&server, &allowed).await;
+    let (_, foreign) = post(
+        &server,
+        "vmcp_kernel_other",
+        "tools/call",
+        json!({
+            "name":"file_read","arguments":{"sid":scoped_sid,"path":"note.txt"}
+        }),
+    )
+    .await;
+    assert_eq!(foreign["result"]["isError"], true);
+    let (_, denied_project) = post(
+        &server,
+        READER_TOKEN,
+        "tools/call",
+        json!({
+            "name":"vc_mcp_project", "arguments":{"type":"new","name":"Denied","path":denied}
+        }),
+    )
+    .await;
+    assert_eq!(denied_project["result"]["isError"], true);
 
     let (_, listed) = post(&server, READER_TOKEN, "tools/list", json!({})).await;
     let tools = listed["result"]["tools"].as_array().expect("tool list");
@@ -387,13 +451,9 @@ async fn external_workspace_tools_follow_individual_grants() {
         shell["inputSchema"]["required"]
             .as_array()
             .unwrap()
-            .contains(&json!("cwd"))
+            .contains(&json!("sid"))
     );
-    assert!(
-        shell["inputSchema"]["properties"]
-            .get("background")
-            .is_none()
-    );
+    assert!(shell["inputSchema"]["properties"].get("cwd").is_none());
     assert!(!tools.iter().any(|tool| matches!(
         tool["name"].as_str(),
         Some("shell_job" | "terminal_session" | "list_sessions" | "file_delete")
@@ -404,7 +464,7 @@ async fn external_workspace_tools_follow_individual_grants() {
         READER_TOKEN,
         "tools/call",
         json!({
-            "name":"file_read", "arguments":{"project_id":"project-a","path":"note.txt"},
+            "name":"file_read", "arguments":{"sid":scoped_sid,"path":"note.txt"},
         }),
     )
     .await;
@@ -420,23 +480,20 @@ async fn external_workspace_tools_follow_individual_grants() {
         ),
         (
             "file_read",
-            json!({"project_id":"project-a","path": denied.join("note.txt").to_string_lossy()}),
+            json!({"sid":scoped_sid,"path": denied.join("note.txt").to_string_lossy()}),
         ),
         (
             "file",
-            json!({"project_id":"project-a","path":"note.txt","action":"delete"}),
+            json!({"sid":scoped_sid,"path":"note.txt","action":"delete"}),
         ),
+        ("file_delete", json!({"sid":scoped_sid,"path":"note.txt"})),
         (
-            "file_delete",
-            json!({"project_id":"project-a","path":"note.txt"}),
+            "shell_command",
+            json!({"sid":scoped_sid,"command":"echo fixture","title":"Fixture","cwd":denied.to_string_lossy()}),
         ),
         (
             "shell_command",
-            json!({"command":"echo fixture","title":"Fixture","cwd":denied.to_string_lossy()}),
-        ),
-        (
-            "shell_command",
-            json!({"command":"echo fixture","title":"Fixture","cwd":allowed.to_string_lossy(),"background":true}),
+            json!({"sid":scoped_sid,"command":"echo fixture","title":"Fixture","background":true}),
         ),
     ] {
         let (_, rejected) = post(
@@ -451,7 +508,7 @@ async fn external_workspace_tools_follow_individual_grants() {
 
     let (_, ran) = post(&server, READER_TOKEN, "tools/call", json!({
         "name":"shell_command",
-        "arguments":{"command":"echo mcp-shell-fixture","title":"Fixture","cwd":allowed.to_string_lossy(),"timeout_ms":10000},
+        "arguments":{"sid":scoped_sid,"command":"echo mcp-shell-fixture","title":"Fixture","timeout_ms":10000},
     })).await;
     let result = structured(&ran);
     assert_eq!(result["status"], "completed");
@@ -462,6 +519,7 @@ async fn external_workspace_tools_follow_individual_grants() {
             .contains("mcp-shell-fixture")
     );
     assert!(result.get("job_id").is_none());
+    assert!(!storage.path().join("calls.sqlite3").exists());
 
     // Removing the optional restriction allows standalone calls even without a project registry.
     // 清除可选限制后，独立调用不依赖项目登记表。
@@ -478,6 +536,7 @@ async fn external_workspace_tools_follow_individual_grants() {
             .tool_project_ids
             .clear();
     }
+    let (project_id, sid) = new_context(&server, &denied).await;
     let (_, listed) = post(&server, READER_TOKEN, "tools/list", json!({})).await;
     let listed = listed["result"]["tools"]
         .as_array()
@@ -487,16 +546,15 @@ async fn external_workspace_tools_follow_individual_grants() {
         .find(|tool| tool["name"] == "file_read")
         .expect("file_read is available without a registered project");
     assert_eq!(
-        file_read["inputSchema"]["properties"]["cwd"]["type"],
+        file_read["inputSchema"]["properties"]["sid"]["type"],
         "string"
     );
-    let raw_read =
-        json!({"name":"file_read", "arguments":{"cwd":denied.to_string_lossy(),"path":"note.txt"}});
+    let raw_read = json!({"name":"file_read", "arguments":{"sid":sid,"path":"note.txt"}});
     let (_, read) = post(&server, READER_TOKEN, "tools/call", raw_read.clone()).await;
     assert!(structured(&read).to_string().contains("fixture marker"));
     let (_, ran) = post(&server, READER_TOKEN, "tools/call", json!({
         "name":"shell_command",
-        "arguments":{"command":"echo unrestricted-fixture","title":"Fixture","cwd":denied.to_string_lossy(),"timeout_ms":10000},
+        "arguments":{"sid":sid,"command":"echo unrestricted-fixture","title":"Fixture","timeout_ms":10000},
     })).await;
     assert_eq!(structured(&ran)["status"], "completed");
     assert!(
@@ -510,11 +568,115 @@ async fn external_workspace_tools_follow_individual_grants() {
     // 调用方提供目录也不能绕过 Git 元数据写入保护。
     let git_data = denied.join(".git");
     std::fs::create_dir(&git_data).expect("metadata directory");
-    let (_, protected) = post(&server, READER_TOKEN, "tools/call", json!({
-        "name":"file_write","arguments":{"cwd":git_data.to_string_lossy(),"path":"config","content":"fixture"},
-    })).await;
+    let (_, git_sid) = new_context(&server, &git_data).await;
+    let (_, protected) = post(
+        &server,
+        READER_TOKEN,
+        "tools/call",
+        json!({
+            "name":"file_write","arguments":{"sid":git_sid,"path":"config","content":"fixture"},
+        }),
+    )
+    .await;
     assert_eq!(protected["result"]["isError"], true);
     assert!(!git_data.join("config").exists());
+
+    // Background jobs and audit records share the session but keep the UUID private.
+    // 后台任务和审计记录共用会话，同时保持 UUID 私有。
+    {
+        let mut guard = state.lock().unwrap();
+        let client = &mut guard
+            .agent_runtime
+            .as_mut()
+            .unwrap()
+            .provider_configuration
+            .mcp_service
+            .clients[0];
+        client.record_calls = true;
+        client
+            .tool_ids
+            .as_mut()
+            .unwrap()
+            .extend(["shell_job".into(), "terminal_session".into()]);
+    }
+    let (_, started) = post(&server, READER_TOKEN, "tools/call", json!({
+        "name":"shell_command","arguments":{"sid":sid,"command":"echo audited-fixture","title":"Fixture","background":true}
+    })).await;
+    let job_id = structured(&started)["job_id"].as_str().unwrap();
+    let (_, complete) = post(&server, READER_TOKEN, "tools/call", json!({
+        "name":"shell_job","arguments":{"sid":sid,"action":"wait","job_id":job_id,"wait_seconds":5}
+    })).await;
+    assert_eq!(structured(&complete)["status"], "completed");
+    assert!(
+        structured(&complete)["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("audited-fixture")
+    );
+
+    // Start a real interactive terminal while another MCP session is active for the same client.
+    // 在同一客户端还拥有另一个活跃 MCP 会话时启动真实交互终端。
+    let command = if cfg!(windows) { "cmd.exe /Q /K" } else { "sh" };
+    let (_, terminal) = post(&server, READER_TOKEN, "tools/call", json!({
+        "name":"terminal_session","arguments":{"sid":sid,"action":"start","name":"MCP fixture","command":command}
+    })).await;
+    let terminal = structured(&terminal);
+    let terminal_id = terminal["terminal_session_id"]
+        .as_str()
+        .expect("structured terminal identifier");
+    assert_eq!(
+        std::path::Path::new(terminal["cwd"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        denied.canonicalize().unwrap()
+    );
+    let (_, detached) = post(&server, READER_TOKEN, "tools/call", json!({
+        "name":"terminal_session","arguments":{"sid":scoped_sid,"action":"snapshot","terminal_session_id":terminal_id}
+    })).await;
+    assert_eq!(detached["result"]["isError"], true);
+    let (_, owned) = post(
+        &server,
+        READER_TOKEN,
+        "tools/call",
+        json!({
+            "name":"terminal_session","arguments":{"sid":sid,"action":"list"}
+        }),
+    )
+    .await;
+    assert!(
+        structured(&owned)["terminal_sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["terminal_session_id"] == terminal_id)
+    );
+    let (_, removed) = post(
+        &server,
+        READER_TOKEN,
+        "tools/call",
+        json!({
+            "name":"vc_mcp_project","arguments":{"type":"remove","project_id":project_id}
+        }),
+    )
+    .await;
+    assert_eq!(structured(&removed)["removed"], true);
+    let (_, retired) = post(&server, READER_TOKEN, "tools/call", raw_read.clone()).await;
+    assert_eq!(retired["result"]["isError"], true);
+    let (_, retired_terminal) = post(&server, READER_TOKEN, "tools/call", json!({
+        "name":"terminal_session","arguments":{"sid":sid,"action":"snapshot","terminal_session_id":terminal_id}
+    })).await;
+    assert_eq!(retired_terminal["result"]["isError"], true);
+    let history = rusqlite::Connection::open(storage.path().join("calls.sqlite3"))
+        .expect("separate history database");
+    let (stored_project, stored_result): (String, String) = history
+        .query_row(
+            "SELECT project_id,result FROM calls WHERE sid=?1 AND tool='shell_job'",
+            [&sid],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("job result by public SID");
+    assert_eq!(stored_project, project_id);
+    assert!(stored_result.contains("audited-fixture"));
 
     // Revocation affects a direct call without requiring a new token or tools/list.
     // 撤销直接影响下一次调用，无需刷新令牌或重新获取工具目录。

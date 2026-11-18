@@ -53,6 +53,10 @@ pub struct McpServiceLimits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServiceClientSummary {
+    /// Whether this client records tool calls.
+    /// 是否记录此客户端的工具调用。
+    #[serde(default)]
+    pub record_calls: bool,
     /// Stable client identifier.
     /// 稳定客户端标识。
     pub id: String,
@@ -183,6 +187,10 @@ pub struct McpMediaTargetCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServiceClientSaveRequest {
+    /// Explicit logging preference; omission preserves the current setting.
+    /// 显式日志偏好；省略时保留当前设置。
+    #[serde(default)]
+    pub record_calls: Option<bool>,
     /// Existing client to update; absent creates a client and returns its token once.
     /// 要更新的已有客户端；缺省时新建客户端并一次性返回其令牌。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,6 +219,28 @@ pub struct McpServiceClientSaveRequest {
     /// 知识库权限；省略时保留已保存的值。
     #[serde(default)]
     pub knowledge_libraries: Option<std::collections::BTreeMap<String, bool>>,
+}
+
+/// Filters and pages the local MCP call history.
+/// 筛选与分页读取本地 MCP 调用历史。
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpCallLogQuery {
+    /// Optional client identifier.
+    /// 可选客户端标识。
+    pub client_id: Option<String>,
+    /// Optional short MCP project identifier.
+    /// 可选 MCP 项目短标识。
+    pub project_id: Option<String>,
+    /// Optional short MCP session identifier.
+    /// 可选 MCP 会话短标识。
+    pub sid: Option<String>,
+    /// Last call from the previous page.
+    /// 上一页的末条调用。
+    pub cursor: Option<i64>,
+    /// Shows oldest calls first if true.
+    /// 为真时从最早调用开始显示。
+    pub ascending: bool,
 }
 
 /// Settings snapshot plus a freshly issued token, shown to the user exactly once.

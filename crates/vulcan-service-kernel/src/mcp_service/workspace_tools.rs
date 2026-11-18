@@ -7,8 +7,9 @@ use serde_json::{Value, json};
 use vulcan_agent_runtime::{
     ExecutionKnowledgeAccessContext,
     luaskills_runtime::{
-        LuaSkillsRuntimeHandle, call_implicit_luaskills_tool_entry,
-        list_luaskills_registration_snapshot, render_luaskills_invocation_result_text,
+        LuaSkillsRuntimeHandle, build_luaskills_tool_invocation_context,
+        call_implicit_luaskills_tool_entry, list_luaskills_registration_snapshot,
+        render_luaskills_invocation_result_text,
     },
     tooling::native::external,
 };
@@ -128,7 +129,7 @@ fn field<'a>(input: &'a Value, name: &str) -> Result<&'a str, String> {
 
 /// Reads the current registered projects when a call explicitly needs a project binding.
 /// 调用明确需要项目绑定时，读取当前登记的项目。
-fn registered_projects(
+pub(super) fn registered_projects(
     state: &SharedServiceBridgeState,
 ) -> Result<Vec<TaskProjectSummary>, String> {
     let guard = state.lock().map_err(|error| error.to_string())?;
@@ -234,6 +235,7 @@ pub(super) async fn call(
     client: &McpServiceClient,
     name: &str,
     mut arguments: Value,
+    session_id: uuid::Uuid,
 ) -> Result<Value, String> {
     let knowledge = name.starts_with("knowledge_");
     let codekit = name.starts_with("vulcan_codekit_");
@@ -302,9 +304,14 @@ pub(super) async fn call(
     if codekit {
         let (runtime, entry) = codekit_entry(state, name)?;
         let canonical_name = entry.canonical_name.clone();
-        check_codekit_paths(root, Path::new(field(&arguments, "PWD")?), name, &arguments)?;
+        // An authorized parent project admits the session but does not widen its CodeKit scope.
+        // 已授权的父项目允许该会话使用目录，但不会扩大 CodeKit 的访问范围。
+        check_codekit_paths(&cwd, Path::new(field(&arguments, "PWD")?), name, &arguments)?;
+        let invocation =
+            build_luaskills_tool_invocation_context(Some(session_id), "mcp", &canonical_name);
         let result =
-            call_implicit_luaskills_tool_entry(runtime.clone(), entry, arguments, None).await?;
+            call_implicit_luaskills_tool_entry(runtime.clone(), entry, arguments, Some(invocation))
+                .await?;
         return render_luaskills_invocation_result_text(
             &runtime,
             &canonical_name,
@@ -357,6 +364,7 @@ pub(super) async fn call(
             search_enabled: true,
         };
         let mut request = external::workspace_request(Some(project.id), cwd, arguments);
+        request.session_id = Some(session_id);
         request.knowledge_access = Some(access);
         request.controller_runtime = Some(controller);
         return external::invoke(
@@ -403,6 +411,7 @@ pub(super) async fn call(
             state, project,
         ));
     }
+    request.session_id = Some(session_id);
     external::invoke(
         name,
         request,
@@ -416,8 +425,8 @@ pub(super) async fn call(
 mod tests {
     use super::*;
 
-    /// Verifies CodeKit accepts a caller-owned PWD and checks every nested target.
-    /// 验证 CodeKit 接受调用方提供的 PWD，并检查每个嵌套目标。
+    /// Verifies CodeKit resolves paths from the injected PWD and checks every nested target.
+    /// 验证 CodeKit 按注入的 PWD 解析路径，并检查每个嵌套目标。
     #[test]
     fn external_codekit_paths_check_each_batch_target() {
         let area = tempfile::tempdir().expect("fixture directory");
@@ -425,10 +434,17 @@ mod tests {
         let subdir = root.join("src");
         std::fs::create_dir_all(&subdir).expect("project");
         std::fs::write(subdir.join("in.rs"), "").expect("project file");
+        std::fs::write(root.join("parent.rs"), "").expect("file in authorized parent project");
         std::fs::write(area.path().join("out.rs"), "").expect("out-of-scope file");
         let inside = json!({"nodes":[{"file":"in.rs","structural_path":"main"}]});
-        assert!(check_codekit_paths(&root, &subdir, "vulcan_codekit_node_source", &inside).is_ok());
-        let outside = json!({"patches":[{"file":"in.rs"},{"file":"../../out.rs"}]});
-        assert!(check_codekit_paths(&root, &subdir, "vulcan_codekit_patch", &outside).is_err());
+        assert!(
+            check_codekit_paths(&subdir, &subdir, "vulcan_codekit_node_source", &inside).is_ok()
+        );
+        for path in ["../parent.rs", "../../out.rs"] {
+            let outside = json!({"patches":[{"file":"in.rs"},{"file":path}]});
+            assert!(
+                check_codekit_paths(&subdir, &subdir, "vulcan_codekit_patch", &outside).is_err()
+            );
+        }
     }
 }

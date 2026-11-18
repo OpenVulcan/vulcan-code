@@ -8,6 +8,9 @@
 //! 拥有各自的会话与媒体授权；协议表面本身位于 `vulcan-mcp-service`。
 
 mod backend;
+mod call_log;
+mod contexts;
+mod managed;
 mod transcript;
 mod workspace_tools;
 
@@ -34,6 +37,20 @@ use crate::service_state_access::{
 
 pub(crate) use backend::KernelMcpBackend;
 
+/// Lists local MCP audit records for the settings surface.
+/// 为设置界面列出本地 MCP 审计记录。
+pub(crate) async fn service_mcp_call_logs(
+    query: vulcan_service_api::McpCallLogQuery,
+) -> Result<serde_json::Value, String> {
+    call_log::list(&contexts::storage_root()?, query).await
+}
+
+/// Reads one explicitly opened local audit record.
+/// 读取一条显式打开的本地审计记录。
+pub(crate) async fn service_mcp_call_detail(id: i64) -> Result<serde_json::Value, String> {
+    call_log::detail(&contexts::storage_root()?, id).await
+}
+
 /// Returns the process MCP server, creating it on first use.
 /// 返回进程内的 MCP 服务器，首次使用时创建。
 ///
@@ -45,13 +62,23 @@ pub(crate) fn install_mcp_server(
     app: ServiceEventEmitter,
     state: &SharedServiceBridgeState,
 ) -> Result<Arc<McpServer>, String> {
+    install_mcp_server_in(app, state, contexts::storage_root()?)
+}
+
+/// Installs the endpoint with an explicit profile storage directory.
+/// 使用明确的配置环境存储目录安装端点。
+pub(crate) fn install_mcp_server_in(
+    app: ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    storage_root: std::path::PathBuf,
+) -> Result<Arc<McpServer>, String> {
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     if let Some(server) = guard.mcp_server.as_ref() {
         return Ok(Arc::clone(server));
     }
-    let backend = KernelMcpBackend::new(app, Arc::downgrade(state));
+    let backend = KernelMcpBackend::new(app, Arc::downgrade(state), storage_root);
     let server = Arc::new(McpServer::new(
         Arc::new(backend),
         vulcan_product_info::version(),
@@ -85,6 +112,11 @@ pub(crate) async fn service_set_mcp_service_enabled(
         |_, configuration| configuration.mcp_service.clone(),
     )
     .await?;
+    if !enabled && let Some(server) = installed_mcp_server(&state)? {
+        for client in &saved.clients {
+            server.retire_external_client(&client.id).await;
+        }
+    }
     snapshot(&state, &saved).await
 }
 
@@ -107,6 +139,7 @@ pub(crate) async fn service_create_mcp_client(
         token_hint: issued.token_hint,
         created_at_ms: now_unix_millis(),
         enabled: request.enabled,
+        record_calls: request.record_calls.unwrap_or(false),
         sessions: grant_from_entry(request.sessions),
         tool_ids: request.tool_ids,
         tool_project_ids: request.tool_project_ids.unwrap_or_default(),
@@ -140,6 +173,7 @@ pub(crate) async fn service_update_mcp_client(
         .client_id
         .clone()
         .ok_or_else(|| String::from("Updating an MCP client requires its client id."))?;
+    let disabled_client = (!request.enabled).then(|| client_id.clone());
     let current = provider_configuration_from_state(&state)?.mcp_service;
     validate_new_grants(
         &state,
@@ -152,6 +186,9 @@ pub(crate) async fn service_update_mcp_client(
         let client = &mut next.clients[position];
         client.name = request.name;
         client.enabled = request.enabled;
+        if let Some(record_calls) = request.record_calls {
+            client.record_calls = record_calls;
+        }
         client.sessions = grant_from_entry(request.sessions);
         if let Some(tool_ids) = request.tool_ids {
             client.tool_ids = Some(tool_ids);
@@ -171,6 +208,11 @@ pub(crate) async fn service_update_mcp_client(
         normalize_mcp_service_configuration(next)
     })
     .await?;
+    if let Some(id) = disabled_client
+        && let Some(server) = installed_mcp_server(&state)?
+    {
+        server.retire_external_client(&id).await;
+    }
     snapshot(&state, &saved).await
 }
 
@@ -202,13 +244,28 @@ pub(crate) async fn service_delete_mcp_client(
     state: SharedServiceBridgeState,
     client_id: String,
 ) -> Result<McpServiceSnapshot, String> {
+    let removed = client_id.clone();
     let saved = save_configuration(&state, move |mut next| {
         let position = client_position(&next, &client_id)?;
         next.clients.remove(position);
         Ok(next)
     })
     .await?;
+    if let Some(server) = installed_mcp_server(&state)? {
+        server.retire_external_client(&removed).await;
+    }
     snapshot(&state, &saved).await
+}
+
+/// Reads the already installed endpoint without opening an endpoint during settings writes.
+/// 读取已安装的端点，设置写入时不会新建端点。
+fn installed_mcp_server(
+    state: &SharedServiceBridgeState,
+) -> Result<Option<Arc<McpServer>>, String> {
+    state
+        .lock()
+        .map(|guard| guard.mcp_server.clone())
+        .map_err(|error| error.to_string())
 }
 
 /// Applies one change to the MCP configuration read inside the configuration transaction, saves
@@ -411,6 +468,7 @@ async fn snapshot(
                 last_used_at_ms: usage.last_used_at_ms,
                 call_count: usage.call_count,
                 tool_ids: vulcan_mcp_service::mcp_client_tool_selection(client),
+                record_calls: client.record_calls,
                 tool_project_ids: client.tool_project_ids.clone(),
                 knowledge_libraries: client.knowledge_libraries.clone(),
             }

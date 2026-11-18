@@ -116,6 +116,7 @@ fn client(
         sessions,
         media_targets,
         tool_ids: None,
+        record_calls: false,
         tool_project_ids: Vec::new(),
         knowledge_libraries: Default::default(),
     }

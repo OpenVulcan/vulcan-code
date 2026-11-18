@@ -254,6 +254,8 @@ pub const MCP_EXTERNAL_TOOL_IDS: &[&str] = &[
     "file_delete",
     "apply_patch",
     "shell_command",
+    "shell_job",
+    "terminal_session",
     "vulcan_codekit_repo_map",
     "vulcan_codekit_ast_tree",
     "vulcan_codekit_ast_detail",
@@ -314,6 +316,11 @@ pub fn mcp_client_tool_selection(client: &McpServiceClient) -> Vec<String> {
 /// Checks enabled scope in addition to the explicit external tool grant.
 /// 检查显式外部工具授权及其生效范围。
 pub(crate) fn external_tool_allowed(client: &McpServiceClient, name: &str) -> bool {
+    if MCP_CONTEXT_TOOL_IDS.contains(&name) {
+        return MCP_EXTERNAL_TOOL_IDS
+            .iter()
+            .any(|tool| external_tool_allowed(client, tool));
+    }
     client
         .tool_ids
         .as_ref()
@@ -329,6 +336,10 @@ pub(crate) fn external_tool_allowed(client: &McpServiceClient, name: &str) -> bo
             _ => true,
         }
 }
+
+/// Bootstrap tools available to clients with a standalone authorization.
+/// 至少具有一项独立授权的客户端可以使用的初始化工具。
+pub(crate) const MCP_CONTEXT_TOOL_IDS: &[&str] = &["vc_mcp_project", "vc_mcp_session"];
 
 /// Returns the `tools/list` entries `client` may call.
 /// 返回 `client` 可调用的 `tools/list` 条目。

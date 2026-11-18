@@ -54,12 +54,23 @@ CodeKit、Shell、知识库分组，在本页配置可选的项目限制与逐�
 开启指定项目限制后，工作目录必须在其中一个已登记项目内。已有非空限制继续生效，显式保存空清单才解除限制。
 知识库按库授予读取或读写，调用仍校验项目与库的实时绑定。
 
-- 文件工具和补丁接受调用方提供的绝对 `cwd`，也可用 `project_id` 指定已登记项目作为工作目录；两者只能提供一个。
-  文件目标须位于本次的工作目录内。`file` 只负责 `list`、`stat`，移动与删除使用可独立授权的 `file_move`、`file_delete`。
-- CodeKit 使用带随包提示词指南的根技能中的七个固定入口。调用方提供绝对 `PWD`，Core 校验目录和目标后将原参数交给 LuaSkills。
-  不限定项目时以 `PWD` 为目标边界。旧版包没有运行时调度契约时，端点不公布这些入口。
-- `shell_command` 需要调用方提供绝对 `cwd`。同步返回终态与有界输出，超时或调用取消回收进程树。MCP 没有后台任务与终端会话接口。
-- 知识库工具接受 `project_id`。`knowledge_write` 的 `ingest` 同时需要 `file_read`，源项目须符合该客户端配置的可选工具项目限制，展开与读取均检查目录范围。
+拥有独立工具授权的客户端先调用 `vc_mcp_project`，再调用 `vc_mcp_session`。MCP 项目和会话按客户端隔离，独立于会话标签页中授权的 Vulcan Code 项目和对话。
+
+| 工具 | 操作 | 参数与返回 |
+| --- | --- | --- |
+| `vc_mcp_project` | `new`、`list`、`update`、`remove` | `new` 接受 `name`、现有绝对目录 `path` 和可选 `note`；`update` 用 `project_id` 和 `note`；`remove` 用 `project_id`。项目使用 `p_N`。 |
+| `vc_mcp_session` | `new`、`list`、`update`、`remove` | `new` 接受 `project_id` 和可选 `note`；`list` 可按 `project_id` 查询；`update` 用 `sid` 和 `note`；`remove` 用 `sid`。会话使用 `s_N`。 |
+
+独立工具一律使用 `sid`，工作目录与内部会话 UUID 由 Core 解析，调用者不能覆盖。删除项目会一并注销其会话并停止实时进程，已分配的 ID 永不复用，磁盘上的工作区文件保留。
+
+- 文件工具和补丁以绑定目录为边界。`file` 只负责 `list`、`stat`，移动与删除分别由 `file_move`、`file_delete` 授权。
+- CodeKit 使用带随包提示词指南的根技能中的七个固定入口。Core 校验目录和目标，经 `PWD` 传递绑定目录，并将该会话固定的内部 UUID 传入 LuaSkills。旧版包没有运行时调度契约时，端点不公布这些入口。
+- `shell_command` 默认同步返回有界输出；另授予 `shell_job` 后，可用 `background: true` 取得任务 ID，并用同一 `sid` 列出、查询、等待或停止任务。`terminal_session` 独立授权。终端与后台任务属于 Core 的实时运行资源，重启后重新创建；项目、会话和日志保存在本地。
+- 知识库按库授权，并按绑定目录对应的已登记项目校验库绑定。`knowledge_write` 的 `ingest` 同时需要 `file_read`，源项目须符合可选工具项目限制，展开与读取均检查目录范围。
+
+### 本地调用日志
+
+客户端编辑器的「记录工具调用」缺省关闭。打开后记录该客户端的工具调用、时间、结果状态、输入参数和返回内容。参数和返回值经过已登记密钥遮蔽，认证请求头不入库。「对外 AI 工具」中的调用日志支持按客户端、项目和会话筛选、正倒序查询及查看单次详情，点击记录中的项目或会话 ID 可直接筛选。记录在 `code/external-mcp/calls.sqlite3`，项目与会话在同目录的 `contexts.sqlite3`。注销项目和会话、移除客户端、关闭记录开关均保留已有历史。
 
 ## 工具
 

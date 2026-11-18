@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { McpServiceSettingsArea } from "./mcp-service-settings-area";
 import { emptySessionGrant } from "./mcp-service-model";
-import { createMcpClient, loadMcpService, rotateMcpClientToken, setMcpServiceEnabled, updateMcpClient } from "@/service/mcp-service-service";
+import { createMcpClient, loadMcpCallDetail, loadMcpCallLogs, loadMcpService, rotateMcpClientToken, setMcpServiceEnabled, updateMcpClient } from "@/service/mcp-service-service";
 import type { McpServiceSnapshot } from "@/types";
 
 vi.mock("@/i18n", async (importOriginal) => {
@@ -13,6 +13,8 @@ vi.mock("@/i18n", async (importOriginal) => {
 });
 vi.mock("@/service/mcp-service-service", () => ({
   loadMcpService: vi.fn(),
+  loadMcpCallLogs: vi.fn(),
+  loadMcpCallDetail: vi.fn(),
   setMcpServiceEnabled: vi.fn(),
   createMcpClient: vi.fn(),
   updateMcpClient: vi.fn(),
@@ -61,6 +63,45 @@ it("lists clients and turns the endpoint on through the service", async () => {
   await act(async () => (host.querySelector("[data-mcp-enabled]") as HTMLButtonElement).click());
 
   expect(setMcpServiceEnabled).toHaveBeenCalledWith(true);
+});
+
+// Verifies that recording is opt-in and that matching rows load their detail on demand.
+// 验证日志必须显式开启，且匹配的记录仅在用户打开时加载详情。
+it("opts into recording and queries a client's calls by project and session", async () => {
+  const current = snapshot(true);
+  vi.mocked(updateMcpClient).mockResolvedValue(current);
+  vi.mocked(loadMcpCallLogs).mockResolvedValue({ rows: [{ id: 41, clientId: "client-1", clientName: "Laptop", projectId: "p_2", sid: "s_3", tool: "file_read", startedAt: 1, finishedAt: 2, status: "completed" }], nextCursor: null });
+  vi.mocked(loadMcpCallDetail).mockResolvedValue({ arguments: { sid: "s_3" }, result: { text: "verified fixture" } });
+  await act(async () => root.render(<McpServiceSettingsArea projects={[]} />));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="mcpService.client.edit"]')!.click());
+  const recordSwitch = document.querySelector<HTMLButtonElement>("[data-mcp-record-calls]")!;
+  expect(recordSwitch.getAttribute("aria-checked")).toBe("false");
+  await act(async () => recordSwitch.click());
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-mcp-client-save]")!.click());
+  expect(updateMcpClient).toHaveBeenCalledWith(expect.objectContaining({ clientId: "client-1", recordCalls: true }));
+
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-mcp-client-logs]")!.click());
+  expect(loadMcpCallLogs).toHaveBeenCalledWith({ clientId: "client-1", ascending: false });
+  expect(loadMcpCallDetail).not.toHaveBeenCalled();
+  const dialog = document.querySelector("[data-mcp-call-logs]")!;
+  await act(async () => {
+    // Update each controlled field through the same native input event as a user.
+    // 通过与用户输入相同的原生事件更新受控字段。
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    const project = dialog.querySelector<HTMLInputElement>("[data-mcp-log-project]")!;
+    setValue.call(project, "p_2");
+    project.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    const session = dialog.querySelector<HTMLInputElement>("[data-mcp-log-session]")!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(session, "s_3");
+    session.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
+  expect(loadMcpCallLogs).toHaveBeenLastCalledWith({ clientId: "client-1", projectId: "p_2", sid: "s_3", ascending: false });
+  await act(async () => dialog.querySelector<HTMLButtonElement>("[data-mcp-log-id='41']")!.click());
+  expect(loadMcpCallDetail).toHaveBeenCalledWith(41);
+  expect([...dialog.querySelectorAll("pre")].map((node) => JSON.parse(node.textContent!))).toEqual([{ sid: "s_3" }, { text: "verified fixture" }]);
 });
 
 // A rotated token is shown once after confirmation and is gone from the page after the dialog closes.

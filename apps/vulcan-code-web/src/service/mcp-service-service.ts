@@ -1,5 +1,17 @@
 import { serviceClient } from "@/service/webui-service-runtime";
-import type { McpServiceClientSaveRequest, McpServiceIssuedToken, McpServiceSnapshot } from "@/types";
+import type { McpCallDetail, McpCallLogPage, McpCallLogQuery, McpServiceClientSaveRequest, McpServiceIssuedToken, McpServiceSnapshot } from "@/types";
+
+// Lists local audit summaries for the selected filters.
+// 按所选条件列出本地审计摘要。
+export function loadMcpCallLogs(query: McpCallLogQuery): Promise<McpCallLogPage> {
+  return serviceClient.request("service_mcp_call_logs", { query });
+}
+
+// Loads the explicitly selected call's request and response.
+// 读取显式选中的调用请求和响应。
+export function loadMcpCallDetail(id: number): Promise<McpCallDetail> {
+  return serviceClient.request("service_mcp_call_detail", { id });
+}
 
 // loadMcpService reads the MCP endpoint switch, its clients, and the grantable media models.
 // loadMcpService 读取 MCP 端点开关、客户端与可授权的媒体模型。

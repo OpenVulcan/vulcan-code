@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Copy, KeyRound, Pencil, Plug, Plus, Trash2 } from "lucide-react";
+import { Copy, History, KeyRound, Pencil, Plug, Plus, Trash2 } from "lucide-react";
 import "@/ui-kit/styles/features/mcp-service.css";
 import { PageBody, PageEmptyState, PageItem, PageItemList, PageNotice, PageRow, PageSection } from "@/components/page";
 import { copyText } from "@/components/workspace/workbench-layout/types";
@@ -28,6 +28,7 @@ import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Switch } from "@/ui-kit/primitives/switch";
 import { toast } from "@/ui-kit/primitives/toast";
 import { McpClientDialog } from "./mcp-client-dialog";
+import { McpCallLogsDialog } from "./mcp-call-logs-dialog";
 import { grantSummaryParts } from "./mcp-service-model";
 import { McpTokenDialog } from "./mcp-token-dialog";
 
@@ -51,6 +52,9 @@ export function McpServiceSettingsArea(props: { projects: ProjectSummary[] }) {
   const [confirming, setConfirming] = React.useState<PendingConfirmation | null>(null);
   const [confirmBusy, setConfirmBusy] = React.useState(false);
   const [issued, setIssued] = React.useState<IssuedTokenView | null>(null);
+  // An empty selection opens history for all clients.
+  // 空选择打开全部客户端的历史。
+  const [logs, setLogs] = React.useState<{ clientId?: string } | null>(null);
   const load = React.useCallback(async () => {
     setLoadError(null);
     try {
@@ -137,9 +141,14 @@ export function McpServiceSettingsArea(props: { projects: ProjectSummary[] }) {
         </PageRow>
       </PageSection>
       <PageSection
-        actions={<Button data-mcp-add-client="" disabled={atLimit} onClick={() => setEditing("new")} size="sm" type="button">
-          <Plus size={14} />{t("mcpService.clients.add")}
-        </Button>}
+        actions={<>
+          <Button onClick={() => setLogs({})} size="sm" type="button" variant="outline">
+            <History size={14} />{t("mcpService.logs.title")}
+          </Button>
+          <Button data-mcp-add-client="" disabled={atLimit} onClick={() => setEditing("new")} size="sm" type="button">
+            <Plus size={14} />{t("mcpService.clients.add")}
+          </Button>
+        </>}
         description={atLimit ? formatMessage(t("mcpService.limitReached"), { max: snapshot.limits.maxClients }) : t("mcpService.clients.detail")}
         status={<Badge variant="secondary">{formatMessage(t("mcpService.clients.count"), { count: snapshot.clients.length, max: snapshot.limits.maxClients })}</Badge>}
         title={t("mcpService.clients.title")}
@@ -151,6 +160,9 @@ export function McpServiceSettingsArea(props: { projects: ProjectSummary[] }) {
             {snapshot.clients.map((client) => (
               <PageItem
                 actions={<>
+                  <Button aria-label={t("mcpService.logs.title")} data-mcp-client-logs="" onClick={() => setLogs({ clientId: client.id })} size="sm" type="button" variant="ghost">
+                    <History size={14} />
+                  </Button>
                   <Button aria-label={t("mcpService.client.edit")} onClick={() => setEditing(client)} size="sm" type="button" variant="ghost">
                     <Pencil size={14} />{t("mcpService.client.edit")}
                   </Button>
@@ -213,6 +225,7 @@ export function McpServiceSettingsArea(props: { projects: ProjectSummary[] }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {logs ? <McpCallLogsDialog clients={snapshot.clients} clientId={logs.clientId} onClose={() => setLogs(null)} /> : null}
     </PageBody>
   );
 }

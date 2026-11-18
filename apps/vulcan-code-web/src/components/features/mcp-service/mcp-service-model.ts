@@ -35,7 +35,7 @@ export const MCP_TOOL_GROUPS = [
     "vulcan_codekit_repo_map", "vulcan_codekit_ast_tree", "vulcan_codekit_ast_detail", "vulcan_codekit_rg",
     "vulcan_codekit_markdown_menu", "vulcan_codekit_node_source", "vulcan_codekit_patch",
   ] },
-  { id: "shell", page: "tools", label: "mcpService.group.shell", tools: ["shell_command"] },
+  { id: "shell", page: "tools", label: "mcpService.group.shell", tools: ["shell_command", "shell_job", "terminal_session"] },
   { id: "knowledge", page: "tools", label: "mcpService.group.knowledge", tools: [
     "knowledge_list", "knowledge_read", "knowledge_search", "knowledge_write",
   ] },

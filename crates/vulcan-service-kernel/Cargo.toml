@@ -14,6 +14,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+rusqlite.workspace = true
 vulcan-product-info.workspace = true
 vulcan-feedback.workspace = true
 async-trait.workspace = true

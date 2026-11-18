@@ -70,6 +70,10 @@ pub struct McpServiceClient {
     /// Whether this client may currently authenticate.
     /// 该客户端当前是否可以认证。
     pub enabled: bool,
+    /// Records authenticated tool invocations when enabled.
+    /// 启用后记录认证工具调用。
+    #[serde(default)]
+    pub record_calls: bool,
     /// Session operations granted to this client.
     /// 授予该客户端的会话操作。
     pub sessions: McpSessionGrant,
@@ -296,6 +300,7 @@ fn normalize_mcp_service_client(client: McpServiceClient) -> Result<McpServiceCl
             .map(|ids| normalize_tool_ids(ids, MAX_MCP_CLIENT_TOOLS))
             .transpose()?,
         tool_project_ids: normalize_tool_ids(client.tool_project_ids, MAX_MCP_CLIENT_PROJECTS)?,
+        record_calls: client.record_calls,
         knowledge_libraries: client.knowledge_libraries,
     })
 }
@@ -396,6 +401,7 @@ mod tests {
             },
             media_targets: Vec::new(),
             tool_ids: None,
+            record_calls: false,
             tool_project_ids: Vec::new(),
             knowledge_libraries: Default::default(),
         }

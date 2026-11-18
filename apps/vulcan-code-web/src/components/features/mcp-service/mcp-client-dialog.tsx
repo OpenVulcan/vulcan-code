@@ -51,6 +51,9 @@ export function McpClientDialog(props: McpClientDialogProps) {
   const { t } = useI18n();
   const [name, setName] = React.useState(props.client?.name ?? "");
   const [enabled, setEnabled] = React.useState(props.client?.enabled ?? true);
+  // Audit logging is opt-in for each authenticated client.
+  // 每个认证客户端分别显式启用调用日志。
+  const [recordCalls, setRecordCalls] = React.useState(props.client?.recordCalls ?? false);
   const [sessionProjects, setSessionProjects] = React.useState<McpSessionGrantEntry["projects"]>(props.client?.sessions.projects ?? { mode: "all" });
   const [mediaTargets, setMediaTargets] = React.useState<McpMediaTargetEntry[]>(props.client?.mediaTargets ?? []);
   // New clients start without individually granted tools.
@@ -103,7 +106,7 @@ export function McpClientDialog(props: McpClientDialogProps) {
       answerQuestions: toolIds.includes("answer_question"),
     };
     const request = {
-      clientId: props.client?.id, name: trimmedName, enabled, sessions, mediaTargets, toolIds,
+      clientId: props.client?.id, name: trimmedName, enabled, recordCalls, sessions, mediaTargets, toolIds,
       toolProjectIds: restrictToolProjects ? toolProjectIds : [], knowledgeLibraries,
     };
     try {
@@ -139,6 +142,13 @@ export function McpClientDialog(props: McpClientDialogProps) {
                 <small>{t("mcpService.field.enabledDetail")}</small>
               </span>
               <Switch aria-label={t("mcpService.field.enabled")} checked={enabled} disabled={saving} onCheckedChange={setEnabled} />
+            </div>
+            <div className="vk-mcp-switch-row">
+              <span>
+                <strong>{t("mcpService.logs.record")}</strong>
+                <small>{t("mcpService.logs.recordDetail")}</small>
+              </span>
+              <Switch aria-label={t("mcpService.logs.record")} checked={recordCalls} data-mcp-record-calls="" disabled={saving} onCheckedChange={setRecordCalls} />
             </div>
           </section>
           <Tabs className="vk-mcp-tabs" defaultValue="tools">

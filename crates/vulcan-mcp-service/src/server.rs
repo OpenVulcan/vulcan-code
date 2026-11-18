@@ -128,6 +128,31 @@ pub struct McpServer {
     usage: Mutex<HashMap<String, McpClientUsage>>,
 }
 
+/// Marks requests interrupted when the transport drops them before returning a result.
+/// 传输在返回结果前取消请求时，将调用标记为已中断。
+struct ToolCallAudit {
+    backend: Arc<dyn McpServiceBackend>,
+    id: Option<i64>,
+}
+
+impl Drop for ToolCallAudit {
+    fn drop(&mut self) {
+        if let Some(id) = self.id
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let backend = Arc::clone(&self.backend);
+            runtime.spawn(async move {
+                if let Err(error) = backend
+                    .finish_tool_log(id, "interrupted", Value::Null)
+                    .await
+                {
+                    tracing::warn!(id, %error, "Failed to record interrupted MCP call");
+                }
+            });
+        }
+    }
+}
+
 /// Tool output before it is wrapped in an MCP `CallToolResult`.
 /// 包装为 MCP `CallToolResult` 之前的工具输出。
 struct ToolOutput {
@@ -151,6 +176,11 @@ impl ToolOutput {
 }
 
 impl McpServer {
+    /// Stops runtime resources associated with a deleted client.
+    /// 停止已删除客户端的运行时资源。
+    pub async fn retire_external_client(&self, client_id: &str) {
+        self.backend.retire_external_client(client_id).await;
+    }
     /// Creates the endpoint.
     /// 创建端点。
     pub fn new(backend: Arc<dyn McpServiceBackend>, server_version: impl Into<String>) -> Self {
@@ -286,13 +316,14 @@ impl McpServer {
                 tools.extend(
                     MCP_EXTERNAL_TOOL_IDS
                         .iter()
+                        .chain(crate::tools::MCP_CONTEXT_TOOL_IDS)
                         .copied()
                         .filter(|name| external_tool_allowed(&client, name))
                         .filter_map(|name| self.backend.external_tool_definition(name)),
                 );
                 Ok(json!({ "tools": tools }))
             }
-            "tools/call" => self.call_tool(&client, params).await,
+            "tools/call" => self.call_audited_tool(&client, params).await,
             _ => Err((
                 JSONRPC_METHOD_NOT_FOUND,
                 format!("Method `{method}` is not supported by this server."),
@@ -338,6 +369,50 @@ impl McpServer {
 
     /// Executes one `tools/call` request.
     /// 执行一次 `tools/call` 请求。
+    async fn call_audited_tool(
+        self: &Arc<Self>,
+        client: &McpServiceClient,
+        params: Value,
+    ) -> Result<Value, (i64, String)> {
+        if !client.record_calls {
+            return self.call_tool(client, params).await;
+        }
+        let log_id = match self.backend.begin_tool_log(client, &params).await {
+            Ok(id) => id,
+            Err(error) => return Ok(tool_error(&error)),
+        };
+        let mut audit = ToolCallAudit {
+            backend: Arc::clone(&self.backend),
+            id: log_id,
+        };
+        let result = self.call_tool(client, params).await;
+        if let Some(id) = audit.id {
+            let (status, response) = match &result {
+                Ok(value) => (
+                    if value["isError"] == true
+                        || matches!(
+                            value["structuredContent"]["status"].as_str(),
+                            Some("failed" | "timed_out")
+                        )
+                    {
+                        "failed"
+                    } else {
+                        "completed"
+                    },
+                    value.clone(),
+                ),
+                Err((code, message)) => ("failed", json!({"code":code,"message":message})),
+            };
+            if let Err(error) = self.backend.finish_tool_log(id, status, response).await {
+                tracing::warn!(id, %error, "Failed to finish MCP call log");
+            }
+            audit.id = None;
+        }
+        result
+    }
+
+    /// Dispatches a validated tool invocation.
+    /// 调度通过验证的工具调用。
     async fn call_tool(
         self: &Arc<Self>,
         client: &McpServiceClient,
@@ -350,7 +425,8 @@ impl McpServer {
         // External and legacy names are separate fixed sets.
         // 外部扩展与既有工具使用分开的固定集合。
         let spec = tool_spec(name);
-        let is_external = MCP_EXTERNAL_TOOL_IDS.contains(&name);
+        let is_external = MCP_EXTERNAL_TOOL_IDS.contains(&name)
+            || crate::tools::MCP_CONTEXT_TOOL_IDS.contains(&name);
         if spec.is_none() && !is_external {
             return Err((JSONRPC_INVALID_PARAMS, format!("Unknown tool `{name}`.")));
         }

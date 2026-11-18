@@ -187,6 +187,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_rtk_statistics",
     "service_clear_rtk_statistics",
     "service_mcp_service_snapshot",
+    "service_mcp_call_logs",
+    "service_mcp_call_detail",
     "service_set_mcp_service_enabled",
     "service_create_mcp_client",
     "service_update_mcp_client",
@@ -1184,6 +1186,12 @@ pub(super) async fn dispatch(
         "service_mcp_service_snapshot" => {
             rpc_json_result(crate::mcp_service::service_mcp_service_snapshot(state).await)
         }
+        "service_mcp_call_logs" => rpc_json_result(
+            crate::mcp_service::service_mcp_call_logs(rpc_required_param(params, "query")?).await,
+        ),
+        "service_mcp_call_detail" => rpc_json_result(
+            crate::mcp_service::service_mcp_call_detail(rpc_required_param(params, "id")?).await,
+        ),
         "service_set_mcp_service_enabled" => rpc_json_result(
             crate::mcp_service::service_set_mcp_service_enabled(
                 state,

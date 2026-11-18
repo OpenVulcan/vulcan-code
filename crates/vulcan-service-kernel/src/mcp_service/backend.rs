@@ -1,7 +1,7 @@
 //! Kernel implementation of the MCP service backend.
 //! MCP 服务后端的内核实现。
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -57,16 +57,43 @@ pub(crate) struct KernelMcpBackend {
     /// The service state; weak because the state owns this backend's server.
     /// 服务状态；使用弱引用，因为状态持有本后端所在的服务器。
     state: Weak<std::sync::Mutex<ServiceBridgeState>>,
+    /// Live command resources of external MCP sessions.
+    /// 外部 MCP 会话的实时命令资源。
+    managed: super::managed::ManagedRuntime,
+    /// Dedicated databases belonging to this service profile.
+    /// 此服务配置环境的专用数据库目录。
+    storage_root: std::path::PathBuf,
 }
 
 impl KernelMcpBackend {
+    /// Projects audit content through the same secret registry as native tool results.
+    /// 使用与原生工具结果相同的密钥注册表处理审计内容。
+    fn redact_audit(&self, value: &mut Value) -> Result<(), String> {
+        let state = self.state()?;
+        let task_runtime = state
+            .lock()
+            .map_err(|_| "Failed to lock the MCP service state.")?
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.task_runtime));
+        if let Some(runtime) = task_runtime {
+            super::call_log::redact_payload(value, &|text| runtime.redact_sensitive_text(text))?;
+        }
+        Ok(())
+    }
     /// Creates the backend.
     /// 创建后端。
     pub(crate) fn new(
         app: ServiceEventEmitter,
         state: Weak<std::sync::Mutex<ServiceBridgeState>>,
+        storage_root: std::path::PathBuf,
     ) -> Self {
-        Self { app, state }
+        Self {
+            app,
+            state,
+            managed: super::managed::ManagedRuntime::default(),
+            storage_root,
+        }
     }
 
     /// Returns the live service state.
@@ -93,10 +120,48 @@ impl KernelMcpBackend {
 
 #[async_trait]
 impl McpServiceBackend for KernelMcpBackend {
+    /// Stores the authenticated tool request in the opt-in history.
+    /// 将已认证工具请求保存到显式启用的历史中。
+    async fn begin_tool_log(
+        &self,
+        client: &vulcan_provider_config::provider_config::McpServiceClient,
+        params: &Value,
+    ) -> Result<Option<i64>, String> {
+        let mut redacted = params.clone();
+        self.redact_audit(&mut redacted)?;
+        super::call_log::begin(
+            &self.storage_root,
+            &client.id,
+            &client.name,
+            params,
+            redacted,
+        )
+        .await
+        .map(Some)
+    }
+
+    /// Updates the local history with the projected tool response.
+    /// 使用投影工具响应更新本地历史。
+    async fn finish_tool_log(
+        &self,
+        id: i64,
+        status: &str,
+        mut response: Value,
+    ) -> Result<(), String> {
+        self.redact_audit(&mut response)?;
+        super::call_log::finish(&self.storage_root, id, status, response).await
+    }
+
+    /// Stops the workspace resources after a client has been removed from configuration.
+    /// 从配置移除客户端后停止其工作区资源。
+    async fn retire_external_client(&self, client_id: &str) {
+        self.managed.retire_client(client_id).await;
+    }
+
     /// Returns the active tool definition from the shared runtime.
     /// 从共享运行时返回活动工具定义。
     fn external_tool_definition(&self, name: &str) -> Option<Value> {
-        super::workspace_tools::definition(&self.state().ok()?, name)
+        super::managed::definition(&self.state().ok()?, name)
     }
 
     /// Executes an external tool with the authenticated client's grants.
@@ -107,7 +172,9 @@ impl McpServiceBackend for KernelMcpBackend {
         name: &str,
         arguments: Value,
     ) -> Result<Value, String> {
-        super::workspace_tools::call(&self.state()?, client, name, arguments).await
+        self.managed
+            .call(&self.state()?, &self.storage_root, client, name, arguments)
+            .await
     }
 
     fn configuration(&self) -> Result<PersistedMcpServiceConfiguration, String> {

@@ -74,6 +74,31 @@
 .vk-mcp-checklist[data-mcp-stale-targets] { border-color: color-mix(in srgb, var(--vk-warn) 45%, var(--vk-line-soft)); }
 .vk-mcp-tool-list { max-height: none; overflow: visible; }
 
+.vk-mcp-logs-content,
+.vk-mcp-log-payloads {
+  display: grid;
+  align-content: start;
+  gap: calc(var(--vk-u) * 4);
+}
+
+.vk-mcp-log-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  align-items: end;
+  gap: calc(var(--vk-u) * 2);
+}
+
+.vk-mcp-log-filters > :is(div, label) {
+  display: grid;
+  min-width: 0;
+  gap: var(--vk-u);
+}
+
+.vk-mcp-log-payloads h3 {
+  margin: 0 0 var(--vk-u);
+  font-size: var(--vk-fs-sm);
+}
+
 .vk-mcp-secret {
   display: flex;
   align-items: center;

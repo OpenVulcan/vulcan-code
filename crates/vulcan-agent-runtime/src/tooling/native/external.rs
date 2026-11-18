@@ -3,6 +3,46 @@
 
 use super::*;
 
+/// Gives external MCP the same terminal schema with the directory supplied by its session.
+/// 为外部 MCP 提供共用终端参数结构，工作目录由其会话提供。
+pub fn terminal_schema(shell: &HostCommandShellSupport) -> Value {
+    terminal::terminal_session_args_schema(shell)
+}
+
+/// Runs one external terminal operation against the separately owned terminal runtime.
+/// 对独立持有的终端运行时执行一次外部终端操作。
+pub async fn invoke_terminal(
+    request: NativeToolExecutionRequest,
+    runtime: Arc<CommandSessionRuntime>,
+    shell: &HostCommandShellSupport,
+) -> Result<Value, String> {
+    let result = terminal::execute_terminal_session_tool(request, runtime, shell, &[])
+        .await
+        .map_err(|error| error.to_string())?;
+    let payload = result
+        .host_result
+        .ok_or("The terminal result is missing its control metadata.")?
+        .payload;
+    if payload["action"] == "list" {
+        let terminals = payload["terminal_sessions"]
+            .as_array()
+            .ok_or("The terminal list result is missing its entries.")?;
+        return Ok(
+            json!({"terminal_sessions": terminals.iter().map(external_terminal_entry).collect::<Vec<_>>()}),
+        );
+    }
+    let mut output = external_terminal_entry(&payload);
+    output["output"] = result.model_output;
+    Ok(output)
+}
+
+/// Projects only the fields required to identify and control an external terminal.
+/// 只投影识别与控制外部终端所需的字段。
+fn external_terminal_entry(payload: &Value) -> Value {
+    json!({"terminal_session_id":payload["terminal_session_id"], "name":payload["name"],
+        "cwd":payload["cwd"], "status":payload["status"], "exit_code":payload["exit_code"]})
+}
+
 /// Resolves a supported native tool by external name.
 /// 按外部名称解析受支持的原生工具。
 fn definition(name: &str) -> Option<Arc<NativeToolDefinition>> {
