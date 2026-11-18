@@ -20,7 +20,10 @@ use crate::backend::{
     McpTranscriptKind,
 };
 use crate::media_jobs::{MediaJob, MediaJobRegistry, MediaJobState};
-use crate::tools::{MCP_MEDIA_CAPABILITIES, names, tool_definitions, tool_spec};
+use crate::tools::{
+    MCP_EXTERNAL_TOOL_IDS, MCP_MEDIA_CAPABILITIES, external_tool_allowed, names, tool_definitions,
+    tool_spec,
+};
 use crate::{
     MCP_DEFAULT_READ_LIMIT, MCP_DEFAULT_WAIT_SECONDS, MCP_INLINE_IMAGE_MAX_BYTES,
     MCP_MAX_READ_LIMIT, MCP_MAX_WAIT_SECONDS, MCP_STATUS_POLL_INTERVAL,
@@ -276,7 +279,19 @@ impl McpServer {
         let result = match method {
             "initialize" => Ok(self.initialize_result(&params)),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tool_definitions(&client) })),
+            "tools/list" => {
+                // The live catalog and the same grant checked by calls determine visibility.
+                // 实时目录与调用使用的同一授权决定工具可见性。
+                let mut tools = tool_definitions(&client);
+                tools.extend(
+                    MCP_EXTERNAL_TOOL_IDS
+                        .iter()
+                        .copied()
+                        .filter(|name| external_tool_allowed(&client, name))
+                        .filter_map(|name| self.backend.external_tool_definition(name)),
+                );
+                Ok(json!({ "tools": tools }))
+            }
             "tools/call" => self.call_tool(&client, params).await,
             _ => Err((
                 JSONRPC_METHOD_NOT_FOUND,
@@ -332,8 +347,13 @@ impl McpServer {
             JSONRPC_INVALID_PARAMS,
             String::from("Field `name` must be a string."),
         ))?;
-        let spec = tool_spec(name)
-            .ok_or_else(|| (JSONRPC_INVALID_PARAMS, format!("Unknown tool `{name}`.")))?;
+        // External and legacy names are separate fixed sets.
+        // 外部扩展与既有工具使用分开的固定集合。
+        let spec = tool_spec(name);
+        let is_external = MCP_EXTERNAL_TOOL_IDS.contains(&name);
+        if spec.is_none() && !is_external {
+            return Err((JSONRPC_INVALID_PARAMS, format!("Unknown tool `{name}`.")));
+        }
         let arguments = match params.get("arguments") {
             None | Some(Value::Null) => json!({}),
             Some(arguments) if arguments.is_object() => arguments.clone(),
@@ -345,7 +365,34 @@ impl McpServer {
             }
         };
         self.record_usage(&client.id, true);
-        if !spec.grant.allows(client) {
+        if is_external {
+            if !external_tool_allowed(client, name)
+                || self.backend.external_tool_definition(name).is_none()
+            {
+                return Ok(tool_error("This MCP tool is not available to this client."));
+            }
+            return Ok(
+                match self
+                    .backend
+                    .call_external_tool(client, name, arguments)
+                    .await
+                {
+                    Ok(value) => tool_success(ToolOutput::structured(if value.is_object() {
+                        value
+                    } else {
+                        json!({"output":value})
+                    })),
+                    Err(error) => tool_error(&error),
+                },
+            );
+        }
+        let spec = spec.expect("legacy tool name was checked");
+        if !spec.grant.allows(client)
+            || client
+                .tool_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.iter().any(|id| id == name))
+        {
             return Ok(tool_error(&format!(
                 "This MCP client is not allowed to use `{name}`. The user can grant it in Vulcan Code Settings > MCP service."
             )));

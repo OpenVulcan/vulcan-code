@@ -13,7 +13,29 @@
 }
 .vk-mcp-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 
-.vk-mcp-form { display: grid; gap: calc(var(--vk-u) * 4); }
+.vk-dialog[data-mcp-client-dialog] > .vk-mcp-form.vk-dialog-body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: calc(var(--vk-u) * 4);
+  overflow: hidden;
+}
+.vk-mcp-tabs { min-height: 0; }
+.vk-mcp-tabs > [role="tablist"] { flex: none; }
+.vk-mcp-tab:not([hidden]) {
+  display: grid;
+  align-content: start;
+  gap: calc(var(--vk-u) * 4);
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.vk-mcp-group-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 3);
+}
 .vk-mcp-block { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; }
 .vk-mcp-block-title { font-size: var(--vk-fs-md); font-weight: 600; color: var(--vk-ink); }
 .vk-mcp-note { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
@@ -40,10 +62,6 @@
 }
 .vk-mcp-check > span { display: grid; gap: 2px; min-width: 0; }
 .vk-mcp-check small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
-/* Permissions that need read access sit one step in, under the read toggle they depend on. */
-/* 依赖读取权限的项缩进一级，位于其所依赖的读取开关之下。 */
-.vk-mcp-check[data-depends] { padding-inline-start: calc(var(--vk-u) * 6); }
-
 .vk-mcp-checklist {
   display: grid;
   gap: calc(var(--vk-u) * 2);
@@ -54,6 +72,7 @@
   background: var(--vk-sunken);
 }
 .vk-mcp-checklist[data-mcp-stale-targets] { border-color: color-mix(in srgb, var(--vk-warn) 45%, var(--vk-line-soft)); }
+.vk-mcp-tool-list { max-height: none; overflow: visible; }
 
 .vk-mcp-secret {
   display: flex;

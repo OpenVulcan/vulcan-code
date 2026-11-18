@@ -21,6 +21,12 @@ pub struct McpServiceSnapshot {
     /// Bounds the settings page enforces before saving.
     /// 设置页在保存前执行的边界。
     pub limits: McpServiceLimits,
+    /// Available tools and knowledge libraries for the local authorization editor.
+    /// 供本地授权编辑器使用的工具及知识库清单。
+    pub tool_candidates: Vec<String>,
+    /// Active knowledge library names keyed by stable ID.
+    /// 以稳定 ID 为键的活动知识库名称。
+    pub knowledge_candidates: std::collections::BTreeMap<String, String>,
 }
 
 /// Bounds of the MCP service settings, derived from the single persisted definitions.
@@ -75,6 +81,15 @@ pub struct McpServiceClientSummary {
     /// Tool calls since the service started.
     /// 本次服务启动以来的工具调用次数。
     pub call_count: u64,
+    /// Effective individual tool grants shown in the local editor.
+    /// 在本地授权编辑器显示的有效独立工具授权。
+    pub tool_ids: Vec<String>,
+    /// Optional project restriction of the workspace tools; empty is unrestricted.
+    /// 工作区工具可选的项目限制；空清单表示不限定项目。
+    pub tool_project_ids: Vec<String>,
+    /// Knowledge library IDs and their write flags.
+    /// 知识库 ID 及其写权限标记。
+    pub knowledge_libraries: std::collections::BTreeMap<String, bool>,
 }
 
 /// Session operations granted to one client.
@@ -184,6 +199,18 @@ pub struct McpServiceClientSaveRequest {
     /// Granted media targets.
     /// 已授予的媒体目标。
     pub media_targets: Vec<McpMediaTargetEntry>,
+    /// Explicit selection; older clients may omit it to retain their saved grants.
+    /// 显式选择；旧版客户端可省略以保留已有授权。
+    #[serde(default)]
+    pub tool_ids: Option<Vec<String>>,
+    /// Optional project restriction; empty clears it and omission retains the saved value.
+    /// 可选项目限制；空清单清除限制，省略时保留已保存的值。
+    #[serde(default)]
+    pub tool_project_ids: Option<Vec<String>>,
+    /// Knowledge access; omission retains the saved value.
+    /// 知识库权限；省略时保留已保存的值。
+    #[serde(default)]
+    pub knowledge_libraries: Option<std::collections::BTreeMap<String, bool>>,
 }
 
 /// Settings snapshot plus a freshly issued token, shown to the user exactly once.

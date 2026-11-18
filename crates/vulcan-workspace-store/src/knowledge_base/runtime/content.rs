@@ -1,5 +1,5 @@
-//! Atomic AI content mutations, immutable history, and read-only projections.
-//! 原子 AI 内容变更、不可变历史与只读投影。
+//! Atomic tool content mutations, immutable history, and read-only projections.
+//! 原子工具内容变更、不可变历史与只读投影。
 
 use super::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -13,6 +13,30 @@ pub(super) use package_content::{
     PackageExportContent, ValidatedPackageContent, prepare_package_content,
     serialize_package_content,
 };
+
+/// Verifies the calling conversation supplied its complete audit identity.
+/// 校验调用会话提供了完整的审计身份。
+fn require_ai_actor(actor: &KnowledgeChangeActor) -> Result<(), String> {
+    if actor.kind != "ai"
+        || actor.session_id.is_none()
+        || actor.turn_id.is_none()
+        || actor.tool_call_id.is_none()
+    {
+        return Err("ERR_KNOWLEDGE_AI_ACTOR_REQUIRED".into());
+    }
+    Ok(())
+}
+
+/// Builds a unique audit actor from the authenticated MCP client ID.
+/// 根据已认证的 MCP 客户端 ID 构建唯一审计身份。
+fn mcp_actor(client_id: &str) -> KnowledgeChangeActor {
+    KnowledgeChangeActor {
+        kind: "system".into(),
+        session_id: None,
+        turn_id: None,
+        tool_call_id: Some(format!("mcp:{client_id}:{}", Uuid::new_v4())),
+    }
+}
 
 /// Fixed row projection shared by all document reads.
 /// 全部文档读取共享的固定行投影。
@@ -723,13 +747,36 @@ impl KnowledgeBaseRuntime {
         actor: KnowledgeChangeActor,
     ) -> Result<KnowledgeWriteResult, String> {
         validate_action_fields(&request)?;
-        if actor.kind != "ai"
-            || actor.session_id.is_none()
-            || actor.turn_id.is_none()
-            || actor.tool_call_id.is_none()
-        {
-            return Err("ERR_KNOWLEDGE_AI_ACTOR_REQUIRED".into());
-        }
+        require_ai_actor(&actor)?;
+        self.write_authorized_content(library_id, project_id, request, actor)
+            .await
+    }
+
+    /// Applies one MCP action for a client whose write grant has been verified by the host.
+    /// 为写权限已由宿主核验的 MCP 客户端应用一次动作。
+    /// The project binding is checked inside the mutation and the result contains its receipt.
+    /// 变更内部检查项目绑定，结果含该次变更回执。
+    pub async fn write_mcp_content(
+        &self,
+        library_id: &str,
+        project_id: &str,
+        request: KnowledgeWriteRequest,
+        client_id: &str,
+    ) -> Result<KnowledgeWriteResult, String> {
+        validate_action_fields(&request)?;
+        self.write_authorized_content(library_id, project_id, request, mcp_actor(client_id))
+            .await
+    }
+
+    /// Commits a validated request and audit actor against the library's live project binding.
+    /// 根据库的实时项目绑定提交已验证的请求和审计身份。
+    async fn write_authorized_content(
+        &self,
+        library_id: &str,
+        project_id: &str,
+        request: KnowledgeWriteRequest,
+        actor: KnowledgeChangeActor,
+    ) -> Result<KnowledgeWriteResult, String> {
         // Keep authorization, namespace resolution and commit in one library-exclusive interval.
         // 将授权、命名空间解析和提交保持在同一库独占区间。
         let _guard = self.library_mutation_guard(library_id).await?;
@@ -1330,6 +1377,37 @@ impl KnowledgeBaseRuntime {
         actor: KnowledgeChangeActor,
         note: &str,
     ) -> Result<KnowledgeWriteResult, String> {
+        require_ai_actor(&actor)?;
+        self.ingest_authorized_documents(library_id, project_id, input, actor, note)
+            .await
+    }
+
+    /// Ingests host-decoded files for an MCP client whose write and source grants were verified.
+    /// 为已核验写权限和来源权限的 MCP 客户端搬运宿主解码的文件。
+    /// Returns the atomic receipt after rechecking the project binding.
+    /// 重新检查项目绑定后返回原子回执。
+    pub async fn ingest_mcp_documents(
+        &self,
+        library_id: &str,
+        project_id: &str,
+        input: Vec<KnowledgeIngestDocument>,
+        client_id: &str,
+        note: &str,
+    ) -> Result<KnowledgeWriteResult, String> {
+        self.ingest_authorized_documents(library_id, project_id, input, mcp_actor(client_id), note)
+            .await
+    }
+
+    /// Commits a batch of host-decoded files with an admitted actor and live project binding.
+    /// 使用已准入的身份和实时项目绑定提交一批宿主解码文件。
+    async fn ingest_authorized_documents(
+        &self,
+        library_id: &str,
+        project_id: &str,
+        input: Vec<KnowledgeIngestDocument>,
+        actor: KnowledgeChangeActor,
+        note: &str,
+    ) -> Result<KnowledgeWriteResult, String> {
         if input.len() > MAX_KNOWLEDGE_INGEST_FILES
             || input
                 .iter()
@@ -1338,13 +1416,6 @@ impl KnowledgeBaseRuntime {
                 > MAX_KNOWLEDGE_INGEST_BYTES
         {
             return Err("ERR_KNOWLEDGE_INGEST_LIMIT".into());
-        }
-        if actor.kind != "ai"
-            || actor.session_id.is_none()
-            || actor.turn_id.is_none()
-            || actor.tool_call_id.is_none()
-        {
-            return Err("ERR_KNOWLEDGE_AI_ACTOR_REQUIRED".into());
         }
         // Authorization revocation cannot interleave with a partially ingested batch.
         // 授权撤销不能与部分搬运批次交错。

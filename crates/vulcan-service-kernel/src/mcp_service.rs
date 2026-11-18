@@ -9,6 +9,7 @@
 
 mod backend;
 mod transcript;
+mod workspace_tools;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -61,11 +62,11 @@ pub(crate) fn install_mcp_server(
 
 /// Returns the settings snapshot.
 /// 返回设置快照。
-pub(crate) fn service_mcp_service_snapshot(
+pub(crate) async fn service_mcp_service_snapshot(
     state: SharedServiceBridgeState,
 ) -> Result<McpServiceSnapshot, String> {
     let configuration = provider_configuration_from_state(&state)?;
-    snapshot(&state, &configuration.mcp_service)
+    snapshot(&state, &configuration.mcp_service).await
 }
 
 /// Turns the endpoint on or off without touching any client.
@@ -84,7 +85,7 @@ pub(crate) async fn service_set_mcp_service_enabled(
         |_, configuration| configuration.mcp_service.clone(),
     )
     .await?;
-    snapshot(&state, &saved)
+    snapshot(&state, &saved).await
 }
 
 /// Creates one client and returns its token, which is shown only this once.
@@ -98,8 +99,8 @@ pub(crate) async fn service_create_mcp_client(
     }
     let client_id = uuid::Uuid::new_v4().to_string();
     let issued = issue_client_token();
-    validate_new_grants(&state, &request, None)?;
-    let client = McpServiceClient {
+    validate_new_grants(&state, &request, None).await?;
+    let mut client = McpServiceClient {
         id: client_id.clone(),
         name: request.name,
         token_sha256: issued.token_sha256,
@@ -107,6 +108,9 @@ pub(crate) async fn service_create_mcp_client(
         created_at_ms: now_unix_millis(),
         enabled: request.enabled,
         sessions: grant_from_entry(request.sessions),
+        tool_ids: request.tool_ids,
+        tool_project_ids: request.tool_project_ids.unwrap_or_default(),
+        knowledge_libraries: request.knowledge_libraries.unwrap_or_default(),
         media_targets: request
             .media_targets
             .into_iter()
@@ -114,12 +118,13 @@ pub(crate) async fn service_create_mcp_client(
             .collect(),
     };
     let saved = save_configuration(&state, move |mut next| {
+        vulcan_mcp_service::reconcile_mcp_tool_selection(&mut client);
         next.clients.push(client);
         normalize_mcp_service_configuration(next)
     })
     .await?;
     Ok(McpServiceIssuedToken {
-        snapshot: snapshot(&state, &saved)?,
+        snapshot: snapshot(&state, &saved).await?,
         client_id,
         token: issued.token,
     })
@@ -140,13 +145,24 @@ pub(crate) async fn service_update_mcp_client(
         &state,
         &request,
         Some(&current.clients[client_position(&current, &client_id)?]),
-    )?;
+    )
+    .await?;
     let saved = save_configuration(&state, move |mut next| {
         let position = client_position(&next, &client_id)?;
         let client = &mut next.clients[position];
         client.name = request.name;
         client.enabled = request.enabled;
         client.sessions = grant_from_entry(request.sessions);
+        if let Some(tool_ids) = request.tool_ids {
+            client.tool_ids = Some(tool_ids);
+        }
+        if let Some(project_ids) = request.tool_project_ids {
+            client.tool_project_ids = project_ids;
+        }
+        if let Some(libraries) = request.knowledge_libraries {
+            client.knowledge_libraries = libraries;
+        }
+        vulcan_mcp_service::reconcile_mcp_tool_selection(client);
         client.media_targets = request
             .media_targets
             .into_iter()
@@ -155,7 +171,7 @@ pub(crate) async fn service_update_mcp_client(
         normalize_mcp_service_configuration(next)
     })
     .await?;
-    snapshot(&state, &saved)
+    snapshot(&state, &saved).await
 }
 
 /// Issues a new token for one client; the previous token stops working immediately.
@@ -174,7 +190,7 @@ pub(crate) async fn service_rotate_mcp_client_token(
     })
     .await?;
     Ok(McpServiceIssuedToken {
-        snapshot: snapshot(&state, &saved)?,
+        snapshot: snapshot(&state, &saved).await?,
         client_id,
         token: issued.token,
     })
@@ -192,7 +208,7 @@ pub(crate) async fn service_delete_mcp_client(
         Ok(next)
     })
     .await?;
-    snapshot(&state, &saved)
+    snapshot(&state, &saved).await
 }
 
 /// Applies one change to the MCP configuration read inside the configuration transaction, saves
@@ -251,11 +267,44 @@ fn client_position(
 /// unrelated edit never fails on stale data.
 /// 拒绝本次请求新增的、指向未知项目或不可用媒体目标的授权。客户端原有的授权即使其目标已消失也
 /// 仍然有效，因此无关编辑绝不会因过期数据而失败。
-fn validate_new_grants(
+async fn validate_new_grants(
     state: &SharedServiceBridgeState,
     request: &McpServiceClientSaveRequest,
     previous: Option<&McpServiceClient>,
 ) -> Result<(), String> {
+    if let Some(ids) = &request.tool_ids
+        && ids
+            .iter()
+            .any(|id| !vulcan_mcp_service::mcp_tool_names().any(|name| name == id.trim()))
+    {
+        return Err("Unknown MCP tool grant.".into());
+    }
+    if let Some(ids) = &request.tool_project_ids {
+        let guard = state.lock().map_err(|error| error.to_string())?;
+        if ids.iter().any(|id| {
+            !guard
+                .workbench
+                .projects
+                .iter()
+                .any(|project| project.id == id.trim())
+                && !previous.is_some_and(|client| {
+                    client.tool_project_ids.iter().any(|held| held == id.trim())
+                })
+        }) {
+            return Err("An MCP tool project was not found.".into());
+        }
+    }
+    if let Some(libraries) = &request.knowledge_libraries
+        && !libraries.is_empty()
+    {
+        let known = knowledge_candidates(state).await?;
+        if libraries.iter().any(|(id, write)| {
+            !known.contains_key(id)
+                && previous.and_then(|client| client.knowledge_libraries.get(id)) != Some(write)
+        }) {
+            return Err("An MCP knowledge library was not found.".into());
+        }
+    }
     if let McpProjectScopeEntry::Selected { project_ids } = &request.sessions.projects {
         let held = previous
             .map(|client| match &client.sessions.projects {
@@ -312,7 +361,7 @@ fn validate_new_grants(
 
 /// Builds the settings snapshot with endpoint, candidates, limits, and in-memory usage.
 /// 构建包含端点、候选、上限与内存用量的设置快照。
-fn snapshot(
+async fn snapshot(
     state: &SharedServiceBridgeState,
     configuration: &PersistedMcpServiceConfiguration,
 ) -> Result<McpServiceSnapshot, String> {
@@ -361,6 +410,9 @@ fn snapshot(
                     .collect(),
                 last_used_at_ms: usage.last_used_at_ms,
                 call_count: usage.call_count,
+                tool_ids: vulcan_mcp_service::mcp_client_tool_selection(client),
+                tool_project_ids: client.tool_project_ids.clone(),
+                knowledge_libraries: client.knowledge_libraries.clone(),
             }
         })
         .collect();
@@ -369,6 +421,10 @@ fn snapshot(
         endpoint_url,
         clients,
         media_candidates,
+        tool_candidates: vulcan_mcp_service::mcp_tool_names()
+            .map(str::to_owned)
+            .collect(),
+        knowledge_candidates: knowledge_candidates(state).await.unwrap_or_default(),
         limits: McpServiceLimits {
             max_clients: MAX_MCP_SERVICE_CLIENTS,
             max_name_chars: MAX_MCP_CLIENT_NAME_CHARS,
@@ -475,4 +531,30 @@ fn target_grant_from_entry(entry: McpMediaTargetEntry) -> McpMediaTargetGrant {
 /// 当前 Unix 毫秒时间。
 fn now_unix_millis() -> u64 {
     u64::try_from(crate::current_unix_millis_value()).unwrap_or_default()
+}
+
+/// Returns active library IDs and name labels to the local MCP grant editor.
+/// 向本地 MCP 授权编辑器返回活动知识库的 ID 与名称。
+async fn knowledge_candidates(
+    state: &SharedServiceBridgeState,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    // Retain the store handle before awaiting storage.
+    // 在等待存储操作前获取存储句柄。
+    let controller = state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .controller_runtime
+        .clone();
+    let Some(controller) = controller else {
+        return Ok(Default::default());
+    };
+    Ok(
+        vulcan_workspace_store::knowledge_base::KnowledgeBaseRuntime::new(controller)
+            .list_libraries(None)
+            .await?
+            .into_iter()
+            .filter(|library| library.lifecycle_state == "active")
+            .map(|library| (library.id, library.name))
+            .collect(),
+    )
 }

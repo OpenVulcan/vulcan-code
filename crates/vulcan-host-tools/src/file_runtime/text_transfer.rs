@@ -64,6 +64,45 @@ pub fn collect_local_text_sources(
     max_file_bytes: usize,
     max_total_bytes: usize,
 ) -> Result<LocalTextBatch, FileToolError> {
+    collect_text_sources(
+        workspace_root,
+        sources,
+        max_files,
+        max_file_bytes,
+        max_total_bytes,
+        false,
+    )
+}
+
+/// Collects texts for an authorized caller without reading sources outside the project.
+/// 为已授权调用方收集文本，文件读取范围限于项目。
+pub fn collect_workspace_text_sources(
+    workspace_root: &Path,
+    sources: &[String],
+    max_files: usize,
+    max_file_bytes: usize,
+    max_total_bytes: usize,
+) -> Result<LocalTextBatch, FileToolError> {
+    collect_text_sources(
+        workspace_root,
+        sources,
+        max_files,
+        max_file_bytes,
+        max_total_bytes,
+        true,
+    )
+}
+
+/// Uses the usual transfer scanner with optional project containment.
+/// 使用常规搬运扫描器并可选校验项目范围。
+fn collect_text_sources(
+    workspace_root: &Path,
+    sources: &[String],
+    max_files: usize,
+    max_file_bytes: usize,
+    max_total_bytes: usize,
+    confined: bool,
+) -> Result<LocalTextBatch, FileToolError> {
     if sources.is_empty() || sources.len() > max_files {
         return Err(FileToolError::new(
             "transfer_limit",
@@ -77,7 +116,7 @@ pub fn collect_local_text_sources(
     // 失败保留来源归属，同时允许有效文件继续处理。
     let mut batch = LocalTextBatch::default();
     for source in sources {
-        match expand_source(workspace_root, source) {
+        match expand_source(workspace_root, source, confined) {
             Ok((files, explicit)) => {
                 for (path, relative) in files {
                     // The first selector owns the destination; explicit selectors stay addressable.
@@ -107,7 +146,11 @@ pub fn collect_local_text_sources(
     // 此和累计解码 UTF-8，与目标实际正文存储一致。
     let mut total_bytes = 0usize;
     for (path, (relative_path, selectors)) in candidates {
-        match read_source(&path, relative_path, selectors, max_file_bytes) {
+        let read = (|| {
+            require_transfer_scope(workspace_root, &path, confined)?;
+            read_source(&path, relative_path, selectors, max_file_bytes)
+        })();
+        match read {
             Ok(source) => {
                 total_bytes = total_bytes.checked_add(source.text.len()).ok_or_else(|| {
                     FileToolError::new("transfer_limit", "The transfer byte count overflowed.")
@@ -130,6 +173,24 @@ pub fn collect_local_text_sources(
     Ok(batch)
 }
 
+/// Rejects a resolved transfer path outside an explicitly scoped project.
+/// 拒绝解析后落在显式授权项目之外的搬运路径。
+fn require_transfer_scope(root: &Path, path: &Path, confined: bool) -> Result<(), FileToolError> {
+    if confined {
+        let canonical_root =
+            fs::canonicalize(root).map_err(|error| io_error("path_not_found", root, error))?;
+        let canonical_path =
+            fs::canonicalize(path).map_err(|error| io_error("path_not_found", path, error))?;
+        if !canonical_path.starts_with(canonical_root) {
+            return Err(FileToolError::new(
+                "invalid_path",
+                "The source is outside the authorized project.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Resolves `source` into native regular-file candidates and glob-relative destination names.
 /// 将 `source` 解析为原生普通文件候选及相对 glob 的目标名称。
 /// `workspace_root` owns relative/environment path semantics; returns paths plus whether the
@@ -138,6 +199,7 @@ pub fn collect_local_text_sources(
 fn expand_source(
     workspace_root: &Path,
     source: &str,
+    confined: bool,
 ) -> Result<(Vec<(PathBuf, String)>, bool), FileToolError> {
     validate_search_text(Some(source), "source")?;
     // Lexical resolution is shared with file_read; wildcard components are split only afterwards.
@@ -163,6 +225,7 @@ fn expand_source(
         // Exact files use the same final path resolution and metadata admission as file_read.
         // 精确文件使用与 file_read 相同的最终路径解析与元数据准入。
         let path = resolve_path(workspace_root, source)?;
+        require_transfer_scope(workspace_root, &path, confined)?;
         // Names must be representable without replacement characters before entering a logical library.
         // 名称进入逻辑知识库前必须可以无替换字符表示。
         let name = path
@@ -183,6 +246,7 @@ fn expand_source(
     )?;
     // The shared collector owns ignores, symlink behavior, ordering and scan bounds.
     // 共享收集器拥有忽略、符号链接行为、顺序与扫描边界。
+    require_transfer_scope(workspace_root, &base, confined)?;
     let mut files = Vec::new();
     collect_files(&base, true, false, &mut files)?;
     // Relative names preserve extensions and directory structure exactly.

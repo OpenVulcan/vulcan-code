@@ -1,4 +1,5 @@
 import * as React from "react";
+import { PageGuide } from "@/components/page";
 import { errorMessage } from "@/lib/display-format";
 import { formatMessage, useI18n } from "@/i18n";
 import { createMcpClient, updateMcpClient } from "@/service/mcp-service-service";
@@ -18,15 +19,15 @@ import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choi
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { Input } from "@/ui-kit/primitives/input";
 import { Switch } from "@/ui-kit/primitives/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs";
 import { toast } from "@/ui-kit/primitives/toast";
 import {
-  emptySessionGrant,
+  hasMcpSessionTools,
   MCP_CAPABILITY_LABELS,
-  MCP_SESSION_PERMISSIONS,
   sameTarget,
-  withPermission,
-  withRead,
+  updateMcpToolGrants,
 } from "./mcp-service-model";
+import { McpToolGrants } from "./mcp-tool-grants";
 
 // McpClientDialogProps edits one client, or creates one when `client` is absent.
 // McpClientDialogProps 编辑一个客户端；`client` 缺失时新建一个。
@@ -34,34 +35,55 @@ export interface McpClientDialogProps {
   client?: McpServiceClientSummary;
   projects: ProjectSummary[];
   candidates: McpMediaTargetCandidate[];
+  // Grantable native names and knowledge library labels.
+  // 可授权的原生名称和知识库标签。
+  toolCandidates: string[];
+  knowledgeCandidates: Record<string, string>;
   limits: McpServiceLimits;
   onSaved: (snapshot: McpServiceSnapshot) => void;
   onCreated: (issued: McpServiceIssuedToken, name: string) => void;
   onClose: () => void;
 }
 
-/** Client editor: a name, an on/off switch, session permissions with a project scope, and media models.
- * Every session write permission implies read access, so the toggles keep that rule visible.
- * 客户端编辑器：名称、开关、带项目范围的会话权限，以及媒体模型。每项会话写权限都隐含读取权限，开关会体现这一规则。 */
+/** Edits the client and each granted tool, project, knowledge library, and media target.
+ * 编辑客户端及逐项授权的工具、项目、知识库和媒体目标。 */
 export function McpClientDialog(props: McpClientDialogProps) {
   const { t } = useI18n();
   const [name, setName] = React.useState(props.client?.name ?? "");
   const [enabled, setEnabled] = React.useState(props.client?.enabled ?? true);
-  const [sessions, setSessions] = React.useState<McpSessionGrantEntry>(props.client?.sessions ?? emptySessionGrant());
+  const [sessionProjects, setSessionProjects] = React.useState<McpSessionGrantEntry["projects"]>(props.client?.sessions.projects ?? { mode: "all" });
   const [mediaTargets, setMediaTargets] = React.useState<McpMediaTargetEntry[]>(props.client?.mediaTargets ?? []);
+  // New clients start without individually granted tools.
+  // 新客户端初始没有独立勾选的工具。
+  const [toolIds, setToolIds] = React.useState(props.client?.toolIds ?? []);
+  const [toolProjectIds, setToolProjectIds] = React.useState(props.client?.toolProjectIds ?? []);
+  // Keeps the draft selection when temporarily switching the scope in the editor.
+  // 在编辑器中临时切换范围时保留指定项目草稿。
+  const [restrictToolProjects, setRestrictToolProjects] = React.useState(toolProjectIds.length > 0);
+  const [knowledgeLibraries, setKnowledgeLibraries] = React.useState(props.client?.knowledgeLibraries ?? {});
+  const knowledgeLabels = { ...Object.fromEntries(Object.keys(knowledgeLibraries).map((id) => [id, id])), ...props.knowledgeCandidates };
   const [saving, setSaving] = React.useState(false);
   const trimmedName = name.trim();
   const nameFits = [...trimmedName].length <= props.limits.maxNameChars;
-  const selectedProjects = sessions.projects.mode === "selected" ? sessions.projects.projectIds : [];
-  const projectsValid = !sessions.read || sessions.projects.mode === "all" || selectedProjects.length > 0;
-  const valid = trimmedName.length > 0 && nameFits && projectsValid
+  // The draft tool selection controls whether the session project scope needs validation.
+  // 由草稿中选中的会话工具决定是否需要校验会话项目范围。
+  const hasSessionTools = hasMcpSessionTools(toolIds);
+  const selectedProjects = sessionProjects.mode === "selected" ? sessionProjects.projectIds : [];
+  const projectsValid = !hasSessionTools || sessionProjects.mode === "all" || selectedProjects.length > 0;
+  const toolProjectsValid = !restrictToolProjects || (toolProjectIds.length > 0 && toolProjectIds.length <= props.limits.maxProjects);
+  const valid = trimmedName.length > 0 && nameFits && projectsValid && toolProjectsValid
     && selectedProjects.length <= props.limits.maxProjects && mediaTargets.length <= props.limits.maxMediaTargets;
   // staleTargets are grants whose model is no longer available; they stay until the user removes them.
   // staleTargets 是其模型已不可用的授权；在用户移除前保留。
   const staleTargets = mediaTargets.filter((target) => !props.candidates.some((candidate) => sameTarget(candidate, target)));
   const toggleProject = (projectId: string, checked: boolean) => {
     const next = checked ? [...selectedProjects, projectId] : selectedProjects.filter((id) => id !== projectId);
-    setSessions({ ...sessions, projects: { mode: "selected", projectIds: next } });
+    setSessionProjects({ mode: "selected", projectIds: next });
+  };
+  // Updates a single tool or a whole group without affecting the other authorization pages.
+  // 更新单项工具或整组工具，保留其他授权页面的选择。
+  const changeTools = (tools: readonly string[], checked: boolean) => {
+    setToolIds((ids) => updateMcpToolGrants(ids, tools, checked));
   };
   const toggleTarget = (target: McpMediaTargetEntry, checked: boolean) => {
     setMediaTargets(checked
@@ -70,7 +92,20 @@ export function McpClientDialog(props: McpClientDialogProps) {
   };
   const save = async () => {
     setSaving(true);
-    const request = { clientId: props.client?.id, name: trimmedName, enabled, sessions, mediaTargets };
+    // Compatibility fields reflect the draft without implicitly selecting any additional tools.
+    // 兼容字段反映草稿状态，不会自动勾选额外工具。
+    const sessions = {
+      projects: sessionProjects,
+      read: hasSessionTools,
+      send: toolIds.includes("send_message"),
+      create: toolIds.includes("create_session"),
+      stop: toolIds.includes("stop_session"),
+      answerQuestions: toolIds.includes("answer_question"),
+    };
+    const request = {
+      clientId: props.client?.id, name: trimmedName, enabled, sessions, mediaTargets, toolIds,
+      toolProjectIds: restrictToolProjects ? toolProjectIds : [], knowledgeLibraries,
+    };
     try {
       if (props.client) {
         props.onSaved(await updateMcpClient(request));
@@ -106,74 +141,123 @@ export function McpClientDialog(props: McpClientDialogProps) {
               <Switch aria-label={t("mcpService.field.enabled")} checked={enabled} disabled={saving} onCheckedChange={setEnabled} />
             </div>
           </section>
-          <section className="vk-mcp-block" data-mcp-session-grants="">
-            <span className="vk-mcp-block-title">{t("mcpService.field.sessions")}</span>
-            <label className="vk-mcp-check">
-              <Checkbox checked={sessions.read} disabled={saving} onCheckedChange={(checked) => setSessions(withRead(sessions, checked === true))} />
-              <span>{t("mcpService.grant.read")}</span>
-            </label>
-            {MCP_SESSION_PERMISSIONS.map((permission) => (
-              <label className="vk-mcp-check" data-depends="" key={permission.key}>
-                <Checkbox checked={sessions[permission.key]} disabled={saving}
-                  onCheckedChange={(checked) => setSessions(withPermission(sessions, permission.key, checked === true))} />
-                <span>{t(permission.label)}</span>
-              </label>
-            ))}
-            <p className="vk-mcp-note">{t("mcpService.grant.readRequired")}</p>
-          </section>
-          {sessions.read ? (
-            <section className="vk-mcp-block" data-mcp-project-scope="">
-              <span className="vk-mcp-block-title">{t("mcpService.field.projects")}</span>
-              <SegmentedControl aria-label={t("mcpService.field.projects")} disabled={saving} onValueChange={(value) => {
-                setSessions({ ...sessions, projects: value === "all" ? { mode: "all" } : { mode: "selected", projectIds: selectedProjects } });
-              }} value={sessions.projects.mode}>
-                <SegmentedControlItem value="all">{t("mcpService.field.scopeAll")}</SegmentedControlItem>
-                <SegmentedControlItem value="selected">{t("mcpService.field.scopeSelected")}</SegmentedControlItem>
-              </SegmentedControl>
-              {sessions.projects.mode === "selected" ? (
-                props.projects.length === 0 ? <p className="vk-mcp-note">{t("mcpService.field.noProjects")}</p> : (
-                  <div className="vk-mcp-checklist">
-                    {props.projects.map((project) => (
-                      <label className="vk-mcp-check" key={project.id}>
-                        <Checkbox checked={selectedProjects.includes(project.id)} disabled={saving}
-                          onCheckedChange={(checked) => toggleProject(project.id, checked === true)} />
-                        <span>{project.name}<small>{project.path}</small></span>
+          <Tabs className="vk-mcp-tabs" defaultValue="tools">
+            <TabsList aria-label={t("mcpService.tabs.label")} variant="line">
+              <TabsTrigger value="sessions">{t("mcpService.field.sessions")}</TabsTrigger>
+              <TabsTrigger value="tools">{t("mcpService.field.tools")}</TabsTrigger>
+              <TabsTrigger value="media">{t("mcpService.tabs.media")}</TabsTrigger>
+            </TabsList>
+            <TabsContent className="vk-mcp-tab" value="sessions">
+              <PageGuide items={[
+                { term: t("mcpService.guide.what"), detail: t("mcpService.guide.whatDetail") },
+                { term: t("mcpService.guide.approvals"), detail: t("mcpService.guide.approvalsDetail") },
+                { term: t("mcpService.guide.view"), detail: t("mcpService.guide.viewDetail") },
+              ]} />
+              <McpToolGrants candidates={props.toolCandidates} disabled={saving} onChange={changeTools} page="sessions" selected={toolIds} />
+              {hasSessionTools ? <section className="vk-mcp-block" data-mcp-project-scope="">
+                <span className="vk-mcp-block-title">{t("mcpService.field.sessionProjects")}</span>
+                <SegmentedControl aria-label={t("mcpService.field.sessionProjects")} disabled={saving} onValueChange={(value) => {
+                  setSessionProjects(value === "all" ? { mode: "all" } : { mode: "selected", projectIds: selectedProjects });
+                }} value={sessionProjects.mode}>
+                  <SegmentedControlItem value="all">{t("mcpService.field.scopeAll")}</SegmentedControlItem>
+                  <SegmentedControlItem value="selected">{t("mcpService.field.scopeSelected")}</SegmentedControlItem>
+                </SegmentedControl>
+                {sessionProjects.mode === "selected" ? (
+                  props.projects.length === 0 ? <p className="vk-mcp-note">{t("mcpService.field.noProjects")}</p> : (
+                    <div className="vk-mcp-checklist">
+                      {props.projects.map((project) => (
+                        <label className="vk-mcp-check" key={project.id}>
+                          <Checkbox checked={selectedProjects.includes(project.id)} disabled={saving}
+                            onCheckedChange={(checked) => toggleProject(project.id, checked === true)} />
+                          <span>{project.name}<small>{project.path}</small></span>
+                        </label>
+                      ))}
+                    </div>
+                  )
+                ) : null}
+                {!projectsValid ? <p className="vk-field-error" role="alert">{t("mcpService.field.projectsRequired")}</p> : null}
+              </section> : null}
+            </TabsContent>
+            <TabsContent className="vk-mcp-tab" value="tools" data-mcp-tool-grants="">
+              <section className="vk-mcp-block" data-mcp-workspace-grants="">
+                <span className="vk-mcp-block-title">{t("mcpService.field.toolProjects")}</span>
+                <SegmentedControl aria-label={t("mcpService.field.toolProjects")} disabled={saving}
+                  onValueChange={(value) => setRestrictToolProjects(value === "selected")} value={restrictToolProjects ? "selected" : "unrestricted"}>
+                  <SegmentedControlItem value="unrestricted">{t("mcpService.field.scopeUnrestricted")}</SegmentedControlItem>
+                  <SegmentedControlItem value="selected">{t("mcpService.field.scopeSelected")}</SegmentedControlItem>
+                </SegmentedControl>
+                {restrictToolProjects ? (
+                  props.projects.length === 0 ? <p className="vk-mcp-note">{t("mcpService.field.noProjects")}</p> : (
+                    <div className="vk-mcp-checklist">
+                      {props.projects.map((project) => (
+                        <label className="vk-mcp-check" key={project.id}>
+                          <Checkbox checked={toolProjectIds.includes(project.id)} disabled={saving}
+                            onCheckedChange={(checked) => setToolProjectIds((ids) => checked === true ? [...ids, project.id] : ids.filter((id) => id !== project.id))} />
+                          <span>{project.name}<small>{project.path}</small></span>
+                        </label>
+                      ))}
+                    </div>
+                  )
+                ) : null}
+                {restrictToolProjects && toolProjectIds.length === 0 ? <p className="vk-field-error" role="alert">{t("mcpService.field.projectsRequired")}</p> : null}
+              </section>
+              <McpToolGrants candidates={props.toolCandidates} disabled={saving} onChange={changeTools} page="tools" selected={toolIds} />
+              <section className="vk-mcp-block" data-mcp-knowledge-grants="">
+                <span className="vk-mcp-block-title">{t("mcpService.field.knowledgeLibraries")}</span>
+                {Object.entries(knowledgeLabels).map(([id, label]) => (
+                  <div className="vk-mcp-checklist" key={id}>
+                    <span>{label}</span>
+                    <label className="vk-mcp-check">
+                      <Checkbox checked={Object.hasOwn(knowledgeLibraries, id)} disabled={saving}
+                        onCheckedChange={(checked) => setKnowledgeLibraries((entries) => {
+                          if (checked === true) return { ...entries, [id]: false };
+                          const next = { ...entries };
+                          delete next[id];
+                          return next;
+                        })} />
+                      <span>{t("mcpService.field.knowledgeRead")}</span>
+                    </label>
+                    <label className="vk-mcp-check">
+                      <Checkbox checked={knowledgeLibraries[id] === true} disabled={saving || !Object.hasOwn(knowledgeLibraries, id)}
+                        onCheckedChange={(checked) => setKnowledgeLibraries((entries) => ({ ...entries, [id]: checked === true }))} />
+                      <span>{t("mcpService.field.knowledgeWrite")}</span>
+                    </label>
+                  </div>
+                ))}
+              </section>
+            </TabsContent>
+            <TabsContent className="vk-mcp-tab" value="media">
+              <McpToolGrants candidates={props.toolCandidates} disabled={saving} onChange={changeTools} page="media" selected={toolIds} />
+              <section className="vk-mcp-block" data-mcp-media-grants="">
+                <span className="vk-mcp-block-title">{t("mcpService.field.media")}</span>
+                <p className="vk-mcp-note">{t("mcpService.field.mediaDetail")}</p>
+                {props.candidates.length === 0 && staleTargets.length === 0 ? <p className="vk-mcp-note">{t("mcpService.field.mediaEmpty")}</p> : null}
+                {capabilityGroups.map(([capability, candidates]) => (
+                  <div className="vk-mcp-checklist" key={capability}>
+                    <span className="vk-label">{MCP_CAPABILITY_LABELS[capability] ? t(MCP_CAPABILITY_LABELS[capability]) : capability}</span>
+                    {candidates.map((candidate) => (
+                      <label className="vk-mcp-check" key={`${candidate.connectionId}/${candidate.targetId}`}>
+                        <Checkbox checked={mediaTargets.some((target) => sameTarget(target, candidate))} disabled={saving}
+                          onCheckedChange={(checked) => toggleTarget(candidate, checked === true)} />
+                        <span>{candidate.displayName}<small>{candidate.model} · {candidate.accountName}</small></span>
                       </label>
                     ))}
                   </div>
-                )
-              ) : null}
-              {!projectsValid ? <p className="vk-field-error" role="alert">{t("mcpService.field.projectsRequired")}</p> : null}
-            </section>
-          ) : null}
-          <section className="vk-mcp-block" data-mcp-media-grants="">
-            <span className="vk-mcp-block-title">{t("mcpService.field.media")}</span>
-            <p className="vk-mcp-note">{t("mcpService.field.mediaDetail")}</p>
-            {props.candidates.length === 0 && staleTargets.length === 0 ? <p className="vk-mcp-note">{t("mcpService.field.mediaEmpty")}</p> : null}
-            {capabilityGroups.map(([capability, candidates]) => (
-              <div className="vk-mcp-checklist" key={capability}>
-                <span className="vk-label">{MCP_CAPABILITY_LABELS[capability] ? t(MCP_CAPABILITY_LABELS[capability]) : capability}</span>
-                {candidates.map((candidate) => (
-                  <label className="vk-mcp-check" key={`${candidate.connectionId}/${candidate.targetId}`}>
-                    <Checkbox checked={mediaTargets.some((target) => sameTarget(target, candidate))} disabled={saving}
-                      onCheckedChange={(checked) => toggleTarget(candidate, checked === true)} />
-                    <span>{candidate.displayName}<small>{candidate.model} · {candidate.accountName}</small></span>
-                  </label>
                 ))}
-              </div>
-            ))}
-            {staleTargets.length > 0 ? (
-              <div className="vk-mcp-checklist" data-mcp-stale-targets="">
-                <span className="vk-label">{t("mcpService.field.mediaStale")}</span>
-                {staleTargets.map((target) => (
-                  <label className="vk-mcp-check" key={`${target.connectionId}/${target.targetId}`}>
-                    <Checkbox checked disabled={saving} onCheckedChange={() => toggleTarget(target, false)} />
-                    <span>{target.targetId}<small>{target.connectionId}</small></span>
-                  </label>
-                ))}
-              </div>
-            ) : null}
-          </section>
+                {staleTargets.length > 0 ? (
+                  <div className="vk-mcp-checklist" data-mcp-stale-targets="">
+                    <span className="vk-label">{t("mcpService.field.mediaStale")}</span>
+                    {staleTargets.map((target) => (
+                      <label className="vk-mcp-check" key={`${target.connectionId}/${target.targetId}`}>
+                        <Checkbox checked disabled={saving} onCheckedChange={() => toggleTarget(target, false)} />
+                        <span>{target.targetId}<small>{target.connectionId}</small></span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            </TabsContent>
+          </Tabs>
         </div>
         <DialogFooter>
           <Button disabled={saving} onClick={props.onClose} size="sm" type="button" variant="outline">{t("mcpService.cancel")}</Button>

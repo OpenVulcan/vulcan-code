@@ -233,6 +233,7 @@ const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
 mod apply_patch;
 mod configuration;
 mod environment;
+pub mod external;
 mod feedback;
 mod file;
 mod file_edit;

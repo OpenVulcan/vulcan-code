@@ -93,6 +93,23 @@ impl KernelMcpBackend {
 
 #[async_trait]
 impl McpServiceBackend for KernelMcpBackend {
+    /// Returns the active tool definition from the shared runtime.
+    /// 从共享运行时返回活动工具定义。
+    fn external_tool_definition(&self, name: &str) -> Option<Value> {
+        super::workspace_tools::definition(&self.state().ok()?, name)
+    }
+
+    /// Executes an external tool with the authenticated client's grants.
+    /// 使用已认证客户端的授权执行外部工具。
+    async fn call_external_tool(
+        &self,
+        client: &vulcan_provider_config::provider_config::McpServiceClient,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        super::workspace_tools::call(&self.state()?, client, name, arguments).await
+    }
+
     fn configuration(&self) -> Result<PersistedMcpServiceConfiguration, String> {
         let state = self.state()?;
         Ok(crate::service_state_access::provider_configuration_from_state(&state)?.mcp_service)

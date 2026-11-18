@@ -19,6 +19,63 @@ export const MCP_CAPABILITY_LABELS: Readonly<Record<string, TranslationKey>> = {
   video_extend: "settings.providerTools.videoExtend",
 };
 
+// Ordered presentation groups keyed by the exact public MCP tool names.
+// 使用对外 MCP 工具的精确名称定义展示分组和顺序。
+export const MCP_TOOL_GROUPS = [
+  { id: "session-read", page: "sessions", label: "mcpService.grant.read", tools: [
+    "list_projects", "list_sessions", "get_session", "read_messages", "wait_for_reply", "list_chat_models",
+  ] },
+  { id: "session-actions", page: "sessions", label: "mcpService.group.sessionActions", tools: [
+    "send_message", "create_session", "stop_session", "answer_question",
+  ] },
+  { id: "files", page: "tools", label: "mcpService.group.files", tools: [
+    "file", "file_read", "file_write", "file_edit", "file_move", "file_delete", "apply_patch",
+  ] },
+  { id: "codekit", page: "tools", label: "mcpService.group.codekit", tools: [
+    "vulcan_codekit_repo_map", "vulcan_codekit_ast_tree", "vulcan_codekit_ast_detail", "vulcan_codekit_rg",
+    "vulcan_codekit_markdown_menu", "vulcan_codekit_node_source", "vulcan_codekit_patch",
+  ] },
+  { id: "shell", page: "tools", label: "mcpService.group.shell", tools: ["shell_command"] },
+  { id: "knowledge", page: "tools", label: "mcpService.group.knowledge", tools: [
+    "knowledge_list", "knowledge_read", "knowledge_search", "knowledge_write",
+  ] },
+  { id: "media", page: "media", label: "mcpService.group.media", tools: [
+    "list_media_models", "generate_media", "get_media_job", "cancel_media_job",
+  ] },
+] as const satisfies readonly { id: string; page: string; label: TranslationKey; tools: readonly string[] }[];
+
+// A tool page is a tab in the per-client authorization editor.
+// 工具页面对应客户端授权编辑器中的一个标签页。
+export type McpToolPage = typeof MCP_TOOL_GROUPS[number]["page"];
+
+// Public names that have a dedicated label in the shared catalog.
+// 在共享语言目录中有专属标签的公开工具名称。
+type McpToolId = typeof MCP_TOOL_GROUPS[number]["tools"][number];
+
+/// Returns the existing session grant description or the tool's own description key.
+/// 返回已有会话授权说明或该工具自己的说明键。
+export function mcpToolDetailKey(tool: McpToolId): TranslationKey {
+  switch (tool) {
+    case "send_message": return "mcpService.grant.send";
+    case "create_session": return "mcpService.grant.create";
+    case "stop_session": return "mcpService.grant.stop";
+    case "answer_question": return "mcpService.grant.answer";
+    default: return `mcpService.tool.${tool}.detail`;
+  }
+}
+
+/// Returns whether the selected tool IDs include an operation on a Vulcan Code session.
+/// 判断已选工具 ID 中是否存在 Vulcan Code 会话操作。
+export function hasMcpSessionTools(selected: readonly string[]): boolean {
+  return MCP_TOOL_GROUPS.some((group) => group.page === "sessions" && group.tools.some((id) => selected.includes(id)));
+}
+
+/// Updates only the listed tool grants and retains selections from every other group.
+/// 只更新指定的工具授权，保留其他分组中的选择。
+export function updateMcpToolGrants(selected: string[], tools: readonly string[], checked: boolean): string[] {
+  return checked ? [...new Set([...selected, ...tools])] : selected.filter((tool) => !tools.includes(tool));
+}
+
 // McpSessionPermission names one session flag that depends on read access.
 // McpSessionPermission 命名一个依赖读取权限的会话开关。
 export type McpSessionPermission = "send" | "create" | "stop" | "answerQuestions";
@@ -73,13 +130,17 @@ export function grantSummaryParts(
     parts.push(sessions.projects.mode === "all"
       ? t("mcpService.summary.allProjects")
       : format(t("mcpService.summary.projects"), { count: sessions.projects.projectIds.length }));
-  } else {
-    parts.push(t("mcpService.summary.noSessions"));
+  }
+  const directToolCount = MCP_TOOL_GROUPS.reduce((count, group) =>
+    group.page === "tools" ? count + group.tools.filter((tool) => client.toolIds?.includes(tool)).length : count,
+  0);
+  if (directToolCount > 0) {
+    parts.push(format(t("mcpService.summary.tools"), { count: directToolCount }));
   }
   if (client.mediaTargets.length > 0) {
     parts.push(format(t("mcpService.summary.media"), { count: client.mediaTargets.length }));
   }
-  return parts;
+  return parts.length > 0 ? parts : [t("mcpService.summary.noSessions")];
 }
 
 // McpSnippetKind names one connection snippet.

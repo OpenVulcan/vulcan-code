@@ -25,6 +25,7 @@ use vulcan_change_set::persistent_change_set_from_host_result;
 mod text_transfer;
 pub use text_transfer::{
     LocalTextBatch, LocalTextSource, LocalTextSourceFailure, collect_local_text_sources,
+    collect_workspace_text_sources,
 };
 
 /// Maximum number of read/list/search targets accepted in one request.

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Copy, KeyRound, Pencil, Plug, Plus, Trash2 } from "lucide-react";
 import "@/ui-kit/styles/features/mcp-service.css";
-import { PageBody, PageEmptyState, PageGuide, PageItem, PageItemList, PageNotice, PageRow, PageSection } from "@/components/page";
+import { PageBody, PageEmptyState, PageItem, PageItemList, PageNotice, PageRow, PageSection } from "@/components/page";
 import { copyText } from "@/components/workspace/workbench-layout/types";
 import { errorMessage, formatDateTime } from "@/lib/display-format";
 import { formatMessage, useI18n } from "@/i18n";
@@ -117,11 +117,6 @@ export function McpServiceSettingsArea(props: { projects: ProjectSummary[] }) {
     <PageBody data-mcp-service-area="">
       <PageSection
         description={t("mcpService.endpoint.detail")}
-        guide={<PageGuide items={[
-          { term: t("mcpService.guide.what"), detail: t("mcpService.guide.whatDetail") },
-          { term: t("mcpService.guide.approvals"), detail: t("mcpService.guide.approvalsDetail") },
-          { term: t("mcpService.guide.view"), detail: t("mcpService.guide.viewDetail") },
-        ]} />}
         layout="rows"
         status={<Badge variant={snapshot.enabled ? "default" : "secondary"}>{snapshot.enabled ? t("mcpService.status.on") : t("mcpService.status.off")}</Badge>}
         title={t("mcpService.endpoint.title")}
@@ -190,6 +185,8 @@ export function McpServiceSettingsArea(props: { projects: ProjectSummary[] }) {
       {editing ? (
         <McpClientDialog
           candidates={snapshot.mediaCandidates}
+          toolCandidates={snapshot.toolCandidates ?? []}
+          knowledgeCandidates={snapshot.knowledgeCandidates ?? {}}
           client={editing === "new" ? undefined : editing}
           limits={snapshot.limits}
           onClose={() => setEditing(null)}

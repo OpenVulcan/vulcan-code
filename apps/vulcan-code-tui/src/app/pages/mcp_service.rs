@@ -37,6 +37,9 @@ fn request(client: &Value) -> Value {
         "enabled": b(client, "/enabled"),
         "sessions": v(client, "/sessions"),
         "mediaTargets": v(client, "/mediaTargets"),
+        "toolIds": v(client, "/toolIds"),
+        "toolProjectIds": v(client, "/toolProjectIds"),
+        "knowledgeLibraries": v(client, "/knowledgeLibraries"),
     })
 }
 
@@ -46,20 +49,6 @@ fn updated(client: &Value, change: impl FnOnce(&mut Value)) -> ServiceCall {
     let mut next = request(client);
     change(&mut next);
     api_mcp::update_mcp_client(next)
-}
-
-/// Sets one session flag with the WebUI rules: turning read off clears every write flag, and
-/// turning a write flag on also turns read on.
-/// 按 WebUI 规则设置一个会话开关：关闭读取会清除所有写权限，开启写权限会同时开启读取。
-fn set_session_flag(sessions: &mut Value, flag: &str, on: bool) {
-    sessions[flag] = json!(on);
-    if flag == "read" && !on {
-        for write in SESSION_FLAGS {
-            sessions[write] = json!(false);
-        }
-    } else if flag != "read" && on {
-        sessions["read"] = json!(true);
-    }
 }
 
 /// Renames the client in `ctx`; an empty name is refused.
@@ -122,6 +111,115 @@ fn marked(granted: bool, label: String) -> String {
     format!("{} {label}", if granted { "[x]" } else { "[ ]" })
 }
 
+/// Toggles one exact tool or workspace project in the saved client document.
+/// 切换客户端保存文档中一个精确工具或工作区项目。
+fn toggle_grant(client: &Value, field: &str, choice: &str) -> ServiceCall {
+    let mut selections = a(client, &format!("/{field}")).to_vec();
+    if let Some(index) = selections.iter().position(|entry| entry == choice) {
+        selections.remove(index);
+    } else {
+        selections.push(json!(choice));
+    }
+    updated(client, |next| next[field] = Value::Array(selections))
+}
+
+/// Toggles the selected callable tool; returns the completed save request.
+/// 切换选定的可调用工具，返回完整保存请求。
+fn pick_tool(ctx: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    Some(toggle_grant(ctx, "toolIds", value.as_str()))
+}
+
+/// Changes the tool project scope, requiring an explicit choice to remove the restriction.
+/// 更改工具项目范围；解除限制时要求显式选择。
+fn pick_tool_project(ctx: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let choice = value.as_str();
+    if choice == ALL_PROJECTS {
+        return Some(updated(ctx, |next| next["toolProjectIds"] = json!([])));
+    }
+    let projects = a(ctx, "/toolProjectIds");
+    if projects.len() == 1 && projects.first().is_some_and(|id| id == choice) {
+        return None;
+    }
+    Some(toggle_grant(ctx, "toolProjectIds", choice))
+}
+
+/// Cycles the chosen library through none, read, and read/write.
+/// 将所选知识库在未授权、读取、读写之间切换。
+fn pick_knowledge(ctx: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let mut libraries = ctx["knowledgeLibraries"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let id = value.as_str();
+    match libraries.get(id).and_then(Value::as_bool) {
+        None => {
+            libraries.insert(id.to_owned(), json!(false));
+        }
+        Some(false) => {
+            libraries.insert(id.to_owned(), json!(true));
+        }
+        Some(true) => {
+            libraries.remove(id);
+        }
+    }
+    Some(updated(ctx, |next| {
+        next["knowledgeLibraries"] = Value::Object(libraries)
+    }))
+}
+
+/// Builds library labels with current access, including removable stale grants.
+/// 构建带当前授权的知识库标签，包含可移除的失效授权。
+fn knowledge_choices(snapshot: &Value, client: &Value) -> Vec<(String, String)> {
+    let mut labels = snapshot["knowledgeCandidates"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    if let Some(grants) = client["knowledgeLibraries"].as_object() {
+        for id in grants.keys() {
+            labels.entry(id).or_insert_with(|| json!(id));
+        }
+    }
+    labels
+        .into_iter()
+        .map(|(id, label)| {
+            let grant = client["knowledgeLibraries"][&id].as_bool();
+            let access = match grant {
+                Some(true) => tr!("mcpService.field.knowledgeWrite"),
+                Some(false) => tr!("mcpService.field.knowledgeRead"),
+                None => String::new(),
+            };
+            let description = format!("{} {access}", label.as_str().unwrap_or(&id));
+            (id, marked(grant.is_some(), description))
+        })
+        .collect()
+}
+
+/// Displays one authorization picker with its provided action and choices.
+/// 使用给定动作和选项显示一个授权选择器。
+fn grant_picker(
+    title: String,
+    client: &Value,
+    build: fn(&Value, &SettingValue) -> Option<ServiceCall>,
+    options: Vec<(String, String)>,
+) -> RowAction {
+    if options.is_empty() {
+        return absent(title);
+    }
+    action(
+        title.clone(),
+        UiAction::Pick {
+            title,
+            edit: Edit::Call(Setter::Build {
+                ctx: client.clone(),
+                build,
+            }),
+            options,
+            current: String::new(),
+        },
+        Tone::Normal,
+    )
+}
+
 /// Project choices: all projects first, then each project with its grant mark.
 /// 项目选项：先是全部项目，其后为带授权标记的各项目。
 fn project_choices(app: &App, client: &Value) -> Vec<(String, String)> {
@@ -139,6 +237,29 @@ fn project_choices(app: &App, client: &Value) -> Vec<(String, String)> {
         )
     }));
     options
+}
+
+/// Lists the unrestricted option followed by registered projects and their current grants.
+/// 返回不限定项目选项，随后列出已登记项目及其当前授权。
+fn tool_project_choices(app: &App, client: &Value) -> Vec<(String, String)> {
+    let selected = a(client, "/toolProjectIds");
+    let mut choices = vec![(
+        ALL_PROJECTS.to_owned(),
+        marked(
+            selected.is_empty(),
+            tr!("mcpService.field.scopeUnrestricted"),
+        ),
+    )];
+    choices.extend(app.projects.iter().map(|project| {
+        (
+            project.id.clone(),
+            marked(
+                selected.iter().any(|id| id == &project.id),
+                format!("{} · {}", project.name, project.path),
+            ),
+        )
+    }));
+    choices
 }
 
 /// Media choices: every grantable model with its grant mark, then granted models that are gone.
@@ -217,7 +338,6 @@ fn summary(client: &Value) -> String {
 fn client_row(app: &App, snapshot: &Value, client: &Value) -> Row {
     let id = s(client, "/id");
     let name = s(client, "/name");
-    let read = b(client, "/sessions/read");
     let last_used = match v(client, "/lastUsedAtMs").as_i64() {
         Some(at) => tr!(
             "mcpService.client.lastUsed",
@@ -226,44 +346,49 @@ fn client_row(app: &App, snapshot: &Value, client: &Value) -> Row {
         ),
         None => tr!("mcpService.client.neverUsed"),
     };
-    let flag_switch = |flag: &str| {
-        let on = b(client, &format!("/sessions/{flag}"));
-        switch(
-            flag_label(flag),
-            on,
-            Some(call(updated(client, |next| {
-                set_session_flag(&mut next["sessions"], flag, !on)
-            }))),
-        )
-    };
-    let mut actions = vec![
-        switch(
-            tr!("mcpService.field.enabled"),
-            b(client, "/enabled"),
-            Some(call(updated(client, |next| {
-                next["enabled"] = json!(!b(client, "/enabled"))
-            }))),
-        ),
-        flag_switch("read"),
-    ];
-    actions.extend(SESSION_FLAGS.map(flag_switch));
-    actions.push(if read {
-        action(
-            tr!("mcpService.field.projects"),
-            UiAction::Pick {
-                title: tr!("mcpService.field.projects"),
-                edit: Edit::Call(Setter::Build {
-                    ctx: client.clone(),
-                    build: pick_project,
-                }),
-                options: project_choices(app, client),
-                current: String::new(),
-            },
-            Tone::Normal,
-        )
-    } else {
-        absent(tr!("mcpService.field.projects"))
-    });
+    let mut actions = vec![switch(
+        tr!("mcpService.field.enabled"),
+        b(client, "/enabled"),
+        Some(call(updated(client, |next| {
+            next["enabled"] = json!(!b(client, "/enabled"))
+        }))),
+    )];
+    actions.push(grant_picker(
+        tr!("mcpService.field.tools"),
+        client,
+        pick_tool,
+        a(snapshot, "/toolCandidates")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|tool| {
+                (
+                    tool.to_owned(),
+                    marked(
+                        a(client, "/toolIds").iter().any(|id| id == tool),
+                        tool.to_owned(),
+                    ),
+                )
+            })
+            .collect(),
+    ));
+    actions.push(grant_picker(
+        tr!("mcpService.field.sessionProjects"),
+        client,
+        pick_project,
+        project_choices(app, client),
+    ));
+    actions.push(grant_picker(
+        tr!("mcpService.field.toolProjects"),
+        client,
+        pick_tool_project,
+        tool_project_choices(app, client),
+    ));
+    actions.push(grant_picker(
+        tr!("mcpService.field.knowledgeLibraries"),
+        client,
+        pick_knowledge,
+        knowledge_choices(snapshot, client),
+    ));
     let media = media_choices(snapshot, client);
     actions.push(if media.is_empty() {
         absent(tr!("mcpService.field.media"))
@@ -400,24 +525,32 @@ mod tests {
     // Updates send the complete client document with read-dependency rules applied.
     // 更新发送完整客户端文档，并应用读取依赖规则。
     #[test]
-    fn session_flags_keep_read_dependencies() {
-        let off = updated(&client(), |next| {
-            set_session_flag(&mut next["sessions"], "read", false)
-        });
-        assert_eq!(off.method, "service_update_mcp_client");
-        let sessions = &off.params["request"]["sessions"];
-        assert_eq!(sessions["read"], false);
-        assert_eq!(sessions["send"], false);
-        assert_eq!(off.params["request"]["clientId"], "c1");
-        assert_eq!(off.params["request"]["mediaTargets"][0]["targetId"], "img");
+    fn tool_picks_change_only_the_selected_grant() {
+        let mut current = client();
+        current["toolIds"] = json!(["file_read"]);
+        current["toolProjectIds"] = json!(["p1"]);
+        let changed = pick_tool(&current, &SettingValue::Choice("shell_command".into())).unwrap();
+        assert_eq!(
+            changed.params["request"]["toolIds"],
+            json!(["file_read", "shell_command"])
+        );
+        assert_eq!(changed.params["request"]["toolProjectIds"], json!(["p1"]));
+    }
 
-        let mut none = client();
-        set_session_flag(&mut none["sessions"], "read", false);
-        let on = updated(&none, |next| {
-            set_session_flag(&mut next["sessions"], "stop", true)
-        });
-        assert_eq!(on.params["request"]["sessions"]["read"], true);
-        assert_eq!(on.params["request"]["sessions"]["stop"], true);
+    /// Requires an explicit unrestricted choice to clear a single selected project.
+    /// 只有显式选择不限定项目时才清除最后一项指定项目。
+    #[test]
+    fn tool_project_restriction_can_be_removed_explicitly() {
+        let mut current = client();
+        current["toolProjectIds"] = json!(["p1"]);
+        assert!(pick_tool_project(&current, &SettingValue::Choice("p1".into())).is_none());
+        let unrestricted =
+            pick_tool_project(&current, &SettingValue::Choice(ALL_PROJECTS.into())).unwrap();
+        assert_eq!(unrestricted.params["request"]["toolProjectIds"], json!([]));
+        assert_eq!(
+            unrestricted.params["request"]["sessions"],
+            current["sessions"]
+        );
     }
 
     // Project picks add, remove and widen only on the explicit all-projects choice.

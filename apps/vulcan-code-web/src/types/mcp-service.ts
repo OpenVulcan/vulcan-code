@@ -53,6 +53,11 @@ export interface McpServiceClientSummary {
   // 本次服务启动以来的用量；不持久化。
   lastUsedAtMs?: number;
   callCount: number;
+  // Individual tools and their independent scopes.
+  // 独立授权的工具及其各自的范围。
+  toolIds?: string[];
+  toolProjectIds?: string[];
+  knowledgeLibraries?: Record<string, boolean>;
 }
 
 // McpServiceLimits are the bounds the service enforces.
@@ -73,6 +78,10 @@ export interface McpServiceSnapshot {
   endpointUrl?: string;
   clients: McpServiceClientSummary[];
   mediaCandidates: McpMediaTargetCandidate[];
+  // Grantable names and selectable knowledge library labels.
+  // 可授权的名称和可选知识库标签。
+  toolCandidates?: string[];
+  knowledgeCandidates?: Record<string, string>;
   limits: McpServiceLimits;
 }
 
@@ -84,6 +93,11 @@ export interface McpServiceClientSaveRequest {
   enabled: boolean;
   sessions: McpSessionGrantEntry;
   mediaTargets: McpMediaTargetEntry[];
+  // An explicit empty selection revokes the corresponding grants.
+  // 显式空选择撤销对应授权。
+  toolIds?: string[];
+  toolProjectIds?: string[];
+  knowledgeLibraries?: Record<string, boolean>;
 }
 
 // McpServiceIssuedToken carries a token that is shown only once.

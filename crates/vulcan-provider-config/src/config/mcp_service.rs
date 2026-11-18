@@ -77,6 +77,18 @@ pub struct McpServiceClient {
     /// 该客户端可运行的精确媒体生成目标。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub media_targets: Vec<McpMediaTargetGrant>,
+    /// Explicit tool selection; absent preserves the legacy session and media permissions.
+    /// 显式工具选择；缺省时沿用既有会话与媒体权限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_ids: Option<Vec<String>>,
+    /// Optional restriction to registered projects for workspace tools; empty is unrestricted.
+    /// 独立工作区工具可选的已登记项目限制；空清单表示不限定项目。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_project_ids: Vec<String>,
+    /// Knowledge library IDs mapped to write permission; each entry grants read access.
+    /// 知识库 ID 对应写权限；每个条目均授予读取权限。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub knowledge_libraries: std::collections::BTreeMap<String, bool>,
 }
 
 /// Session operations one MCP client may perform, limited to a project scope.
@@ -211,6 +223,24 @@ pub fn normalize_mcp_service_configuration(
     })
 }
 
+/// Maximum selectable tool IDs and knowledge library grants per client.
+/// 客户端可选择的工具 ID 和知识库授权数上限。
+pub const MAX_MCP_CLIENT_TOOLS: usize = 64;
+
+/// Trims and deduplicates grant identifiers within the supplied limit.
+/// 按给定上限规范化授权标识符。
+fn normalize_tool_ids(ids: Vec<String>, limit: usize) -> Result<Vec<String>, String> {
+    if ids.len() > limit || ids.iter().any(|id| id.trim().is_empty()) {
+        return Err("Invalid MCP tool grant identifiers.".into());
+    }
+    Ok(ids
+        .into_iter()
+        .map(|id| id.trim().to_owned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect())
+}
+
 /// Validates one client entry.
 /// 校验一个客户端条目。
 fn normalize_mcp_service_client(client: McpServiceClient) -> Result<McpServiceClient, String> {
@@ -242,6 +272,14 @@ fn normalize_mcp_service_client(client: McpServiceClient) -> Result<McpServiceCl
             "The token hint of MCP client `{id}` exceeds {MAX_MCP_TOKEN_HINT_CHARS} characters."
         ));
     }
+    if client.knowledge_libraries.len() > MAX_MCP_CLIENT_TOOLS
+        || client
+            .knowledge_libraries
+            .keys()
+            .any(|id| id.is_empty() || id.trim() != id)
+    {
+        return Err("Invalid MCP knowledge library grants.".into());
+    }
     let sessions = normalize_mcp_session_grant(&id, client.sessions)?;
     let media_targets = normalize_mcp_media_targets(&id, client.media_targets)?;
     Ok(McpServiceClient {
@@ -253,6 +291,12 @@ fn normalize_mcp_service_client(client: McpServiceClient) -> Result<McpServiceCl
         enabled: client.enabled,
         sessions,
         media_targets,
+        tool_ids: client
+            .tool_ids
+            .map(|ids| normalize_tool_ids(ids, MAX_MCP_CLIENT_TOOLS))
+            .transpose()?,
+        tool_project_ids: normalize_tool_ids(client.tool_project_ids, MAX_MCP_CLIENT_PROJECTS)?,
+        knowledge_libraries: client.knowledge_libraries,
     })
 }
 
@@ -351,6 +395,9 @@ mod tests {
                 ..McpSessionGrant::default()
             },
             media_targets: Vec::new(),
+            tool_ids: None,
+            tool_project_ids: Vec::new(),
+            knowledge_libraries: Default::default(),
         }
     }
 

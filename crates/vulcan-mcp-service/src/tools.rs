@@ -243,12 +243,105 @@ pub(crate) fn tool_spec(name: &str) -> Option<&'static ToolSpec> {
     TOOL_SPECS.iter().find(|spec| spec.name == name)
 }
 
+/// External tools in addition to the existing session and media tools.
+/// 在既有会话和媒体工具之外提供的对外工具。
+pub const MCP_EXTERNAL_TOOL_IDS: &[&str] = &[
+    "file",
+    "file_read",
+    "file_write",
+    "file_edit",
+    "file_move",
+    "file_delete",
+    "apply_patch",
+    "shell_command",
+    "vulcan_codekit_repo_map",
+    "vulcan_codekit_ast_tree",
+    "vulcan_codekit_ast_detail",
+    "vulcan_codekit_rg",
+    "vulcan_codekit_markdown_menu",
+    "vulcan_codekit_node_source",
+    "vulcan_codekit_patch",
+    "knowledge_list",
+    "knowledge_read",
+    "knowledge_search",
+    "knowledge_write",
+];
+
+/// Returns all grantable names, including the legacy tool surface.
+/// 返回所有可授权的工具名称，包含既有工具。
+pub fn mcp_tool_names() -> impl Iterator<Item = &'static str> {
+    TOOL_SPECS
+        .iter()
+        .map(|spec| spec.name)
+        .chain(MCP_EXTERNAL_TOOL_IDS.iter().copied())
+}
+
+/// Aligns legacy session scope flags with an explicit tool selection.
+/// 根据显式工具选择同步旧版会话范围开关。
+pub fn reconcile_mcp_tool_selection(client: &mut McpServiceClient) {
+    let Some(ids) = &client.tool_ids else {
+        return;
+    };
+    let selected = |grant: ToolGrant| {
+        TOOL_SPECS.iter().any(|spec| {
+            std::mem::discriminant(&spec.grant) == std::mem::discriminant(&grant)
+                && ids.iter().any(|id| id.trim() == spec.name)
+        })
+    };
+    client.sessions.send = selected(ToolGrant::Send);
+    client.sessions.create = selected(ToolGrant::Create);
+    client.sessions.stop = selected(ToolGrant::Stop);
+    client.sessions.answer_questions = selected(ToolGrant::Answer);
+    client.sessions.read = selected(ToolGrant::Read)
+        || client.sessions.send
+        || client.sessions.create
+        || client.sessions.stop
+        || client.sessions.answer_questions;
+}
+
+/// Returns a client's saved selection or its original implicit grants.
+/// 返回客户端已保存的选择或其原有隐式授权。
+pub fn mcp_client_tool_selection(client: &McpServiceClient) -> Vec<String> {
+    client.tool_ids.clone().unwrap_or_else(|| {
+        TOOL_SPECS
+            .iter()
+            .filter(|spec| spec.grant.allows(client))
+            .map(|spec| spec.name.to_owned())
+            .collect()
+    })
+}
+
+/// Checks enabled scope in addition to the explicit external tool grant.
+/// 检查显式外部工具授权及其生效范围。
+pub(crate) fn external_tool_allowed(client: &McpServiceClient, name: &str) -> bool {
+    client
+        .tool_ids
+        .as_ref()
+        .is_some_and(|ids| ids.iter().any(|id| id == name))
+        && match name {
+            "knowledge_write" => client
+                .knowledge_libraries
+                .values()
+                .any(|writable| *writable),
+            "knowledge_list" | "knowledge_search" | "knowledge_read" => {
+                !client.knowledge_libraries.is_empty()
+            }
+            _ => true,
+        }
+}
+
 /// Returns the `tools/list` entries `client` may call.
 /// 返回 `client` 可调用的 `tools/list` 条目。
 pub(crate) fn tool_definitions(client: &McpServiceClient) -> Vec<Value> {
     TOOL_SPECS
         .iter()
-        .filter(|spec| spec.grant.allows(client))
+        .filter(|spec| {
+            spec.grant.allows(client)
+                && client
+                    .tool_ids
+                    .as_ref()
+                    .is_none_or(|ids| ids.iter().any(|id| id == spec.name))
+        })
         .map(|spec| {
             json!({
                 "name": spec.name,

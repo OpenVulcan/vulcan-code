@@ -421,4 +421,21 @@ pub trait McpServiceBackend: Send + Sync + 'static {
     /// Records cancellation for asynchronous provider work owned by `owner_id`.
     /// 为 `owner_id` 拥有的异步供应商工作记录取消。
     fn cancel_media(&self, owner_id: &str) -> Result<(), String>;
+
+    /// Returns the live descriptor for an externally supported tool.
+    /// 返回外部工具的实时定义。
+    fn external_tool_definition(&self, _name: &str) -> Option<Value> {
+        None
+    }
+
+    /// Executes an individually authorized tool with the verified client's scope.
+    /// 使用已验证客户端的授权范围执行独立勾选的工具。
+    async fn call_external_tool(
+        &self,
+        _client: &vulcan_provider_config::provider_config::McpServiceClient,
+        _name: &str,
+        _arguments: Value,
+    ) -> Result<Value, String> {
+        Err("External tool execution is unavailable.".into())
+    }
 }

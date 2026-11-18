@@ -45,7 +45,7 @@ pub(super) async fn execute(
     runtime: &KnowledgeBaseRuntime,
     library_id: &str,
     project_id: &str,
-    actor: KnowledgeChangeActor,
+    actor: KnowledgeWriteActor<'_>,
     arguments: Value,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     // Decode before any source I/O so irrelevant action fields cannot be ignored.
@@ -67,10 +67,18 @@ pub(super) async fn execute(
     // Move source selectors into the blocking native file reader without sending file bodies to AI.
     // 将来源选择器移至阻塞原生文件读取器，不向 AI 发送文件正文。
     let sources = args.sources;
+    // The source policy belongs to the caller identity that was verified by the host.
+    // 来源策略由宿主已核验的调用方身份决定。
+    let external_scope = matches!(actor, KnowledgeWriteActor::McpClient(_));
     // The destination owns all semantic limits; the host reader has no duplicate knowledge constants.
     // 全部语义边界归目标所有；宿主读取器不重复定义知识库常量。
     let batch = tokio::task::spawn_blocking(move || {
-        collect_local_text_sources(
+        let collector = if external_scope {
+            vulcan_host_tools::file_runtime::collect_workspace_text_sources
+        } else {
+            collect_local_text_sources
+        };
+        collector(
             &root,
             &sources,
             MAX_KNOWLEDGE_INGEST_FILES,
@@ -154,10 +162,19 @@ pub(super) async fn execute(
     }
     // All independently rejected files are reported even when no valid source remains.
     // 即使没有有效来源，也报告全部独立拒绝文件。
-    let receipt = runtime
-        .ingest_documents(library_id, project_id, documents, actor, &args.note)
-        .await
-        .map_err(NativeToolError::new)?;
+    let receipt = match actor {
+        KnowledgeWriteActor::Conversation(actor) => {
+            runtime
+                .ingest_documents(library_id, project_id, documents, actor, &args.note)
+                .await
+        }
+        KnowledgeWriteActor::McpClient(client_id) => {
+            runtime
+                .ingest_mcp_documents(library_id, project_id, documents, client_id, &args.note)
+                .await
+        }
+    }
+    .map_err(NativeToolError::new)?;
     // Metadata-only receipts are safe to render without source body duplication.
     // 仅元数据回执可安全渲染而不重复来源正文。
     let mut output = result_markdown::write(library_id, &receipt);

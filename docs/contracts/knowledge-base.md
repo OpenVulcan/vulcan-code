@@ -70,6 +70,10 @@ AI 使用 `knowledge_list`、`knowledge_read`、`knowledge_search`、`knowledge_
 外部内容明确标为不可信资料。写入宿主仅附 `knowledge_write_v1` 最小回执，不附完整正文；详见
 [工具结果投影](tool-result-presentation.md)。
 
+## 对外 MCP
+
+客户端按库授权读取或读写。执行时同时校验库授权和 `project_id` 的实时项目绑定。写入以宿主执行者与带客户端身份的外部调用 ID 记录，继续沿用原子写入与修订校验。`ingest` 还需要 `file_read` 授权，源项目须符合客户端配置的可选工具项目限制。
+
 ## 模式、向量与服务寿命
 
 | 模式 | 能力 |

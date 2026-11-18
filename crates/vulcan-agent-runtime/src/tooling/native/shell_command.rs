@@ -3,7 +3,7 @@ use super::*;
 use crate::agent_runtime::conversation_hooks::HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE;
 use crate::agent_runtime::vulcan_plugin_hooks::dispatch_vulcan_plugin_hook;
 use crate::provider_config::PersistedRtkConfiguration;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, process::Stdio};
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookDiagnosticSeverity, HookScope};
 use vulcan_host_tools::process_creation::{
     apply_child_path_prefixes, new_background_tokio_command,
@@ -1998,5 +1998,174 @@ mod process_option_tests {
         .await;
         assert_eq!(report.status_label(), "completed");
         assert!(report.streams.stdout.contains("plugin-path-ok"));
+    }
+}
+
+/// Exposes the one-shot shell arguments with a caller-supplied working directory.
+/// 公开单次 Shell 参数，工作目录由调用方提供。
+pub(super) fn external_shell_schema(support: &HostCommandShellSupport) -> Value {
+    let mut schema = shell_command_args_schema(support);
+    if let Some(properties) = schema["properties"].as_object_mut() {
+        properties.remove("background");
+        properties["cwd"]["description"] =
+            json!("Required absolute working directory supplied by the MCP client.");
+        properties["timeout_ms"]["description"] =
+            json!("Optional hard timeout in milliseconds. Omit to wait until the command exits.");
+        properties["title"]["description"] = json!("Required short description of the command.");
+    }
+    schema["required"] = json!(["command", "title", "cwd"]);
+    schema
+}
+
+/// Runs a shell command for the lifetime of one external request and returns terminal output.
+/// 在一次外部请求的生命周期内运行 Shell 命令，返回终态及输出。
+pub(super) async fn execute_external_shell(
+    mut request: NativeToolExecutionRequest,
+    support: &HostCommandShellSupport,
+) -> Result<Value, String> {
+    use tokio::io::AsyncWriteExt;
+    use vulcan_host_tools::process_tree::{
+        CHILD_OUTPUT_DRAIN_GRACE, ChildProcessTreeDropGuard, isolate_child_process_tree,
+        terminate_child_process_tree,
+    };
+
+    if request.arguments.get("background").is_some() {
+        return Err("External shell calls only support foreground execution.".into());
+    }
+    // Preserve the shared argument validation and launcher behavior.
+    // 保留共享参数验证和启动器行为。
+    let parsed = parse_shell_command_tool_arguments(std::mem::take(&mut request.arguments))
+        .map_err(|error| error.to_string())?;
+    let cwd = parsed
+        .cwd
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .ok_or("An absolute cwd is required.")?;
+    let (program, args, _) = resolve_shell_command_launcher(
+        support,
+        parsed.shell.as_deref(),
+        &parsed.command,
+        parsed.stdin.is_some(),
+    )
+    .map_err(|error| error.to_string())?;
+    let deadline = parsed
+        .timeout_ms
+        .map(|milliseconds| {
+            tokio::time::Instant::now()
+                .checked_add(Duration::from_millis(milliseconds))
+                .ok_or("The shell timeout cannot be represented.")
+        })
+        .transpose()?;
+
+    // The command inherits the host environment and starts in its own process tree.
+    // 命令继承宿主环境，在独立进程树内启动。
+    let mut command = new_background_tokio_command(&program);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(if parsed.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    isolate_child_process_tree(&mut command);
+    let lease = admit_shell_launch(&request, cwd)
+        .await
+        .map_err(|error| error.to_string())?;
+    let root = request
+        .workspace_root
+        .as_deref()
+        .ok_or("An authorized project root is required.")?;
+    if !cwd
+        .canonicalize()
+        .map_err(|error| error.to_string())?
+        .starts_with(root.canonicalize().map_err(|error| error.to_string())?)
+    {
+        return Err("The working directory is outside the authorized project.".into());
+    }
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let mut process_guard = ChildProcessTreeDropGuard::arm(&child);
+    drop(lease);
+    let mut stdout = tokio::spawn(capture_external_shell_output(
+        child.stdout.take().expect("piped stdout"),
+    ));
+    let mut stderr = tokio::spawn(capture_external_shell_output(
+        child.stderr.take().expect("piped stderr"),
+    ));
+    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), parsed.stdin) {
+        tokio::spawn(async move {
+            let _ = stdin.write_all(input.as_bytes()).await;
+        });
+    }
+
+    // Await completion or terminate the process tree at the supplied deadline.
+    // 等待命令完成，或在调用方设定的截止时间终止进程树。
+    let status = match deadline {
+        Some(deadline) => match tokio::time::timeout_at(deadline, child.wait()).await {
+            Ok(status) => Some(status.map_err(|error| error.to_string())?),
+            Err(_) => {
+                terminate_child_process_tree(&mut child).await?;
+                None
+            }
+        },
+        None => Some(child.wait().await.map_err(|error| error.to_string())?),
+    };
+
+    let drained = tokio::time::timeout(CHILD_OUTPUT_DRAIN_GRACE, async {
+        tokio::join!(&mut stdout, &mut stderr)
+    })
+    .await;
+    process_guard.disarm();
+    let (stdout, stderr) = match drained {
+        Ok((stdout, stderr)) => (
+            stdout.map_err(|error| error.to_string())??,
+            stderr.map_err(|error| error.to_string())??,
+        ),
+        Err(_) => {
+            stdout.abort();
+            stderr.abort();
+            return Err("Shell output pipes did not close after the command exited.".into());
+        }
+    };
+    Ok(json!({
+        "status": match &status {
+            None => "timed_out",
+            Some(status) if status.success() => "completed",
+            Some(_) => "failed",
+        },
+        "exit_code": status.and_then(|status| status.code()),
+        "stdout": vulcan_host_tools::output_decode::decode_shell_output_bytes(&stdout.0),
+        "stderr": vulcan_host_tools::output_decode::decode_shell_output_bytes(&stderr.0),
+        "truncated": stdout.1 || stderr.1,
+    }))
+}
+
+/// Drains a pipe and retains its bounded output tail and truncation state.
+/// 读完一个管道，保留有界输出尾部与截断状态。
+async fn capture_external_shell_output(
+    mut stream: impl tokio::io::AsyncRead + Unpin,
+) -> Result<(Vec<u8>, bool), String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut buffer = [0; 8192];
+    let mut tail = Vec::new();
+    let mut truncated = false;
+    loop {
+        let size = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|error| error.to_string())?;
+        if size == 0 {
+            return Ok((tail, truncated));
+        }
+        tail.extend_from_slice(&buffer[..size]);
+        if tail.len() > SHELL_OUTPUT_TAIL_BUDGET_BYTES {
+            tail.drain(..tail.len() - SHELL_OUTPUT_TAIL_BUDGET_BYTES);
+            truncated = true;
+        }
     }
 }

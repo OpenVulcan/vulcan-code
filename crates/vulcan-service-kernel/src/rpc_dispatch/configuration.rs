@@ -1182,7 +1182,7 @@ pub(super) async fn dispatch(
             .await,
         ),
         "service_mcp_service_snapshot" => {
-            rpc_json_result(crate::mcp_service::service_mcp_service_snapshot(state))
+            rpc_json_result(crate::mcp_service::service_mcp_service_snapshot(state).await)
         }
         "service_set_mcp_service_enabled" => rpc_json_result(
             crate::mcp_service::service_set_mcp_service_enabled(

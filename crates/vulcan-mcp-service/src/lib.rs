@@ -21,7 +21,10 @@ mod tests;
 pub use auth::{IssuedClientToken, issue_client_token, token_sha256_hex};
 pub use backend::*;
 pub use server::{McpClientUsage, McpHttpResponse, McpServer};
-pub use tools::MCP_MEDIA_CAPABILITIES;
+pub use tools::{
+    MCP_EXTERNAL_TOOL_IDS, MCP_MEDIA_CAPABILITIES, mcp_client_tool_selection, mcp_tool_names,
+    reconcile_mcp_tool_selection,
+};
 
 /// MCP protocol revisions this server speaks, newest first; the first is the default answer.
 /// 本服务器支持的 MCP 协议修订，最新在前；第一项是默认应答。

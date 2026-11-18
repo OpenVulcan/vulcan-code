@@ -418,6 +418,26 @@ fn write_actor(
 async fn execute_knowledge_write(
     request: NativeToolExecutionRequest,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    execute_knowledge_write_for_actor(request, None).await
+}
+
+/// Identifies the verified caller for content writes and file ingestion.
+/// 标识内容写入及文件搬运的已核验调用方。
+enum KnowledgeWriteActor<'a> {
+    /// The exact audit identity of the in-session tool invocation.
+    /// 会话内工具调用的精确审计身份。
+    Conversation(KnowledgeChangeActor),
+    /// The stable ID of a client authenticated and authorized by the MCP endpoint.
+    /// 由 MCP 端点认证和授权的客户端稳定 ID。
+    McpClient(&'a str),
+}
+
+/// Writes through the shared runtime using the authenticated MCP client ID when supplied.
+/// 在提供已认证的 MCP 客户端 ID 时，用它调用共享写入运行时。
+pub(super) async fn execute_knowledge_write_for_actor(
+    request: NativeToolExecutionRequest,
+    mcp_client_id: Option<&str>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
     // The argument object remains closed even though action-specific decoding follows.
     // 即使后续按动作解码，参数对象仍保持封闭。
     let mut object = request
@@ -438,7 +458,10 @@ async fn execute_knowledge_write(
     let runtime = authorized_runtime(&request, std::slice::from_ref(&library_id)).await?;
     // Audit identity is validated before potentially expensive source expansion.
     // 审计身份在可能昂贵的来源展开前验证。
-    let actor = write_actor(&request)?;
+    let actor = match mcp_client_id {
+        Some(client_id) => KnowledgeWriteActor::McpClient(client_id),
+        None => KnowledgeWriteActor::Conversation(write_actor(&request)?),
+    };
     // The project belongs to the validated host snapshot above.
     // 项目归上方已验证宿主快照所有。
     let project_id = &request
@@ -471,10 +494,19 @@ async fn execute_knowledge_write(
         .map_err(|error| NativeToolError::new(format!("ERR_KNOWLEDGE_ARGUMENTS: {error}")))?;
     // Each successful mutation appends precisely one history record.
     // 每次成功变更精确追加一条历史记录。
-    let receipt = runtime
-        .write_content(&library_id, project_id, mutation, actor)
-        .await
-        .map_err(NativeToolError::new)?;
+    let receipt = match actor {
+        KnowledgeWriteActor::Conversation(actor) => {
+            runtime
+                .write_content(&library_id, project_id, mutation, actor)
+                .await
+        }
+        KnowledgeWriteActor::McpClient(client_id) => {
+            runtime
+                .write_mcp_content(&library_id, project_id, mutation, client_id)
+                .await
+        }
+    }
+    .map_err(NativeToolError::new)?;
     Ok(write_result(
         &library_id,
         &receipt,
