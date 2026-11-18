@@ -75,6 +75,10 @@ pub struct RuntimeFoundationSummary {
     pub warnings: Vec<String>,
 }
 
+/// Indexes package prompt skills by skill ID and installation root name.
+/// 按技能 ID 和安装根名称索引包内提示词技能。
+type LuaSkillsPromptSkillIndex = BTreeMap<(String, String), Vec<vulcan_prompt_skills::PromptSkill>>;
+
 /// In-memory host runtime foundation built from the shared Vulcan configuration file.
 /// 根据共享 Vulcan 配置文件构建的内存态宿主运行时基础架构。
 pub struct RuntimeFoundation {
@@ -104,7 +108,7 @@ pub struct RuntimeFoundation {
     luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
     /// Help trees of every LuaSkills package with at least one explicit or implicit entry.
     /// 至少拥有一个显式或隐式入口的每个 LuaSkills 包的帮助树。
-    luaskills_prompt_skills: BTreeMap<(String, String), Vec<vulcan_prompt_skills::PromptSkill>>,
+    luaskills_prompt_skills: LuaSkillsPromptSkillIndex,
     /// Unified MCP runtime access surface that hides live-versus-configured source selection.
     /// 隐藏实时与配置来源选择细节的统一 MCP 运行时访问面。
     mcp_runtime_access: McpRuntimeAccess,
@@ -856,7 +860,7 @@ fn resolve_luaskills_registrations(
 ) -> (
     Vec<RuntimeEntryDescriptor>,
     Vec<RuntimeEntryDescriptor>,
-    BTreeMap<(String, String), Vec<vulcan_prompt_skills::PromptSkill>>,
+    LuaSkillsPromptSkillIndex,
 ) {
     use crate::provider_config::PersistedLuaSkillToolRegistrationState;
     // Keep package roots in the identity so two installations cannot share guides or modes.

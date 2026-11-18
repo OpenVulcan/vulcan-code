@@ -339,17 +339,17 @@ pub(super) async fn call(
         if allowed.is_empty() {
             return Err("No authorized knowledge libraries are available in this project.".into());
         }
-        if writing && arguments.get("action") == Some(&json!("ingest")) {
-            if (restricted && !client.tool_project_ids.contains(&project.id))
+        if writing
+            && arguments.get("action") == Some(&json!("ingest"))
+            && ((restricted && !client.tool_project_ids.contains(&project.id))
                 || !client
                     .tool_ids
                     .as_ref()
-                    .is_some_and(|ids| ids.iter().any(|id| id == "file_read"))
-            {
-                return Err(
-                    "Knowledge ingest requires file_read access to the source workspace.".into(),
-                );
-            }
+                    .is_some_and(|ids| ids.iter().any(|id| id == "file_read")))
+        {
+            return Err(
+                "Knowledge ingest requires file_read access to the source workspace.".into(),
+            );
         }
         let access = ExecutionKnowledgeAccessContext {
             project_id: project.id.clone(),
