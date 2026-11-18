@@ -648,6 +648,7 @@ it("offers skill and plugin shortcuts and inserts references without sending", a
     workspacePath: null,
     shortcuts: [
       { kind: "skill", name: "session-mcp", label: "Session MCP" },
+      { kind: "skill", name: "luaskills-vulcan-curl:http-workflow", displayName: "http-workflow", label: "HTTP requests" },
       { kind: "plugin", name: "context7", label: "Context7 Docs" },
     ],
   });
@@ -663,12 +664,16 @@ it("offers skill and plugin shortcuts and inserts references without sending", a
     });
   };
   await type("use @");
-  expect(host.querySelector('[role="option"]')?.textContent).toContain("Session MCP");
+  expect(host.querySelector('[role="option"] .vk-mention-names')?.textContent).toBe("session-mcpSession MCP");
   await pressEnter();
   expect(field.value).toBe("use @session-mcp ");
+  await type("use @http");
+  expect(host.querySelector('[role="option"] .vk-mention-names')?.textContent).toBe("http-workflowHTTP requests");
+  await pressEnter();
+  expect(field.value).toBe("use @luaskills-vulcan-curl:http-workflow ");
   await type("use @session-mcp#con");
   const option = host.querySelector<HTMLButtonElement>('[role="option"]')!;
-  expect(option.textContent).toContain("Context7 Docs");
+  expect(option.querySelector(".vk-mention-names")?.textContent).toBe("context7Context7 Docs");
   await act(async () => option.click());
   expect(field.value).toBe("use @session-mcp#context7 ");
   expect(props.onStopConversationRun).not.toHaveBeenCalled();

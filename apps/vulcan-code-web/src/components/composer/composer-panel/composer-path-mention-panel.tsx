@@ -20,30 +20,39 @@ export function ComposerPathMentionPanel(props: { mention: ComposerPathMention; 
   }, [highlightedIndex]);
   return (
     <div aria-label={t(props.mention.marker === "#" ? "area.skills" : "composer.mention.references")} className="vk-slash" data-kind={props.mention.marker === "#" ? "plugin" : "path"} id={props.id} ref={listRef} role="listbox">
-      {suggestions.map((entry, index) => (
-        <button
-          aria-selected={index === highlightedIndex}
-          className="vk-slash-row"
-          id={composerListOptionId(props.id, index)}
-          key={entry.kind === "path" ? `path:${entry.entry.relativePath}` : `${entry.kind}:${entry.name}`}
-          // The textarea keeps focus, so the caret and the @ word stay where they are.
-          // 文本框保持焦点，使光标与 @ 词保持原位。
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => accept(entry)}
-          onMouseEnter={() => setHighlightedIndex(index)}
-          role="option"
-          tabIndex={-1}
-          type="button"
-        >
-          {entry.kind === "path"
-            ? entry.entry.isDirectory ? <Folder aria-hidden="true" /> : <File aria-hidden="true" />
-            : entry.kind === "skill" ? <BookOpen aria-hidden="true" /> : <Puzzle aria-hidden="true" />}
-          <span className="vk-slash-cmd">{entry.kind === "path"
-            ? `${entry.entry.name}${entry.entry.isDirectory ? "/" : ""}`
-            : entry.label}</span>
-          {entry.kind === "path" || entry.label === entry.name ? null : <span className="vk-slash-desc">{entry.name}</span>}
-        </button>
-      ))}
+      {suggestions.map((entry, index) => {
+        // Keep the visible identifier short for bundled guides while retaining the exact reference.
+        // 随包指南显示简短标识，同时保留精确的引用名称。
+        const name = entry.kind === "path"
+          ? `${entry.entry.name}${entry.entry.isDirectory ? "/" : ""}`
+          : entry.displayName ?? entry.name;
+        return (
+          <button
+            aria-selected={index === highlightedIndex}
+            className="vk-slash-row"
+            id={composerListOptionId(props.id, index)}
+            key={entry.kind === "path" ? `path:${entry.entry.relativePath}` : `${entry.kind}:${entry.name}`}
+            // The textarea keeps focus, so the caret and the @ word stay where they are.
+            // 文本框保持焦点，使光标与 @ 词保持原位。
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => accept(entry)}
+            onMouseEnter={() => setHighlightedIndex(index)}
+            role="option"
+            tabIndex={-1}
+            type="button"
+          >
+            {entry.kind === "path"
+              ? entry.entry.isDirectory ? <Folder aria-hidden="true" /> : <File aria-hidden="true" />
+              : entry.kind === "skill" ? <BookOpen aria-hidden="true" /> : <Puzzle aria-hidden="true" />}
+            <span className="vk-mention-names">
+              <span className="vk-slash-cmd" title={entry.kind === "path" ? name : entry.name}>{name}</span>
+              {entry.kind !== "path" && entry.label !== name ? (
+                <span className="vk-slash-desc" title={entry.label}>{entry.label}</span>
+              ) : null}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

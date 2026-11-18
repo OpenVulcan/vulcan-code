@@ -66,6 +66,9 @@ export function pathMentionSuggestions(entries: readonly WorkspaceFileEntrySumma
 export interface ComposerShortcut {
   kind: "skill" | "plugin";
   name: string;
+  // Bundled guides show their declared file name while insertion uses the qualified name.
+  // 随包指南显示声明的文件名，插入时使用带命名空间的完整名称。
+  displayName?: string;
   label: string;
 }
 

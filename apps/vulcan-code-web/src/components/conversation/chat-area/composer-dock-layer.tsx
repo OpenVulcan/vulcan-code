@@ -166,7 +166,7 @@ function ChatAreaComposerDockLayerView(props: ChatAreaComposerDockLayerProps) {
       const registration = skill.registration;
       for (const [guide, locales] of Object.entries(registration.promptSkills)) {
         const name = `luaskills-${skill.skillId}:${guide}`;
-        rows.push({ kind: "skill", name, label: locales[locale]?.title ?? locales[registration.defaultLocale]?.title ?? guide });
+        rows.push({ kind: "skill", name, displayName: guide, label: locales[locale]?.title ?? locales[registration.defaultLocale]?.title ?? guide });
       }
     }
     for (const plugin of inputs.shortcutPlugins ?? []) {
