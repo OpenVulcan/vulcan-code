@@ -104,12 +104,11 @@ export async function verifyTextPhases(container: HTMLElement, root: Root, runAc
   await save(clipped, true)
   await phase("text-clipped")
   await mount(false)
-  // Restore only the third, text-owned inheritance control; recall and retrieval remain untouched.
-  // 仅恢复第三个归属于文本的继承控制项；召回及检索保持不变。
-  const inheritance = Array.from(container.querySelectorAll("button")).filter((button) => button.textContent === "恢复本组全局继承")
-  expect(inheritance).toHaveLength(3)
-  expect(inheritance[2].disabled).toBe(false)
-  await act(async () => inheritance[2].click())
+  // Reset the text group using its stable policy key.
+  // 使用稳定的策略键恢复文本组继承。
+  const inheritance = container.querySelector<HTMLButtonElement>('[data-vmm-host-policy-inherit="text"]')
+  expect(inheritance?.disabled).toBe(false)
+  await act(async () => inheritance!.click())
   await waitResult(8)
   // The restored response must remove the override and project current global values into the editor.
   // 恢复响应必须移除覆盖，并将当前全局值投影到编辑器。

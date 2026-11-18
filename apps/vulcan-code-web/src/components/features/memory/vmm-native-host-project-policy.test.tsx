@@ -136,7 +136,7 @@ it("writes only caller groups, preserves sibling drafts and restores live inheri
       postactionMemoryRefreshWeight: 7, postactionMemoryExpiryMs: 216000000,
       postactionMemoryStability: "working", postactionMemoryLevel: "phase" })
     expect(saved.overrides.text?.maxFragmentTokens).toBe(512)
-    await act(async () => buttons().filter((button) => button.textContent === "改回跟随全局")[0].click())
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-vmm-host-policy-inherit="recall"]')!.click())
     expect(saved.overrides.recall).toBeNull()
     expect(saved.overrides.text?.maxFragmentTokens).toBe(512)
     // An acknowledged recall action must not claim that another group's pending draft was saved.
@@ -148,7 +148,7 @@ it("writes only caller groups, preserves sibling drafts and restores live inheri
     expect(container.querySelector("#caller-policy-postactionMemoryLevel")!.textContent).toBe("稳定级")
     // Restoring retrieval inheritance must preserve the independently saved text group.
     // 恢复检索继承必须保留独立保存的文本组。
-    await act(async () => buttons().filter((button) => button.textContent === "改回跟随全局")[1].click())
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-vmm-host-policy-inherit="retrieval"]')!.click())
     expect(saved.overrides.retrieval).toBeNull()
     expect(saved.overrides.text?.maxFragmentTokens).toBe(512)
     expect(groups[0].querySelector('[role="status"]')).toBeNull()

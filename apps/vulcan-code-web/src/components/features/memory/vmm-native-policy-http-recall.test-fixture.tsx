@@ -139,12 +139,11 @@ export async function verifyRecallPhases(container: HTMLElement, root: Root, run
   await save(strictPolicy, true)
   await phase("recall-strict")
   await mount(false)
-  // Only the first, recall-owned control may restore this group to current global inheritance.
-  // 仅第一个归属于召回的控制项可以将此组恢复为当前全局继承。
-  const inheritance = Array.from(container.querySelectorAll("button")).filter((button) => button.textContent === "恢复本组全局继承")
-  expect(inheritance).toHaveLength(3)
-  expect(inheritance[0].disabled).toBe(false)
-  await act(async () => inheritance[0].click())
+  // Reset the recall group using its stable policy key.
+  // 使用稳定的策略键恢复召回组继承。
+  const inheritance = container.querySelector<HTMLButtonElement>('[data-vmm-host-policy-inherit="recall"]')
+  expect(inheritance?.disabled).toBe(false)
+  await act(async () => inheritance!.click())
   await waitResult(8)
   // The server must acknowledge absence of an override, not an override equal to current defaults.
   // 服务必须确认没有覆盖，而不是与当前默认值相等的覆盖。

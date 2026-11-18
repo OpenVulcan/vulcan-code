@@ -185,12 +185,11 @@ it.skipIf(!handshakeDirectory)("saves actual policy components through private H
     expect(results[3].data.value.overrides.retrieval).toEqual(hostPolicy)
     expect(results[3].data.value.effective.retrieval).toEqual(hostPolicy)
     await phase(handshakeDirectory, "host")
-    // The component declares recall/retrieval/text inheritance controls in exactly this order.
-    // 组件明确按召回、检索、文本的顺序声明继承控制项。
-    const inherit = Array.from(container.querySelectorAll("button")).filter((button) => button.textContent === "改回跟随全局")
-    expect(inherit).toHaveLength(3)
-    expect(inherit[1].disabled).toBe(false)
-    await act(async () => inherit[1].click())
+    // Reset the retrieval group using its stable policy key.
+    // 使用稳定的策略键恢复检索组继承。
+    const inherit = container.querySelector<HTMLButtonElement>('[data-vmm-host-policy-inherit="retrieval"]')
+    expect(inherit?.disabled).toBe(false)
+    await act(async () => inherit!.click())
     await act(async () => { await vi.waitFor(() => expect(results).toHaveLength(5), { timeout: 10000 }) })
     if (results[4].data.kind !== "native_host_project_policy") throw new Error("Expected restored host policy")
     expect(results[4].data.value.overrides.retrieval).toBeNull()

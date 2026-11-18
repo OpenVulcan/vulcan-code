@@ -120,7 +120,7 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
   // inheritance 渲染当前来源及单个配置组的显式独立重置。
   const inheritance = (group: keyof VmmNativeHostProjectPolicyOverrides) => <div className="vk-form-bar vk-form-sm">
     <span>{t(policy!.overrides[group] === null ? "memory.hostPolicy.inherited" : "memory.hostPolicy.overridden")}</span>
-    <Button variant="outline" disabled={disabled || policy!.overrides[group] === null} onClick={() => void save(group, null)}>{t("memory.hostPolicy.inherit")}</Button>
+    <Button data-vmm-host-policy-inherit={group} variant="outline" disabled={disabled || policy!.overrides[group] === null} onClick={() => void save(group, null)}>{t("memory.hostPolicy.inherit")}</Button>
   </div>
   // source keeps each group's acknowledged source visible while its mounted editor is collapsed.
   // source 在已挂载的编辑器折叠时仍显示各组已确认的配置来源。
