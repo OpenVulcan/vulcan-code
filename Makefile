@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync sync-release vite start stop status build build-release release clean prune run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-vldb deps-tools deps-lua init-system deps-rust-tools vldb tools lua rust-tools all
+.PHONY: help sync sync-release vite start stop status build build-release release clean prune run run-release service core-build core-restart br br-release bt licenses check test test-vmm-http full deps deps-all deps-vldb deps-tools deps-lua init-system deps-rust-tools vldb tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -83,7 +83,8 @@ help:
 	@echo "  make licenses      # generate Rust third-party notices"
 	@echo "  make check         # static gates: fmt, clippy -D warnings, lint, typecheck"
 	@echo "  make test          # Rust tests without long real-time and plugin-lifecycle tests"
-	@echo "  make test full     # every Rust test, isolated LuaSkills callbacks, and doctests"
+	@echo "  make test full     # full Rust suite, isolated LuaSkills callbacks, and doctests"
+	@echo "  make test-vmm-http # opt-in VMM WebUI and Rust HTTP acceptance"
 	@echo "  make deps          # install bundled tools (sg, rg, rtk) and Lua dependencies"
 	@echo "  make init-system   # bootstrap Rust tools and all repository dependencies"
 	@echo "  make deps-vldb     # install vldb-controller host dependency"
@@ -220,6 +221,11 @@ check:
 # test 默认路由快速 Rust 测试，存在 full 伴随目标时路由完整测试。
 test:
 	$(call route-command,$(if $(filter full,$(MAKECMDGOALS)),test full,test))
+
+# test-vmm-http runs the paired VMM acceptance test only when explicitly selected.
+# test-vmm-http 仅在显式选择时运行 VMM 双端验收测试。
+test-vmm-http:
+	$(call route-command,test vmm-http)
 
 # full is a companion no-op for `make test full` and rejects ambiguous standalone use.
 # full 在 `make test full` 中作为伴随空目标，并拒绝含义不明确的单独调用。

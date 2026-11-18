@@ -217,7 +217,8 @@ show_usage() {
     echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     echo "  ./make.sh check       # static gates: fmt, clippy -D warnings, lint, typecheck"
     echo "  ./make.sh test        # Rust tests without long real-time and plugin-lifecycle tests"
-    echo "  ./make.sh test full   # every Rust test, isolated LuaSkills callbacks, and doctests"
+    echo "  ./make.sh test full   # full Rust suite, isolated LuaSkills callbacks, and doctests"
+    echo "  ./make.sh test vmm-http # opt-in VMM WebUI and Rust HTTP acceptance"
     echo "  ./make.sh run         # run Electron desktop; start Vite when needed"
     echo "  ./make.sh run release # run Core/Electron/WebUI release build"
     echo "  ./make.sh service     # run Core without a tray or desktop"
@@ -351,6 +352,7 @@ case "$NormalizedMode" in
         case "$NormalizedVariant" in
             "") node "$ScriptDir/scripts/test-rust.mjs" fast ;;
             full) node "$ScriptDir/scripts/test-rust.mjs" full ;;
+            vmm-http) node "$ScriptDir/scripts/test-vmm-http.mjs" ;;
             *)
                 echo "Unsupported test command: '$CommandVariant'" >&2
                 show_usage

@@ -33,6 +33,12 @@ cargo nextest run -p <crate> --stress-count 10 --no-fail-fast -E 'test(/<受影�
 
 只在并行负载下出现的失败按缺陷处理：先用 `--stress-count` 或叠加负载复现，再定位根因。`shared-runtime-resources` 串行组只收纳确实共享进程外资源（供应商清单、端口、注册表等）的测试；资源已按测试隔离时，不得以加入串行组代替修复，否则会掩盖真实竞态。
 
+## VMM 的 WebUI 与 HTTP 验收
+
+修改 VMM 策略界面、HTTP 动作、持久化或后台调度时，显式执行 `make test-vmm-http`。Windows 也可运行 `./make.ps1 test vmm-http`。普通 WebUI 测试和 `make test`、`make test full` 默认跳过此用例。
+
+入口为每次运行创建 `target/vmm-http-acceptance/run-*`，把目录只传给本轮的 Rust 和 Vitest 进程。Rust 的回环 HTTP 服务就绪后，Vitest 才驱动实际策略组件；两端都通过才算成功。握手目录保留阶段标记，临时发现凭据在结束时清理。
+
 ## 其余显式测试分类
 
 本清单记录审查时的名称和前置条件；真实属性和代码仍是执行权威。新增或改名时同步更新清单。配置好对应前置条件后按**单个测试名**执行：
@@ -73,5 +79,6 @@ cargo nextest run --locked --lib -p <crate> --run-ignored only --test-threads=1 
 | --- | --- | --- |
 | vulcan-service-kernel | `live_saved_fixed_model_generates_git_summary_without_mutating_user_settings` | 明确允许计费调用并设置 `GIT_SUMMARY_LIVE_ACCEPTANCE=1` |
 | vulcan-service-kernel | `live_saved_routes_execute_native_vmm_contract_and_lifecycle` | 明确允许计费调用并设置 `NATIVE_VMM_LIVE_ACCEPTANCE=1` |
-| vulcan-service-kernel | `real_controller_policy_components_over_http`、`real_controller_native_workbench_over_http` | 使用各自的私有浏览器验收入口，不作为自动结束的普通测试 |
+| vulcan-service-kernel | `real_controller_policy_components_over_http` | `make test-vmm-http` 配对运行隔离 Rust 服务和 WebUI 用例 |
+| vulcan-service-kernel | `real_controller_native_workbench_over_http` | 使用私有工作台浏览器验收入口 |
 | vulcan-workspace-store | `writer_lease_child` | 仅由有界父测试以专用环境启动 |

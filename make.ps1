@@ -367,7 +367,8 @@ function Show-Usage {
     Write-Host "  ./make check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     Write-Host "  ./make check       # static gates: fmt, clippy -D warnings, lint, typecheck"
     Write-Host "  ./make test        # Rust tests without long real-time and plugin-lifecycle tests"
-    Write-Host "  ./make test full   # every Rust test, isolated LuaSkills callbacks, and doctests"
+    Write-Host "  ./make test full   # full Rust suite, isolated LuaSkills callbacks, and doctests"
+    Write-Host "  ./make.ps1 test vmm-http # opt-in VMM WebUI and Rust HTTP acceptance"
     Write-Host "  ./make run         # run Electron desktop; start Vite when needed"
     Write-Host "  ./make run release # run Core/Electron/WebUI release build"
     Write-Host "  ./make service     # run Core without a tray or desktop"
@@ -527,6 +528,10 @@ switch ($NormalizedMode) {
         exit $CheckExitCode
     }
     "test" {
+        if ($NormalizedVariant -eq "vmm-http") {
+            & node (Join-Path $ScriptDir 'scripts/test-vmm-http.mjs')
+            exit $LASTEXITCODE
+        }
         if ($NormalizedVariant -ne "" -and $NormalizedVariant -ne "full") {
             Write-Error "Unsupported test command: '$CommandVariant'"
             Show-Usage
