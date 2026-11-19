@@ -1,0 +1,173 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "openai-public-api-gpt-image-2.6-sunburst-generate",
+  "base_manifest": "openai.json",
+  "production_target_refs": [
+    "openai::public-api.gpt-image-2.6-sunburst.generate",
+    "openai::public-api.gpt-image-2.6-flare.generate"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-gpt-image-2.6-sunburst.generate",
+    "description": "Generate images from text. Use complexity to adjust planning effort and quality to adjust rendering.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "gpt-image-2.6-sunburst",
+    "availability_model_ids_any": [
+      "gpt-image-2.6-sunburst"
+    ],
+    "display_name": "GPT Image 2.6 Sunburst Generation",
+    "tool_id": "fixture_openai_image_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "const": "gpt-image-2.6-sunburst",
+          "default": "gpt-image-2.6-sunburst",
+          "description": "Exact image model selected by this target."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32000,
+          "description": "Describe the requested image, composition, content, and style."
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Rendering quality for this model."
+        },
+        "output_format": {
+          "type": "string",
+          "enum": [
+            "png",
+            "jpeg",
+            "webp",
+            "svg",
+            "gif"
+          ],
+          "default": "png",
+          "description": "Returned image encoding."
+        },
+        "stream": {
+          "type": "boolean",
+          "const": false,
+          "default": false,
+          "description": "This target uses one synchronous JSON response."
+        },
+        "complexity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "high",
+          "description": "Planning effort, independent of rendering quality."
+        }
+      },
+      "required": [
+        "prompt"
+      ]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/svg+xml",
+        "image/gif"
+      ],
+      "resource_decoders": [
+        {
+          "source_path": "/data",
+          "item_source_path": "/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type_request_path": "/output_format",
+          "mime_types_by_request_value": {
+            "png": "image/png",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp",
+            "svg": "image/svg+xml",
+            "gif": "image/gif"
+          },
+          "max_bytes": 104857600,
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/openai-public-api-gpt-image-2.6-sunburst-generate",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.openai-public-api-gpt-image-2.6-sunburst-generate",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [
+      "image"
+    ],
+    "tool_target_refs": [
+      "public-api.fixture-gpt-image-2.6-sunburst.generate"
+    ],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 300000,
+    "idempotent": false
+  },
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "arguments": {
+    "prompt": "Render a blue circle.",
+    "complexity": "low",
+    "quality": "high",
+    "output_format": "svg"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/openai-public-api-gpt-image-2.6-sunburst-generate",
+      "expected_json_body": {
+        "prompt": "Render a blue circle.",
+        "complexity": "low",
+        "quality": "high",
+        "output_format": "svg",
+        "model": "gpt-image-2.6-sunburst",
+        "stream": false
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": [
+          {
+            "b64_json": "PHN2Zy8+"
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

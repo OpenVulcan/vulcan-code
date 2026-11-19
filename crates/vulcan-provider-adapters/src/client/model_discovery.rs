@@ -32,7 +32,7 @@ const MODEL_DISCOVERY_MAX_PAGES: u32 = 1_024;
 /// 向账号模型目录声明的 Codex 客户端版本；目录会隐藏服务端最低版本更新的模型。上游内置的
 /// `minimal_client_version` 低于实际要求（GPT-6.1 Sol 标注 0.153.0，0.155.0 仍隐藏，0.160.0 才列出），
 /// 因此跟随已发布的官方客户端版本。
-const OPENAI_CODEX_DISCOVERY_CLIENT_VERSION: &str = "0.163.0";
+const OPENAI_CODEX_DISCOVERY_CLIENT_VERSION: &str = "0.170.0";
 
 /// Resolves the shared custom catalog URL from its entry-owned base and optional path.
 /// 从入口持有的基础地址及可选路径解析共享自定义目录 URL。

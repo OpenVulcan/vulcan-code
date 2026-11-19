@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 28,
-  "published_at": "2026-11-08T06:25:07Z",
+  "revision": 29,
+  "published_at": "2026-11-19T06:05:03Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -274,6 +274,70 @@
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
     {
+      "rule_id": "public-api-gpt-6-2-sol",
+      "display_name": "GPT-6.2 Sol",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.2-sol"
+      },
+      "core_model_ref": "gpt-6.2-sol",
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "provider_native_tools": [],
+        "evidence_revision": "openai.public-api.gpt-6.2.20261119"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.gpt-6.2.20261119"
+        }
+      },
+      "provenance_ref": "https://developers.openai.com/api/docs/models/gpt-6.2-sol"
+    },
+    {
+      "rule_id": "public-api-gpt-6-2-astra",
+      "display_name": "GPT-6.2 Astra",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.2-astra"
+      },
+      "core_model_ref": "gpt-6.2-astra",
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "provider_native_tools": [],
+        "evidence_revision": "openai.public-api.gpt-6.2.20261119"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.gpt-6.2.20261119"
+        }
+      },
+      "provenance_ref": "https://developers.openai.com/api/docs/models/gpt-6.2-astra"
+    },
+    {
       "rule_id": "public-api-gpt-6-astra",
       "display_name": "GPT-6 Astra",
       "scope": {
@@ -464,6 +528,72 @@
         "public-api.gpt-image.generate"
       ],
       "provenance_ref": "https://developers.openai.com/api/reference/resources/images/methods/generate"
+    },
+    {
+      "rule_id": "public-api-gpt-image-2-6-sunburst",
+      "display_name": "GPT Image 2.6 Sunburst",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-image-2.6-sunburst"
+      },
+      "core_model_ref": "gpt-image-2.6-sunburst",
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "provider_native_tools": [],
+        "context_limit": null,
+        "output_limit": null,
+        "evidence_revision": "openai.public-api.images.2.6.20261119"
+      },
+      "operation_refs": [
+        "public-api.gpt-image.generate",
+        "public-api.gpt-image-2.6.edit"
+      ],
+      "provenance_ref": "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst"
+    },
+    {
+      "rule_id": "public-api-gpt-image-2-6-flare",
+      "display_name": "GPT Image 2.6 Flare",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-image-2.6-flare"
+      },
+      "core_model_ref": "gpt-image-2.6-flare",
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "provider_native_tools": [],
+        "context_limit": null,
+        "output_limit": null,
+        "evidence_revision": "openai.public-api.images.2.6.20261119"
+      },
+      "operation_refs": [
+        "public-api.gpt-image.generate",
+        "public-api.gpt-image-2.6.edit"
+      ],
+      "provenance_ref": "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare"
     },
     {
       "rule_id": "public-api-gpt-image-2-5-flare",
@@ -714,6 +844,140 @@
       "scope": {"service_entry_ids": ["codex-subscription"]}
     },
     {
+      "rule_id": "codex-gpt-6-2-sol",
+      "display_name": "GPT-6.2 Sol",
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.2-sol"
+      },
+      "core_model_ref": "gpt-6.2-sol",
+      "supported_protocols": [
+        "openai-codex-responses.v1"
+      ],
+      "selected_protocol": "openai-codex-responses.v1",
+      "codex_behavior": {
+        "wire_dialect": "lite",
+        "apply_patch_tool_type": "freeform",
+        "shell_type": "shell_command",
+        "web_search_tool_type": "text_and_image",
+        "supports_search_tool": true,
+        "experimental_supported_tools": [
+          "request_user_input_async",
+          "send_message_to_user_async",
+          "clock",
+          "literature_search_query",
+          "multi_agent_v2_in_code_mode"
+        ],
+        "supports_parallel_tool_calls": true,
+        "supports_image_detail_original": true,
+        "supports_verbosity": true,
+        "default_verbosity": "low",
+        "multi_agent_version": "v2",
+        "multi_agent_reasoning_effort": "xhigh",
+        "include_skills_usage_instructions": false,
+        "include_apps_usage_instructions": false,
+        "include_plugin_usage_instructions": false,
+        "node_repl_disabled": false,
+        "node_repl_auto_review_required": true,
+        "requires_sandboxed_review": false,
+        "comp_hash": "3000",
+        "tool_output_truncation": {
+          "mode": "tokens",
+          "limit": 10000
+        },
+        "prefer_websockets": true,
+        "supports_experimental_context": false
+      },
+      "capabilities": {
+        "input_resources": [
+          "image"
+        ],
+        "provider_native_tools": [],
+        "evidence_revision": "openai.codex.0.170.0",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "scope": {
+        "service_entry_ids": [
+          "codex-subscription"
+        ]
+      },
+      "provenance_ref": "https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/models-manager/models.json"
+    },
+    {
+      "rule_id": "codex-gpt-6-2-astra",
+      "display_name": "GPT-6.2 Astra",
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.2-astra"
+      },
+      "core_model_ref": "gpt-6.2-astra",
+      "supported_protocols": [
+        "openai-codex-responses.v1"
+      ],
+      "selected_protocol": "openai-codex-responses.v1",
+      "codex_behavior": {
+        "wire_dialect": "lite",
+        "apply_patch_tool_type": "freeform",
+        "shell_type": "shell_command",
+        "web_search_tool_type": "text_and_image",
+        "supports_search_tool": true,
+        "experimental_supported_tools": [
+          "request_user_input_async",
+          "send_message_to_user_async",
+          "clock",
+          "literature_search_query",
+          "multi_agent_v2_in_code_mode"
+        ],
+        "supports_parallel_tool_calls": true,
+        "supports_image_detail_original": true,
+        "supports_verbosity": true,
+        "default_verbosity": "low",
+        "multi_agent_version": "v2",
+        "multi_agent_reasoning_effort": "xhigh",
+        "include_skills_usage_instructions": false,
+        "include_apps_usage_instructions": false,
+        "include_plugin_usage_instructions": false,
+        "node_repl_disabled": false,
+        "node_repl_auto_review_required": true,
+        "requires_sandboxed_review": false,
+        "comp_hash": "3000",
+        "tool_output_truncation": {
+          "mode": "tokens",
+          "limit": 10000
+        },
+        "prefer_websockets": true,
+        "supports_experimental_context": false
+      },
+      "capabilities": {
+        "input_resources": [
+          "image"
+        ],
+        "provider_native_tools": [],
+        "evidence_revision": "openai.codex.0.170.0",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "scope": {
+        "service_entry_ids": [
+          "codex-subscription"
+        ]
+      },
+      "provenance_ref": "https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/models-manager/models.json"
+    },
+    {
       "rule_id": "codex-gpt-6-1-sol",
       "display_name": "GPT-6.1 Sol",
       "matcher": {"kind": "exact", "value": "gpt-6.1-sol"},
@@ -830,6 +1094,126 @@
   ],
   "usage_profiles": [],
   "request_profiles": [
+    {
+      "profile_id": "openai.public-api.image-edit.request.v1",
+      "description": "Project ordered source images and optional PNG guidance into the OpenAI Images edit request.",
+      "payload": {
+        "profile_id": "openai.public-api.image-edit.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {
+                "$vulcan_model_id": true
+              },
+              "prompt": {
+                "$vulcan_ref": {
+                  "path": "/prompt"
+                }
+              },
+              "images": {
+                "$vulcan_map": {
+                  "path": "/source_images",
+                  "template": {
+                    "image_url": {
+                      "$vulcan_ref": {
+                        "scope": "item",
+                        "path": ""
+                      }
+                    }
+                  }
+                }
+              },
+              "mask": {
+                "$vulcan_ref": {
+                  "path": "/mask",
+                  "optional": true
+                }
+              },
+              "markup": {
+                "$vulcan_ref": {
+                  "path": "/markup",
+                  "optional": true
+                }
+              },
+              "n": {
+                "$vulcan_ref": {
+                  "path": "/n",
+                  "optional": true
+                }
+              },
+              "size": {
+                "$vulcan_ref": {
+                  "path": "/size",
+                  "optional": true
+                }
+              },
+              "quality": {
+                "$vulcan_ref": {
+                  "path": "/quality",
+                  "optional": true
+                }
+              },
+              "complexity": {
+                "$vulcan_ref": {
+                  "path": "/complexity",
+                  "optional": true
+                }
+              },
+              "background": {
+                "$vulcan_ref": {
+                  "path": "/background",
+                  "optional": true
+                }
+              },
+              "output_format": {
+                "$vulcan_ref": {
+                  "path": "/output_format",
+                  "optional": true
+                }
+              },
+              "output_compression": {
+                "$vulcan_ref": {
+                  "path": "/output_compression",
+                  "optional": true
+                }
+              },
+              "moderation": {
+                "$vulcan_ref": {
+                  "path": "/moderation",
+                  "optional": true
+                }
+              },
+              "safety_identifier": {
+                "$vulcan_ref": {
+                  "path": "/safety_identifier",
+                  "optional": true
+                }
+              },
+              "stream": {
+                "$vulcan_ref": {
+                  "path": "/stream",
+                  "optional": true
+                }
+              },
+              "frame_count": {
+                "$vulcan_ref": {
+                  "path": "/frame_count",
+                  "optional": true
+                }
+              },
+              "frame_duration_ms": {
+                "$vulcan_ref": {
+                  "path": "/frame_duration_ms",
+                  "optional": true
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
     {
       "profile_id": "openai-codex.service-tier.v1",
       "description": "Copies the Codex plan service tier the user selected for this model into the request body",
@@ -1102,6 +1486,21 @@
       "reference_scope": "credential"
     },
     {
+      "upload_channel_id": "public-api.image-edit-data-url",
+      "description": "Materialize local edit images as inline Data URLs within the Images API JSON reference length limit.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/webp"
+      ],
+      "max_bytes": 15728622,
+      "max_count": 17,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    },
+    {
       "upload_channel_id": "public-api.audio-data-url",
       "description": "Materialize one local audio file as an inline Data URL for the multipart transcription request; the Audio API caps files at 25 MB.",
       "primitive": "inline_data_url",
@@ -1139,12 +1538,79 @@
       "tool_target_refs": [
         "public-api.gpt-image-2.generate",
         "public-api.gpt-image-2.5-flare.generate",
-        "public-api.gpt-image-2.5-sunburst.generate"
+        "public-api.gpt-image-2.5-sunburst.generate",
+        "public-api.gpt-image-2.6-sunburst.generate",
+        "public-api.gpt-image-2.6-flare.generate"
       ],
       "request_profile_refs": [],
       "response_profile_refs": [],
       "upload_channel_refs": [],
       "upload_bindings": [],
+      "timeout_ms": 300000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "public-api.gpt-image-2.6.edit",
+      "operation": "image_edit",
+      "carrier": "provider_tool",
+      "input_resources": [
+        "image"
+      ],
+      "output_resources": [
+        "image"
+      ],
+      "tool_target_refs": [
+        "public-api.gpt-image-2.6-sunburst.edit",
+        "public-api.gpt-image-2.6-flare.edit"
+      ],
+      "request_profile_refs": [
+        "openai.public-api.image-edit.request.v1"
+      ],
+      "response_profile_refs": [],
+      "upload_channel_refs": [
+        "public-api.image-edit-data-url"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/source_paths",
+          "target_path": "/source_images",
+          "upload_channel_refs": [
+            "public-api.image-edit-data-url"
+          ],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": true,
+          "remove_source": true
+        },
+        {
+          "source_path": "/mask_path",
+          "target_path": "/mask/image_url",
+          "upload_channel_refs": [
+            "public-api.image-edit-data-url"
+          ],
+          "mime_types_by_extension": {
+            "png": "image/png"
+          },
+          "required": false,
+          "remove_source": true
+        },
+        {
+          "source_path": "/markup_path",
+          "target_path": "/markup/image_url",
+          "upload_channel_refs": [
+            "public-api.image-edit-data-url"
+          ],
+          "mime_types_by_extension": {
+            "png": "image/png"
+          },
+          "required": false,
+          "remove_source": true
+        }
+      ],
       "timeout_ms": 300000,
       "idempotent": false
     },
@@ -1442,6 +1908,1294 @@
       },
       "execution": {
         "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.gpt-image-2.6-sunburst.generate",
+      "description": "Generate images from text. Use complexity to adjust planning effort and quality to adjust rendering.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2.6-sunburst",
+      "availability_model_ids_any": [
+        "gpt-image-2.6-sunburst"
+      ],
+      "display_name": "GPT Image 2.6 Sunburst Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2.6-sunburst",
+            "default": "gpt-image-2.6-sunburst",
+            "description": "Exact image model selected by this target."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Describe the requested image, composition, content, and style."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to return; every image is retained."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Rendering quality for this model."
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+            "default": "auto",
+            "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "opaque",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Transparent backgrounds require PNG or WebP."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp",
+              "svg",
+              "gif"
+            ],
+            "default": "png",
+            "description": "Returned image encoding."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+          },
+          "moderation": {
+            "type": "string",
+            "enum": [
+              "low",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Provider content filtering level."
+          },
+          "safety_identifier": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false,
+            "default": false,
+            "description": "This target uses one synchronous JSON response."
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "default": "high",
+            "description": "Planning effort, independent of rendering quality."
+          },
+          "frame_count": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 16,
+            "description": "GIF preview frame count. Omit for the provider default of 9."
+          },
+          "frame_duration_ms": {
+            "type": "integer",
+            "minimum": 20,
+            "description": "GIF preview frame delay in milliseconds. Omit for the provider default of 200."
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "background": {
+                  "const": "transparent"
+                }
+              },
+              "required": [
+                "background"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "png",
+                    "webp"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "output_compression"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "jpeg",
+                    "webp"
+                  ]
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "output_format": {
+                  "const": "svg"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            },
+            "then": {
+              "properties": {
+                "n": {
+                  "const": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "anyOf": [
+                {
+                  "required": [
+                    "frame_count"
+                  ]
+                },
+                {
+                  "required": [
+                    "frame_duration_ms"
+                  ]
+                }
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "const": "gif"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          }
+        ]
+      },
+      "extension_profile": {
+        "summary": "Official synchronous text-to-image generation with model-specific quality settings.",
+        "input_modes": [
+          "text"
+        ],
+        "resolution_policy": {
+          "mode": "bounded_custom",
+          "custom_bounds": {
+            "minimum_width": 16,
+            "maximum_width": 3840,
+            "minimum_height": 16,
+            "maximum_height": 3840,
+            "step": 16,
+            "minimum_pixels": 655360,
+            "maximum_pixels": 8294400
+          }
+        },
+        "format_policy": {
+          "output_formats": [
+            "png",
+            "jpeg",
+            "webp",
+            "svg",
+            "gif"
+          ]
+        },
+        "constraints": [
+          "Each custom dimension must be a multiple of 16 pixels.",
+          "The longer-to-shorter edge ratio must not exceed 3:1.",
+          "Transparent backgrounds require PNG or WebP.",
+          "PNG requests must omit output_compression."
+        ],
+        "limitations": [
+          "GIF output requires account access to the model's GIF preview.",
+          "SVG output returns one image per request."
+        ],
+        "evidence_refs": [
+          "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst",
+          "https://developers.openai.com/api/docs/guides/image-generation"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/svg+xml",
+          "image/gif"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "png": "image/png",
+              "jpeg": "image/jpeg",
+              "webp": "image/webp",
+              "svg": "image/svg+xml",
+              "gif": "image/gif"
+            },
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.gpt-image-2.6-sunburst.edit",
+      "description": "Edit ordered local reference images with an optional PNG mask or markup. Use complexity to adjust planning effort and quality to adjust rendering.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2.6-sunburst",
+      "availability_model_ids_any": [
+        "gpt-image-2.6-sunburst"
+      ],
+      "display_name": "GPT Image 2.6 Sunburst Edit",
+      "tool_id": "vulcan_image_edit",
+      "capability": "image_edit",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2.6-sunburst",
+            "default": "gpt-image-2.6-sunburst",
+            "description": "Exact image model selected by this target."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Describe the requested image, composition, content, and style."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to return; every image is retained."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Rendering quality for this model."
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+            "default": "auto",
+            "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "opaque",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Transparent backgrounds require PNG or WebP."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp",
+              "svg",
+              "gif"
+            ],
+            "default": "png",
+            "description": "Returned image encoding."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+          },
+          "moderation": {
+            "type": "string",
+            "enum": [
+              "low",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Provider content filtering level."
+          },
+          "safety_identifier": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false,
+            "default": false,
+            "description": "This target uses one synchronous JSON response."
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "default": "high",
+            "description": "Planning effort, independent of rendering quality."
+          },
+          "frame_count": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 16,
+            "description": "GIF preview frame count. Omit for the provider default of 9."
+          },
+          "frame_duration_ms": {
+            "type": "integer",
+            "minimum": 20,
+            "description": "GIF preview frame delay in milliseconds. Omit for the provider default of 200."
+          },
+          "source_paths": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Local image paths in provider order. Mask or markup applies to the first image."
+          },
+          "mask_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional local PNG mask matching the first source image dimensions, with transparency marking the area to edit."
+          },
+          "markup_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional local transparent PNG annotation layer matching the first source image dimensions."
+          }
+        },
+        "required": [
+          "prompt",
+          "source_paths"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "background": {
+                  "const": "transparent"
+                }
+              },
+              "required": [
+                "background"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "png",
+                    "webp"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "output_compression"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "jpeg",
+                    "webp"
+                  ]
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "output_format": {
+                  "const": "svg"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            },
+            "then": {
+              "properties": {
+                "n": {
+                  "const": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "anyOf": [
+                {
+                  "required": [
+                    "frame_count"
+                  ]
+                },
+                {
+                  "required": [
+                    "frame_duration_ms"
+                  ]
+                }
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "const": "gif"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "mask_path"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "not": {
+                    "const": "gif"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "not": {
+          "required": [
+            "mask_path",
+            "markup_path"
+          ]
+        }
+      },
+      "extension_profile": {
+        "summary": "Edit one to sixteen local images using the official synchronous OpenAI Images API.",
+        "input_modes": [
+          "reference_image"
+        ],
+        "resolution_policy": {
+          "mode": "bounded_custom",
+          "custom_bounds": {
+            "minimum_width": 16,
+            "maximum_width": 3840,
+            "minimum_height": 16,
+            "maximum_height": 3840,
+            "step": 16,
+            "minimum_pixels": 655360,
+            "maximum_pixels": 8294400
+          }
+        },
+        "format_policy": {
+          "output_formats": [
+            "png",
+            "jpeg",
+            "webp",
+            "svg",
+            "gif"
+          ],
+          "input_formats": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "constraints": [
+          "Each custom dimension must be a multiple of 16 pixels.",
+          "The longer-to-shorter edge ratio must not exceed 3:1.",
+          "Transparent backgrounds require PNG or WebP.",
+          "PNG requests must omit output_compression."
+        ],
+        "limitations": [
+          "GIF output requires account access to the model's GIF preview.",
+          "SVG output returns one image per request."
+        ],
+        "evidence_refs": [
+          "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst",
+          "https://developers.openai.com/api/docs/guides/image-generation"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/svg+xml",
+          "image/gif"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "png": "image/png",
+              "jpeg": "image/jpeg",
+              "webp": "image/webp",
+              "svg": "image/svg+xml",
+              "gif": "image/gif"
+            },
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/edits",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.gpt-image-2.6-flare.generate",
+      "description": "Generate images from text. Use complexity to adjust planning effort and quality to adjust rendering.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2.6-flare",
+      "availability_model_ids_any": [
+        "gpt-image-2.6-flare"
+      ],
+      "display_name": "GPT Image 2.6 Flare Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2.6-flare",
+            "default": "gpt-image-2.6-flare",
+            "description": "Exact image model selected by this target."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Describe the requested image, composition, content, and style."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to return; every image is retained."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Rendering quality for this model."
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+            "default": "auto",
+            "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "opaque",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Transparent backgrounds require PNG or WebP."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp",
+              "svg",
+              "gif"
+            ],
+            "default": "png",
+            "description": "Returned image encoding."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+          },
+          "moderation": {
+            "type": "string",
+            "enum": [
+              "low",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Provider content filtering level."
+          },
+          "safety_identifier": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false,
+            "default": false,
+            "description": "This target uses one synchronous JSON response."
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "default": "high",
+            "description": "Planning effort, independent of rendering quality."
+          },
+          "frame_count": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 16,
+            "description": "GIF preview frame count. Omit for the provider default of 9."
+          },
+          "frame_duration_ms": {
+            "type": "integer",
+            "minimum": 20,
+            "description": "GIF preview frame delay in milliseconds. Omit for the provider default of 200."
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "background": {
+                  "const": "transparent"
+                }
+              },
+              "required": [
+                "background"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "png",
+                    "webp"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "output_compression"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "jpeg",
+                    "webp"
+                  ]
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "output_format": {
+                  "const": "svg"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            },
+            "then": {
+              "properties": {
+                "n": {
+                  "const": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "anyOf": [
+                {
+                  "required": [
+                    "frame_count"
+                  ]
+                },
+                {
+                  "required": [
+                    "frame_duration_ms"
+                  ]
+                }
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "const": "gif"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          }
+        ]
+      },
+      "extension_profile": {
+        "summary": "Official synchronous text-to-image generation with model-specific quality settings.",
+        "input_modes": [
+          "text"
+        ],
+        "resolution_policy": {
+          "mode": "bounded_custom",
+          "custom_bounds": {
+            "minimum_width": 16,
+            "maximum_width": 3840,
+            "minimum_height": 16,
+            "maximum_height": 3840,
+            "step": 16,
+            "minimum_pixels": 655360,
+            "maximum_pixels": 8294400
+          }
+        },
+        "format_policy": {
+          "output_formats": [
+            "png",
+            "jpeg",
+            "webp",
+            "svg",
+            "gif"
+          ]
+        },
+        "constraints": [
+          "Each custom dimension must be a multiple of 16 pixels.",
+          "The longer-to-shorter edge ratio must not exceed 3:1.",
+          "Transparent backgrounds require PNG or WebP.",
+          "PNG requests must omit output_compression."
+        ],
+        "limitations": [
+          "GIF output requires account access to the model's GIF preview.",
+          "SVG output returns one image per request."
+        ],
+        "evidence_refs": [
+          "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
+          "https://developers.openai.com/api/docs/guides/image-generation"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/svg+xml",
+          "image/gif"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "png": "image/png",
+              "jpeg": "image/jpeg",
+              "webp": "image/webp",
+              "svg": "image/svg+xml",
+              "gif": "image/gif"
+            },
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.gpt-image-2.6-flare.edit",
+      "description": "Edit ordered local reference images with an optional PNG mask or markup. Use complexity to adjust planning effort and quality to adjust rendering.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2.6-flare",
+      "availability_model_ids_any": [
+        "gpt-image-2.6-flare"
+      ],
+      "display_name": "GPT Image 2.6 Flare Edit",
+      "tool_id": "vulcan_image_edit",
+      "capability": "image_edit",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2.6-flare",
+            "default": "gpt-image-2.6-flare",
+            "description": "Exact image model selected by this target."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Describe the requested image, composition, content, and style."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to return; every image is retained."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Rendering quality for this model."
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+            "default": "auto",
+            "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "opaque",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Transparent backgrounds require PNG or WebP."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp",
+              "svg",
+              "gif"
+            ],
+            "default": "png",
+            "description": "Returned image encoding."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+          },
+          "moderation": {
+            "type": "string",
+            "enum": [
+              "low",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Provider content filtering level."
+          },
+          "safety_identifier": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false,
+            "default": false,
+            "description": "This target uses one synchronous JSON response."
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "default": "high",
+            "description": "Planning effort, independent of rendering quality."
+          },
+          "frame_count": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 16,
+            "description": "GIF preview frame count. Omit for the provider default of 9."
+          },
+          "frame_duration_ms": {
+            "type": "integer",
+            "minimum": 20,
+            "description": "GIF preview frame delay in milliseconds. Omit for the provider default of 200."
+          },
+          "source_paths": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Local image paths in provider order. Mask or markup applies to the first image."
+          },
+          "mask_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional local PNG mask matching the first source image dimensions, with transparency marking the area to edit."
+          },
+          "markup_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional local transparent PNG annotation layer matching the first source image dimensions."
+          }
+        },
+        "required": [
+          "prompt",
+          "source_paths"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "background": {
+                  "const": "transparent"
+                }
+              },
+              "required": [
+                "background"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "png",
+                    "webp"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "output_compression"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "jpeg",
+                    "webp"
+                  ]
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "output_format": {
+                  "const": "svg"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            },
+            "then": {
+              "properties": {
+                "n": {
+                  "const": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "anyOf": [
+                {
+                  "required": [
+                    "frame_count"
+                  ]
+                },
+                {
+                  "required": [
+                    "frame_duration_ms"
+                  ]
+                }
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "const": "gif"
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "mask_path"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "not": {
+                    "const": "gif"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "not": {
+          "required": [
+            "mask_path",
+            "markup_path"
+          ]
+        }
+      },
+      "extension_profile": {
+        "summary": "Edit one to sixteen local images using the official synchronous OpenAI Images API.",
+        "input_modes": [
+          "reference_image"
+        ],
+        "resolution_policy": {
+          "mode": "bounded_custom",
+          "custom_bounds": {
+            "minimum_width": 16,
+            "maximum_width": 3840,
+            "minimum_height": 16,
+            "maximum_height": 3840,
+            "step": 16,
+            "minimum_pixels": 655360,
+            "maximum_pixels": 8294400
+          }
+        },
+        "format_policy": {
+          "output_formats": [
+            "png",
+            "jpeg",
+            "webp",
+            "svg",
+            "gif"
+          ],
+          "input_formats": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "constraints": [
+          "Each custom dimension must be a multiple of 16 pixels.",
+          "The longer-to-shorter edge ratio must not exceed 3:1.",
+          "Transparent backgrounds require PNG or WebP.",
+          "PNG requests must omit output_compression."
+        ],
+        "limitations": [
+          "GIF output requires account access to the model's GIF preview.",
+          "SVG output returns one image per request."
+        ],
+        "evidence_refs": [
+          "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
+          "https://developers.openai.com/api/docs/guides/image-generation"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/svg+xml",
+          "image/gif"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "png": "image/png",
+              "jpeg": "image/jpeg",
+              "webp": "image/webp",
+              "svg": "image/svg+xml",
+              "gif": "image/gif"
+            },
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/edits",
         "authentication": "bearer_authorization",
         "adapter": "generic_json",
         "execution_kind": "http_json_sync"
@@ -1954,6 +3708,30 @@
   "provenance": {
     "status": "verified",
     "sources": [
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+        "note": "Official OpenAI model card for gpt-6.2-astra."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst",
+        "note": "Official OpenAI model card for gpt-image-2.6-sunburst."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
+        "note": "Official OpenAI model card for gpt-image-2.6-flare."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+        "note": "GPT-6.2 Sol and Astra use the public Responses route with the documented context, output, reasoning and structured output capabilities."
+      },
+      {
+        "url": "https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/models-manager/models.json",
+        "note": "Codex CLI 0.170.0 model catalog supplies the distinct Responses Lite behavior and subscription reasoning levels. Authenticated discovery returned both model IDs at this client version."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/guides/image-generation",
+        "note": "GPT Image 2.6 Sunburst and Flare support generation, edits, complexity controls, transparent output, SVG and GIF preview. The Images API reference defines the JSON edit image locator, mask and markup shapes."
+      },
       {
         "url": "https://chatgpt.com/backend-api/codex/images/generations",
         "note": "Codex subscription image generation follows the openai/codex ImagesClient request and response contract (codex-rs/codex-api/src/endpoint/images.rs, model gpt-image-2)."

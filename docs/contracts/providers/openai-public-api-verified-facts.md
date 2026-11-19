@@ -1,6 +1,6 @@
 # OpenAI 官方 API 固定目录与图片参数
 
-核对日期：2026-10-29。
+首次核对日期：2026-10-29。GPT-6.2 与 Image 2.6 核对日期：2026-11-19。
 
 本文记录本次接入证据和用户确认的配置范围。字段形状以 Manifest Schema、Rust 类型和编译器共同
 校验结果为准。官方模型或图片接口更新、公共能力资源格式调整时，应重新核对本文、清单、公共表和
@@ -16,6 +16,7 @@
 | 5.6 | `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` |
 | 6 | `gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna` |
 | 6.1 | `gpt-6.1-sol`、`gpt-6.1-terra` |
+| 6.2 | `gpt-6.2-sol`、`gpt-6.2-astra` |
 
 上述模型按用户明确要求统一为标准 Responses、文件和图片输入、文本输出、1,050,000 上下文、128,000
 最大输出，以及 `low / medium / high / xhigh / max` 思考档位。Sol 的官方资料确认窗口、输出和档位；
@@ -28,10 +29,23 @@
 本次认证目录查询返回 130 个条目，所有记录只有标识、对象类型、创建时间、归属和停用日期。官方目录
 不提供窗口、输出上限或模态，不能直接把全部条目当成对话模型。单模型详情查询也未提供更多能力字段。
 
+### GPT-6.2 的 API 与 Codex 订阅
+
+两个公开 API 模型的总上下文均为 1,050,000，输入上限为 922,000，最大输出为 128,000。
+提供 `low / medium / high / xhigh / max` 与结构化输出。本应用用 Responses 承载带工具的请求。
+Codex 订阅使用 0.170.0 请求独立目录。认证查询返回两款模型，Sol 和 Astra 分别上报默认 500,000、
+272,000 上下文，各自的可扩展上限是 872,000，且另列 `ultra` 档。订阅使用 Responses Lite。
+应用使用订阅目录实际上报的上下文窗口。
+
+- [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
+- [GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra)
+- [GPT-6.2 迁移指南](https://developers.openai.com/api/docs/guides/latest-model)
+- [Codex 0.170.0 模型目录](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/models-manager/models.json)
+
 ## 同步图片生成
 
-媒体入口注册 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` 三个模型，不注册日期快照。
-三者只声明图片生成操作，不能进入文本对话选择。目标使用 `POST /images/generations`、Bearer API Key
+媒体入口注册 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2.6-flare`
+和 `gpt-image-2.6-sunburst`。这些模型只进入媒体选择。生成目标使用 `POST /images/generations`、Bearer API Key
 和同步 JSON 执行；`stream` 固定为 `false`。
 
 | 参数 | 注册范围 |
@@ -39,10 +53,10 @@
 | `model` | 固定为当前目标自身模型 ID |
 | `prompt` | 1～32,000 字符 |
 | `n` | 1～10，默认 1，全部返回项都回收 |
-| `quality` | Image 2：`auto / low / medium / high`；两个 2.5 模型额外支持 `xhigh / max` |
+| `quality` | Image 2：`auto / low / medium / high`；2.5 与 2.6 模型额外支持 `xhigh / max` |
 | `size` | `auto` 或 `WIDTHxHEIGHT`，约束见下文 |
 | `background` | `auto / opaque / transparent` |
-| `output_format` | `png / jpeg / webp`，默认 `png` |
+| `output_format` | `png / jpeg / webp`，默认 `png`。2.6 另提供 `svg / gif` |
 | `output_compression` | 0～100，仅 JPEG/WebP 可用；PNG 必须省略 |
 | `moderation` | `auto / low` |
 | `safety_identifier` | 可选，最多 128 字符 |
@@ -55,7 +69,7 @@
 1. 每条边不超过 3840 像素。
 2. 宽高比位于 1:3～3:1，长边与短边之比不超过 3。
 3. 总像素在 655,360～8,294,400 之间。
-4. 超过 3,686,400 像素（2560×1440）属于实验范围。
+4. Image 2 和 Image 2.5 超过 3,686,400 像素（2560×1440）属于实验范围。
 
 这些限制已写入参数说明和媒体扩展档。JSON Schema 校验尺寸字符串格式；上游仍负责具体自定义尺寸的
 几何约束，不会静默调整为另一尺寸。透明背景与编码、压缩与编码的互斥关系由输入 Schema 校验。
@@ -63,6 +77,18 @@
 - [官方生成参数](https://developers.openai.com/api/reference/resources/images/methods/generate)
 - [官方图片参数与尺寸约束](https://developers.openai.com/api/docs/guides/image-prompting)
 - [官方图片生成指南](https://developers.openai.com/api/docs/guides/image-generation)
+
+### Image 2.6 生成与编辑选项
+
+两款 2.6 模型支持独立于 `quality` 的 `complexity`，可选 `low / medium / high`，官方默认 `high`。
+SVG 每次一张。GIF 需要对应的账户预览权限，可选 `frame_count`（2～16）和 `frame_duration_ms`
+（至少 20）。编辑用独立的 `POST /images/edits` JSON 目标，按顺序传入 1～16 张 PNG、JPEG 或 WebP，
+可另选 PNG 遮罩或标注层。两种辅助图作用于第一张原图并且互斥，GIF 编辑不支持遮罩。
+本地输入由宿主转成 Data URL，单文件容量由官方 JSON 图片引用的 20,971,520 字符上限和 Base64 开销决定。
+
+- [Image 2.6 Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst)
+- [Image 2.6 Flare](https://developers.openai.com/api/docs/models/gpt-image-2.6-flare)
+- [官方编辑请求格式](https://developers.openai.com/api/reference/resources/images/methods/edit)
 
 ## 音频文件转写
 
@@ -94,20 +120,20 @@
 
 ## 公共能力配置与执行边界
 
-这十一条记录同步进入公共模型能力表。八个对话模型同步窗口、输出上限、输入输出模态、思考支持、
+受支持的模型同步进入公共模型能力表。对话模型同步窗口、输出上限、输入输出模态、思考支持、
 控制方式与档位；图片模型保留图片输出与禁用思考状态，不虚构文本会话的 Token 窗口。公共资源版本
 提升为 2，运行时补齐可用字段，旧版本明确拒绝。无关模型记录与之前 TypeSafe 更新保持原有语义。
 
 公共生成脚本同步读取输出与思考字段，并优先采用官方供应商声明，避免同名中转记录先覆盖官方模型
 事实。API 的精确目录规则与图片工具参数仍由供应商清单持有；公共表只提供能力事实，不扩大准入名单。
 
-图片响应按 `/data` 数组中的 `/b64_json` 解码全部记录，根据请求编码映射 PNG/JPEG/WebP MIME。任一项
+图片响应按 `/data` 数组中的 `/b64_json` 解码全部记录，根据请求编码映射媒体类型。任一项
 缺失载体或解码失败时整次请求显式报错；数量、字节和输出类型边界继续生效。
 
 本次验证使用本地 HTTP fixture 与离线目录投影。没有执行线上付费推理或图片生成，也没有重启、提交
 或推送；资源同步与进程加载是不同步骤。
 
-## 验证记录
+## 首次接入验证记录
 
 | 审核范围 | 结果 |
 | --- | --- |

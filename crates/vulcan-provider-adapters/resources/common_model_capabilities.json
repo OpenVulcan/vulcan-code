@@ -1627,6 +1627,56 @@
       ]
     },
     {
+      "key": "gpt-6.2-astra",
+      "aliases": [
+        "openai: gpt-6.2 astra"
+      ],
+      "context_window": 1050000,
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 128000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "key": "gpt-6.2-sol",
+      "aliases": [
+        "openai: gpt-6.2 sol"
+      ],
+      "context_window": 1050000,
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 128000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
       "key": "gpt-image-2",
       "aliases": [
         "openai: gpt image 2"
@@ -1660,6 +1710,36 @@
         "openai: gpt image 2.5 sunburst"
       ],
       "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
+      "key": "gpt-image-2.6-flare",
+      "aliases": [
+        "openai: gpt image 2.6 flare"
+      ],
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
+      "key": "gpt-image-2.6-sunburst",
+      "aliases": [
+        "openai: gpt image 2.6 sunburst"
+      ],
+      "input_modalities": [
+        "image",
         "text"
       ],
       "output_modalities": [
