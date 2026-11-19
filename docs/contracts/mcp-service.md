@@ -18,8 +18,11 @@ MCP 服务器）是两件事，互不共享配置。实现以下列源码为准�
 ## 传输与认证
 
 1. **端点。** 服务宿主已有的回环 HTTP 端口上的 `/mcp`，实现 MCP Streamable HTTP 的无状态子集：POST 一条
-   JSON-RPC 消息，请求返回 `application/json`，通知返回 202；不支持批量；GET 与 DELETE 返回 405 并带
-   `Allow: POST`；不使用 SSE。协议版本按 `MCP_SUPPORTED_PROTOCOL_VERSIONS` 协商，未知版本回答最新版本。
+   JSON-RPC 消息。即时应答采用 `application/json`，通知返回 202。已认证的 `tools/call` 在客户端明确接受
+   `text/event-stream` 且超过短请求等待时间时，通过原 POST 返回 SSE。流先发送注释，随后自动发送心跳注释，
+   调用完成后发送同一请求 ID 的 JSON-RPC 结果并结束。断线会取消这条调用。心跳维持 HTTP 传输，客户端可以
+   另有单次工具调用上限。GET 与 DELETE 返回 405 并带 `Allow: POST`，不支持批量请求。
+   协议版本按 `MCP_SUPPORTED_PROTOCOL_VERSIONS` 协商，未知版本回答最新版本。
 2. **浏览器一律拒绝。** 带 `Origin` 请求头的请求在宿主层返回 403（防 DNS 重绑定与网页跨站调用）。
    请求体上限由宿主常量 `WEBUI_SERVICE_MCP_BODY_LIMIT_BYTES` 定义。
 3. **每个客户端一枚令牌。** 令牌为 `vmcp_` 前缀加 32 字节随机数，配置只保存 SHA-256 摘要与末 4 位提示；

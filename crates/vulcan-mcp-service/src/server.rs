@@ -59,6 +59,16 @@ pub struct McpHttpResponse {
 }
 
 impl McpHttpResponse {
+    /// Encodes the result of the JSON-RPC request identified by `id`.
+    /// 编码由 `id` 标识的 JSON-RPC 请求结果。
+    fn rpc(id: Value, result: Result<Value, (i64, String)>) -> Self {
+        let response = match result {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err((code, message)) => jsonrpc_error(id, code, &message),
+        };
+        Self::json(200, &response)
+    }
+
     /// Builds a JSON response.
     /// 构建 JSON 响应。
     fn json(status: u16, value: &Value) -> Self {
@@ -96,6 +106,25 @@ impl McpHttpResponse {
             headers: Vec::new(),
             body: Vec::new(),
         }
+    }
+}
+
+/// The authenticated dispatch result of one MCP POST before transport encoding.
+/// 一次 MCP POST 完成认证和分发后、传输编码前的结果。
+pub enum McpHttpDispatch {
+    /// A complete response, including authentication and protocol errors.
+    /// 完整应答，包括认证与协议错误。
+    Ready(McpHttpResponse),
+    /// An authenticated tool request that can remain pending while its response streams.
+    /// 已认证的工具请求，可在响应流发送时保持待完成状态。
+    ToolCall(std::pin::Pin<Box<dyn std::future::Future<Output = McpHttpResponse> + Send>>),
+}
+
+impl From<McpHttpResponse> for McpHttpDispatch {
+    /// Wraps a completed response for immediate delivery.
+    /// 将已完成应答封装为可立即发送的结果。
+    fn from(response: McpHttpResponse) -> Self {
+        Self::Ready(response)
     }
 }
 
@@ -231,6 +260,19 @@ impl McpServer {
         authorization: Option<&str>,
         body: &[u8],
     ) -> McpHttpResponse {
+        match self.dispatch_post(authorization, body) {
+            McpHttpDispatch::Ready(response) => response,
+            McpHttpDispatch::ToolCall(call) => call.await,
+        }
+    }
+
+    /// Authenticates `authorization` and validates `body` before returning a response or tool future.
+    /// 先认证 `authorization` 并校验 `body`，再返回应答或工具任务。
+    pub fn dispatch_post(
+        self: &Arc<Self>,
+        authorization: Option<&str>,
+        body: &[u8],
+    ) -> McpHttpDispatch {
         let configuration = match self
             .backend
             .configuration()
@@ -241,7 +283,8 @@ impl McpServer {
                 return McpHttpResponse::text(
                     500,
                     &format!("The MCP service configuration is invalid: {error}"),
-                );
+                )
+                .into();
             }
         };
         let client = match authenticate(&configuration, authorization) {
@@ -250,7 +293,8 @@ impl McpServer {
                 return McpHttpResponse::text(
                     503,
                     "The Vulcan Code MCP service is disabled. Enable it in Settings > MCP service.",
-                );
+                )
+                .into();
             }
             Err(McpAuthFailure::MissingToken | McpAuthFailure::InvalidToken) => {
                 let mut response = McpHttpResponse::text(
@@ -261,7 +305,7 @@ impl McpServer {
                     String::from("WWW-Authenticate"),
                     String::from("Bearer realm=\"vulcan-code-mcp\""),
                 ));
-                return response;
+                return response.into();
             }
         };
         self.record_usage(&client.id, false);
@@ -275,7 +319,8 @@ impl McpServer {
                         JSONRPC_PARSE_ERROR,
                         &format!("Invalid JSON: {error}"),
                     ),
-                );
+                )
+                .into();
             }
         };
         let Some(object) = message.as_object() else {
@@ -286,14 +331,15 @@ impl McpServer {
                     JSONRPC_INVALID_REQUEST,
                     "Expected one JSON-RPC message object; batches are not supported.",
                 ),
-            );
+            )
+            .into();
         };
         let id = object.get("id").cloned();
         let method = object.get("method").and_then(Value::as_str);
         let (Some(id), Some(method)) = (id, method) else {
             // Notifications and responses to server requests need no answer.
             // 通知以及对服务端请求的响应无需应答。
-            return McpHttpResponse::accepted();
+            return McpHttpResponse::accepted().into();
         };
         if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
             return McpHttpResponse::json(
@@ -303,9 +349,18 @@ impl McpServer {
                     JSONRPC_INVALID_REQUEST,
                     "Field `jsonrpc` must be \"2.0\".",
                 ),
-            );
+            )
+            .into();
         }
         let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
+        if method == "tools/call" {
+            // The transport owns this future, so a dropped response still cancels the request.
+            // 传输层持有工具任务，响应被丢弃时仍会取消请求。
+            let server = Arc::clone(self);
+            return McpHttpDispatch::ToolCall(Box::pin(async move {
+                McpHttpResponse::rpc(id, server.call_audited_tool(&client, params).await)
+            }));
+        }
         let result = match method {
             "initialize" => Ok(self.initialize_result(&params)),
             "ping" => Ok(json!({})),
@@ -323,17 +378,12 @@ impl McpServer {
                 );
                 Ok(json!({ "tools": tools }))
             }
-            "tools/call" => self.call_audited_tool(&client, params).await,
             _ => Err((
                 JSONRPC_METHOD_NOT_FOUND,
                 format!("Method `{method}` is not supported by this server."),
             )),
         };
-        let response = match result {
-            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err((code, message)) => jsonrpc_error(id, code, &message),
-        };
-        McpHttpResponse::json(200, &response)
+        McpHttpResponse::rpc(id, result).into()
     }
 
     /// Builds the `initialize` result.

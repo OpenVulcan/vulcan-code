@@ -16,6 +16,7 @@ use std::{
     path::PathBuf,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use axum::{
@@ -26,7 +27,10 @@ use axum::{
         ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap as AxumHeaderMap, Method as AxumMethod, StatusCode as AxumStatusCode},
-    response::{IntoResponse, Response as AxumResponse},
+    response::{
+        IntoResponse, Response as AxumResponse,
+        sse::{Event as SseEvent, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
 use futures_util::{SinkExt, StreamExt};
@@ -79,7 +83,18 @@ pub type WebuiBrowserDownloadResolver =
 /// Answers one MCP POST from its `Authorization` header value and raw JSON body.
 /// 根据 `Authorization` 标头值与原始 JSON 请求体应答一次 MCP POST。
 pub type WebuiMcpEndpoint =
-    Arc<dyn Fn(Option<String>, Vec<u8>) -> WebuiSessionResourceFuture + Send + Sync + 'static>;
+    Arc<dyn Fn(Option<&str>, &[u8]) -> WebuiMcpDispatch + Send + Sync + 'static>;
+
+/// An immediate MCP response or an authorized tool call whose response may stream.
+/// 可立即发送的 MCP 应答，或可以流式发送应答的已授权工具调用。
+pub enum WebuiMcpDispatch {
+    /// A complete status, headers, and body returned before streaming starts.
+    /// 在启动流式传输前返回的完整状态、头部和正文。
+    Ready(ServiceMediaResponse),
+    /// A pending tool call that yields its final JSON-RPC response.
+    /// 等待完成并产出最终 JSON-RPC 应答的工具调用。
+    ToolCall(Pin<Box<dyn Future<Output = ServiceMediaResponse> + Send + 'static>>),
+}
 
 /// Cleans client-owned display subscriptions when one browser event socket disconnects.
 /// 在浏览器事件套接字断开时清理客户端持有的显示订阅。
@@ -1796,16 +1811,78 @@ async fn webui_service_mcp_http_handler(
     };
     let authorization = headers
         .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    match endpoint(authorization, body.to_vec()).await {
-        Ok(response) => axum_response_from_service_media_response(response),
-        Err(error) => mcp_plain_text_response(AxumStatusCode::INTERNAL_SERVER_ERROR, &error),
+        .and_then(|value| value.to_str().ok());
+    match endpoint(authorization, &body) {
+        WebuiMcpDispatch::Ready(response) => axum_response_from_service_media_response(response),
+        WebuiMcpDispatch::ToolCall(mut call) => {
+            if !mcp_accepts_event_stream(&headers) {
+                return axum_response_from_service_media_response(call.await);
+            }
+            match tokio::time::timeout(MCP_TOOL_STREAM_DELAY, &mut call).await {
+                Ok(response) => axum_response_from_service_media_response(response),
+                Err(_) => {
+                    // Retaining the pending call in the response body preserves cancellation on disconnect.
+                    // 响应体持有尚未完成的调用，使断线时仍可取消请求。
+                    let events = futures_util::stream::once(async {
+                        Ok::<_, std::convert::Infallible>(SseEvent::default().comment("keepalive"))
+                    })
+                    .chain(futures_util::stream::once(async move {
+                        let response = call.await;
+                        Ok(SseEvent::default().data(String::from_utf8_lossy(&response.body)))
+                    }));
+                    let mut response = Sse::new(events)
+                        .keep_alive(
+                            KeepAlive::new()
+                                .interval(MCP_HEARTBEAT_INTERVAL)
+                                .text("keepalive"),
+                        )
+                        .into_response();
+                    response.headers_mut().insert(
+                        axum::http::header::CACHE_CONTROL,
+                        axum::http::HeaderValue::from_static("no-store"),
+                    );
+                    response
+                }
+            }
+        }
     }
 }
 
-/// Rejects the optional SSE stream and session deletion; this server is stateless.
-/// 拒绝可选的 SSE 流与会话删除；本服务器无状态。
+/// Time to let a fast tool finish before opening a response stream.
+/// 在开启响应流之前等待快速工具完成的时间。
+const MCP_TOOL_STREAM_DELAY: Duration = Duration::from_secs(1);
+
+/// Maximum silent interval between SSE heartbeat comments in an active tool response.
+/// 工具响应流中两条 SSE 心跳注释之间的最长静默时间。
+const MCP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Reports whether `headers` explicitly permit Server-Sent Events for this response.
+/// 判断 `headers` 是否明确接受本次响应使用 SSE。
+fn mcp_accepts_event_stream(headers: &AxumHeaderMap) -> bool {
+    headers
+        .get_all(axum::http::header::ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|range| {
+            let mut segments = range.split(';');
+            segments
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+                && !segments.any(|segment| {
+                    segment.split_once('=').is_some_and(|(name, value)| {
+                        name.trim().eq_ignore_ascii_case("q")
+                            && !value
+                                .trim()
+                                .parse::<f32>()
+                                .is_ok_and(|q| q > 0.0 && q <= 1.0)
+                    })
+                })
+        })
+}
+
+/// Rejects the standalone GET stream and session deletion on the stateless endpoint.
+/// 在无状态端点拒绝独立 GET 流与会话删除。
 async fn webui_service_mcp_method_not_allowed() -> AxumResponse {
     let mut response = mcp_plain_text_response(
         AxumStatusCode::METHOD_NOT_ALLOWED,
@@ -3477,19 +3554,17 @@ mod tests {
     fn mcp_test_router() -> Router {
         let mut router_config = status_test_router_config();
         router_config.mcp_endpoint = Some(Arc::new(|authorization, body| {
-            Box::pin(async move {
-                Ok(ServiceMediaResponse {
-                    status: 200,
-                    headers: vec![(
-                        String::from("content-type"),
-                        String::from("application/json"),
-                    )],
-                    body: serde_json::to_vec(&json!({
-                        "authorization": authorization,
-                        "length": body.len(),
-                    }))
-                    .expect("echo body"),
-                })
+            WebuiMcpDispatch::Ready(ServiceMediaResponse {
+                status: 200,
+                headers: vec![(
+                    String::from("content-type"),
+                    String::from("application/json"),
+                )],
+                body: serde_json::to_vec(&json!({
+                    "authorization": authorization,
+                    "length": body.len(),
+                }))
+                .expect("echo body"),
             })
         }));
         build_webui_service_router(router_config)
@@ -3550,5 +3625,60 @@ mod tests {
         );
         let response = mcp_request(status_test_router(), "POST", None).await;
         assert_eq!(response.status(), AxumStatusCode::NOT_FOUND);
+    }
+
+    /// Keeps a pending tool's response alive past five minutes and sends its result once.
+    /// 将待完成工具的响应流保持超过五分钟，并只发送一次结果。
+    #[tokio::test(start_paused = true)]
+    async fn mcp_tool_stream_sends_heartbeats_until_the_final_response() {
+        // The fixture completes only when the test releases the pending call.
+        // 测试发出完成信号后，fixture 中的调用才结束。
+        let completion = Arc::new(tokio::sync::Notify::new());
+        let mut config = status_test_router_config();
+        let pending = Arc::clone(&completion);
+        config.mcp_endpoint = Some(Arc::new(move |_, _| {
+            let pending = Arc::clone(&pending);
+            WebuiMcpDispatch::ToolCall(Box::pin(async move {
+                pending.notified().await;
+                ServiceMediaResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: br#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.to_vec(),
+                }
+            }))
+        }));
+        let response = build_webui_service_router(config)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("accept", "application/json, text/event-stream")
+                    .body(AxumBody::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), AxumStatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let mut body = response.into_body().into_data_stream();
+        let initial = body.next().await.unwrap().unwrap();
+        assert!(initial.starts_with(b":"));
+
+        // Each advance must yield a comment without producing a tool result.
+        // 每次推进时钟都应收到一条注释，工具结果继续等待。
+        let heartbeats = Duration::from_secs(300).as_secs() / MCP_HEARTBEAT_INTERVAL.as_secs();
+        for _ in 0..=heartbeats {
+            tokio::time::advance(MCP_HEARTBEAT_INTERVAL).await;
+            let heartbeat = body.next().await.unwrap().unwrap();
+            assert!(heartbeat.starts_with(b":"));
+        }
+        completion.notify_one();
+        let result = body.next().await.unwrap().unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(result.strip_prefix(b"data:").unwrap()).unwrap();
+        assert_eq!(payload["id"], 1);
+        assert_eq!(payload["result"]["ok"], true);
+        assert!(body.next().await.is_none());
     }
 }

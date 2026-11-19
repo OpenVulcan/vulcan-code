@@ -20,7 +20,7 @@ mod tests;
 
 pub use auth::{IssuedClientToken, issue_client_token, token_sha256_hex};
 pub use backend::*;
-pub use server::{McpClientUsage, McpHttpResponse, McpServer};
+pub use server::{McpClientUsage, McpHttpDispatch, McpHttpResponse, McpServer};
 pub use tools::{
     MCP_EXTERNAL_TOOL_IDS, MCP_MEDIA_CAPABILITIES, mcp_client_tool_selection, mcp_tool_names,
     reconcile_mcp_tool_selection,

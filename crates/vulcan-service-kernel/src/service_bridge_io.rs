@@ -421,15 +421,25 @@ pub(crate) async fn run_webui_service_http_bridge(
         // The MCP endpoint authenticates its own per-client bearer tokens inside the server.
         // MCP 端点在服务器内部校验其逐客户端 Bearer 令牌。
         mcp_endpoint: Some(Arc::new(move |authorization, body| {
-            let server = Arc::clone(&mcp_server);
-            Box::pin(async move {
-                let response = server.handle_post(authorization.as_deref(), &body).await;
-                Ok(vulcan_service_api::ServiceMediaResponse {
+            // Keep transport projection identical for immediate and streamed replies.
+            // 即时应答和流式应答共用相同的传输投影。
+            let project = |response: vulcan_mcp_service::McpHttpResponse| {
+                vulcan_service_api::ServiceMediaResponse {
                     status: response.status,
                     headers: response.headers,
                     body: response.body,
-                })
-            })
+                }
+            };
+            match mcp_server.dispatch_post(authorization, body) {
+                vulcan_mcp_service::McpHttpDispatch::Ready(response) => {
+                    vulcan_service_host::WebuiMcpDispatch::Ready(project(response))
+                }
+                vulcan_mcp_service::McpHttpDispatch::ToolCall(call) => {
+                    vulcan_service_host::WebuiMcpDispatch::ToolCall(Box::pin(async move {
+                        project(call.await)
+                    }))
+                }
+            }
         })),
         client_disconnected,
         status_provider: Some(Arc::new(move || {
