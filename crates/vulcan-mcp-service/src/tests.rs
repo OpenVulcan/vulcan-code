@@ -406,8 +406,21 @@ async fn authentication_gates_every_request() {
     assert_eq!(post(&server, None, ping.clone()).await.0, 401);
     assert_eq!(post(&server, Some("vmcp_wrong"), ping.clone()).await.0, 401);
     assert_eq!(post(&server, Some(FULL_TOKEN), ping.clone()).await.0, 200);
-    backend.configuration.lock().unwrap().clients[0].enabled = false;
+
+    // Replacing the configured digest rejects the previous bearer and accepts the new one.
+    // 替换配置里的摘要后拒绝旧令牌并接受新令牌。
+    let rotated_token = "vmcp_rotated_fixture";
+    backend.configuration.lock().unwrap().clients[0].token_sha256 = token_sha256_hex(rotated_token);
     assert_eq!(post(&server, Some(FULL_TOKEN), ping.clone()).await.0, 401);
+    assert_eq!(
+        post(&server, Some(rotated_token), ping.clone()).await.0,
+        200
+    );
+    backend.configuration.lock().unwrap().clients[0].enabled = false;
+    assert_eq!(
+        post(&server, Some(rotated_token), ping.clone()).await.0,
+        401
+    );
     backend.configuration.lock().unwrap().enabled = false;
     assert_eq!(post(&server, Some(READER_TOKEN), ping).await.0, 503);
 }

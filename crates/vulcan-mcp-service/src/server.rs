@@ -296,7 +296,10 @@ impl McpServer {
                 )
                 .into();
             }
-            Err(McpAuthFailure::MissingToken | McpAuthFailure::InvalidToken) => {
+            Err(failure @ (McpAuthFailure::MissingToken | McpAuthFailure::InvalidToken)) => {
+                // Log only the category so a reconnect can be traced without storing credentials.
+                // 只记录失败类别，便于排查重连且不保存凭据。
+                tracing::warn!(auth_failure = ?failure, "External MCP authentication rejected");
                 let mut response = McpHttpResponse::text(
                     401,
                     "A valid Vulcan Code MCP client token is required as `Authorization: Bearer <token>`.",

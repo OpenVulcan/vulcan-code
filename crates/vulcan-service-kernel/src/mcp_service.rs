@@ -231,6 +231,7 @@ pub(crate) async fn service_rotate_mcp_client_token(
         normalize_mcp_service_configuration(next)
     })
     .await?;
+    tracing::info!(%client_id, "External MCP client token rotated");
     Ok(McpServiceIssuedToken {
         snapshot: snapshot(&state, &saved).await?,
         client_id,

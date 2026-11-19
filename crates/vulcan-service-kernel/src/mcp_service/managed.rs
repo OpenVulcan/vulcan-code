@@ -83,9 +83,14 @@ pub(super) fn definition(state: &SharedServiceBridgeState, name: &str) -> Option
         json!({"type":"string","description":"MCP session identifier returned by vc_mcp_session."}),
     );
     if name == "shell_command" {
-        properties.insert("background".into(), json!({"type":"boolean","description":"Start a background job when the shell_job tool is granted."}));
+        // Separate the command deadline from the client's deadline for a single request.
+        // 区分命令执行的截止时间与客户端等待单次请求的截止时间。
+        properties["timeout_ms"]["description"] = json!(
+            "Optional command time limit in milliseconds, including for background jobs. Omit for no command time limit. The client sets its own MCP request deadline."
+        );
+        properties.insert("background".into(), json!({"type":"boolean","description":"Requires the shell_job grant. Returns a job ID immediately and lets the command continue under the supplied timeout_ms. Query the job with shell_job and the same sid."}));
         definition["description"] = json!(
-            "Run a Shell command in the MCP session directory. Use background=true to return a job ID."
+            "Run a Shell command in the MCP session directory. A foreground call is canceled if its MCP request disconnects. For commands that may outlast the client's request deadline, set background=true before starting and keep the requested timeout_ms. Use shell_job with the same sid to query or wait for the result. Background execution requires the shell_job grant."
         );
     }
     let schema = definition["inputSchema"].as_object_mut()?;

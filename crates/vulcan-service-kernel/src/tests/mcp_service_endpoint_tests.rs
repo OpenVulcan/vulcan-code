@@ -599,9 +599,113 @@ async fn external_workspace_tools_follow_individual_grants() {
             .unwrap()
             .extend(["shell_job".into(), "terminal_session".into()]);
     }
+    let (_, timed_out) = post(
+        &server,
+        READER_TOKEN,
+        "tools/call",
+        json!({
+            "name": "shell_command",
+            "arguments": {
+                "sid": sid,
+                "command": if cfg!(windows) {
+                    "powershell.exe -NoProfile -Command \"Start-Sleep -Seconds 60\""
+                } else {
+                    "sleep 60"
+                },
+                "title": "Command timeout fixture",
+                "timeout_ms": 100
+            }
+        }),
+    )
+    .await;
+    assert_eq!(structured(&timed_out)["status"], "timed_out");
+
+    // Drop an in-flight request after its command starts, then reuse the same client and project.
+    // 在命令开始后取消进行中的请求，再用同一客户端查询原项目。
+    let started_marker = denied.join("mcp-shell-started.txt");
+    let in_flight = post(
+        &server,
+        READER_TOKEN,
+        "tools/call",
+        json!({
+            "name": "shell_command",
+            "arguments": {
+                "sid": sid,
+                "command": if cfg!(windows) {
+                    "powershell.exe -NoProfile -Command 'Set-Content -LiteralPath mcp-shell-started.txt -Value $PID; Start-Sleep -Seconds 60'"
+                } else {
+                    "echo $$ > mcp-shell-started.txt; sleep 60"
+                },
+                "shell": if cfg!(windows) { "powershell" } else { "sh" },
+                "title": "Disconnected command fixture",
+                "timeout_ms": 1_500_000
+            }
+        }),
+    );
+    let descendant_pid = tokio::select! {
+        response = in_flight => panic!("foreground command returned before disconnection: {response:?}"),
+        ready = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Ok(marker) = std::fs::read_to_string(&started_marker)
+                    && let Ok(pid) = marker.trim().parse::<u32>()
+                {
+                    break pid;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }) => ready.expect("foreground command should start"),
+    };
+    let (_, projects) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        post(
+            &server,
+            READER_TOKEN,
+            "tools/call",
+            json!({"name":"vc_mcp_project","arguments":{"type":"list"}}),
+        ),
+    )
+    .await
+    .expect("project listing should respond after a foreground request disconnects");
+    assert!(
+        structured(&projects)["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|project| project["project_id"] == project_id)
+    );
+
+    // On Windows, observe the descendant rather than the direct process reaped by Tokio.
+    // 在 Windows 上检查后代进程，避开 Tokio 已回收的直接子进程。
+    if cfg!(windows) {
+        let pid_filter = format!("PID eq {descendant_pid}");
+        let quoted_pid = format!("\"{descendant_pid}\"");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let output = vulcan_host_tools::process_creation::new_background_tokio_command(
+                    "tasklist.exe",
+                )
+                .args(["/FI", &pid_filter, "/FO", "CSV", "/NH"])
+                .output()
+                .await
+                .expect("list fixture descendant");
+                assert!(output.status.success());
+                if !String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .any(|line| line.split(',').nth(1) == Some(quoted_pid.as_str()))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("disconnect should terminate the command descendant");
+    }
+
     let (_, started) = post(&server, READER_TOKEN, "tools/call", json!({
-        "name":"shell_command","arguments":{"sid":sid,"command":"echo audited-fixture","title":"Fixture","background":true}
+        "name":"shell_command","arguments":{"sid":sid,"command":"echo audited-fixture","title":"Fixture","background":true,"timeout_ms":1_500_000}
     })).await;
+    assert_eq!(structured(&started)["status"], "running");
     let job_id = structured(&started)["job_id"].as_str().unwrap();
     let (_, complete) = post(&server, READER_TOKEN, "tools/call", json!({
         "name":"shell_job","arguments":{"sid":sid,"action":"wait","job_id":job_id,"wait_seconds":5}

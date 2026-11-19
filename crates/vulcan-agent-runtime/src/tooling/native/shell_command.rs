@@ -1383,11 +1383,7 @@ pub(super) async fn execute_external_shell(
     mut request: NativeToolExecutionRequest,
     support: &HostCommandShellSupport,
 ) -> Result<Value, String> {
-    use tokio::io::AsyncWriteExt;
-    use vulcan_host_tools::process_tree::{
-        CHILD_OUTPUT_DRAIN_GRACE, ChildProcessTreeDropGuard, isolate_child_process_tree,
-        terminate_child_process_tree,
-    };
+    use vulcan_host_tools::process_tree::isolate_child_process_tree;
 
     if request.arguments.get("background").is_some() {
         return Err("External shell calls only support foreground execution.".into());
@@ -1447,33 +1443,69 @@ pub(super) async fn execute_external_shell(
     {
         return Err("The working directory is outside the authorized project.".into());
     }
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    let mut process_guard = ChildProcessTreeDropGuard::arm(&child);
+    let child = command.spawn().map_err(|error| error.to_string())?;
     drop(lease);
+
+    // Keep the direct child alive until cancellation can terminate its descendants as a tree.
+    // 取消时先保留直接子进程，确保能够按进程树终止其后代。
+    let (request_alive, request_closed) = tokio::sync::oneshot::channel();
+    let result = tokio::spawn(finish_external_shell(
+        child,
+        parsed.stdin,
+        deadline,
+        request_closed,
+    ))
+    .await
+    .map_err(|error| error.to_string())?;
+    drop(request_alive);
+    result
+}
+
+/// Returns the command status and bounded output, terminating its tree on a deadline or request drop.
+/// 返回命令状态及有界输出，并在到达时限或请求结束时终止进程树。
+/// `child` is the launched process, `input` is optional stdin, and `deadline` bounds execution.
+/// `child` 为已启动进程，`input` 为可选标准输入，`deadline` 约束执行时间。
+/// `request_closed` signals cancellation when the owning request drops its sender.
+/// 所属请求释放发送端时，`request_closed` 通知取消。
+async fn finish_external_shell(
+    mut child: tokio::process::Child,
+    input: Option<String>,
+    deadline: Option<tokio::time::Instant>,
+    request_closed: tokio::sync::oneshot::Receiver<()>,
+) -> Result<Value, String> {
+    use tokio::io::AsyncWriteExt;
+    use vulcan_host_tools::process_tree::{
+        CHILD_OUTPUT_DRAIN_GRACE, ChildProcessTreeDropGuard, terminate_child_process_tree,
+    };
+
+    let mut process_guard = ChildProcessTreeDropGuard::arm(&child);
     let mut stdout = tokio::spawn(capture_external_shell_output(
         child.stdout.take().expect("piped stdout"),
     ));
     let mut stderr = tokio::spawn(capture_external_shell_output(
         child.stderr.take().expect("piped stderr"),
     ));
-    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), parsed.stdin) {
+    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
         tokio::spawn(async move {
             let _ = stdin.write_all(input.as_bytes()).await;
         });
     }
 
-    // Await completion or terminate the process tree at the supplied deadline.
-    // 等待命令完成，或在调用方设定的截止时间终止进程树。
-    let status = match deadline {
-        Some(deadline) => match tokio::time::timeout_at(deadline, child.wait()).await {
-            Ok(status) => Some(status.map_err(|error| error.to_string())?),
-            Err(_) => {
-                terminate_child_process_tree(&mut child).await?;
-                None
+    // Wait for the exit, the supplied deadline, or the owning request's cancellation.
+    // 等待退出、达到设定的截止时间，或所属请求取消。
+    let status = tokio::select! {
+        biased;
+        _ = request_closed => None,
+        status = async {
+            match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline, child.wait()).await.ok(),
+                None => Some(child.wait().await),
             }
-        },
-        None => Some(child.wait().await.map_err(|error| error.to_string())?),
+        } => status.transpose().map_err(|error| error.to_string())?,
     };
+    if status.is_none() {
+        terminate_child_process_tree(&mut child).await?;
+    }
 
     let drained = tokio::time::timeout(CHILD_OUTPUT_DRAIN_GRACE, async {
         tokio::join!(&mut stdout, &mut stderr)
