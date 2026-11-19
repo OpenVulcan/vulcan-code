@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 29,
-  "published_at": "2026-11-19T06:05:03Z",
+  "revision": 30,
+  "published_at": "2026-11-19T06:52:25Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -2169,8 +2169,7 @@
           "SVG output returns one image per request."
         ],
         "evidence_refs": [
-          "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst",
-          "https://developers.openai.com/api/docs/guides/image-generation"
+          "docs/contracts/providers/openai-public-api-verified-facts.md#image-26-生成与编辑选项"
         ]
       },
       "output": {
@@ -2515,8 +2514,7 @@
           "SVG output returns one image per request."
         ],
         "evidence_refs": [
-          "https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst",
-          "https://developers.openai.com/api/docs/guides/image-generation"
+          "docs/contracts/providers/openai-public-api-verified-facts.md#image-26-生成与编辑选项"
         ]
       },
       "output": {
@@ -2813,8 +2811,7 @@
           "SVG output returns one image per request."
         ],
         "evidence_refs": [
-          "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
-          "https://developers.openai.com/api/docs/guides/image-generation"
+          "docs/contracts/providers/openai-public-api-verified-facts.md#image-26-生成与编辑选项"
         ]
       },
       "output": {
@@ -3159,8 +3156,7 @@
           "SVG output returns one image per request."
         ],
         "evidence_refs": [
-          "https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
-          "https://developers.openai.com/api/docs/guides/image-generation"
+          "docs/contracts/providers/openai-public-api-verified-facts.md#image-26-生成与编辑选项"
         ]
       },
       "output": {
