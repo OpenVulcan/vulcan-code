@@ -123,6 +123,10 @@ pub struct AiExecutionRequest {
     /// 有序对话消息。
     #[serde(default)]
     pub messages: Vec<AiMessage>,
+    /// Developer guidance supplied explicitly for this physical request, outside conversation history.
+    /// 仅对本次物理请求显式提供的开发者指令，独立于会话历史。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_instructions: Option<String>,
     /// Model-visible tool definitions.
     /// 对模型可见的工具定义。
     #[serde(default)]

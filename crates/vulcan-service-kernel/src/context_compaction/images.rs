@@ -383,6 +383,7 @@ async fn execute_batch(
         .map_err(|error| error.to_string())??;
     let request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: execution.model.id.clone(),
         cache_scope_id: None,
         continuation: None,

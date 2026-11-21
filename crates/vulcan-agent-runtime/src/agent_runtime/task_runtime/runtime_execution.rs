@@ -2100,6 +2100,7 @@ mod standalone_compaction_tests {
             media_context: None,
             exact_request: vulcan_ai_contract::AiExecutionRequest {
                 operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+                request_instructions: None,
                 model_id: String::from("gpt-test"),
                 cache_scope_id: None,
                 continuation: None,

@@ -1011,6 +1011,11 @@
           "selected_protocol": {
             "type": "string"
           },
+          "responses_developer_prefix": {
+            "type": "boolean",
+            "default": false,
+            "description": "Place fixed system instructions in the first developer input message on the selected standard Responses route. Only request-scoped developer guidance uses top-level instructions."
+          },
           "codex_behavior": {
             "$ref": "#/$defs/codex_model_behavior"
           },

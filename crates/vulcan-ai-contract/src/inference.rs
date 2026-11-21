@@ -239,6 +239,10 @@ pub struct ResponsesExecutionRequest {
     /// Ordered provider-neutral Responses messages.
     /// 有序的供应商无关 Responses 消息。
     pub messages: Vec<AiMessage>,
+    /// Developer guidance supplied explicitly for this physical request, outside conversation history.
+    /// 仅对本次物理请求显式提供的开发者指令，独立于会话历史。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_instructions: Option<String>,
     /// Standard function tools visible to the selected model.
     /// 对所选模型可见的标准函数工具。
     #[serde(default)]

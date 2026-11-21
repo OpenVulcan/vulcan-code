@@ -237,6 +237,7 @@ impl PublicAiRuntime {
         // probe 使用一条有界用户消息，使每个已注册对话协议执行普通生产编码器，而不是配置专用捷径。
         let probe = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: selection.model.id.clone(),
             cache_scope_id: None,
             continuation: None,

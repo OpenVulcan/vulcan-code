@@ -67,6 +67,7 @@ fn memory_acceptance_candidate(
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: facts.request.model.clone(),
             cache_scope_id: None,
             continuation: None,

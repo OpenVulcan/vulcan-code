@@ -7,5 +7,6 @@ mod generations;
 // Verify OpenDesign selection through the production request encoder.
 // 通过生产请求编码器验证 OpenDesign 选择链。
 mod open_design;
+mod responses_instructions;
 mod system_bindings;
 mod validation;

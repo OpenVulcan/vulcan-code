@@ -59,6 +59,7 @@ pub fn validate_reasoning_replay_for_selection(
     // 模型选择时只确定历史；使用与派发相同的编码和线协议回放校验。
     let request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: model_id.to_owned(),
         cache_scope_id: None,
         continuation: None,
@@ -447,6 +448,13 @@ pub(super) fn project_provider_request(
 ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
     if let Some(endpoint_path) = route.protocol_route.endpoint_path.as_ref() {
         encoded.path = endpoint_path.clone();
+    }
+    if route.responses_developer_prefix {
+        project_responses_developer_prefix(&mut encoded, request.request_instructions.as_deref())?;
+    } else if request.request_instructions.is_some() {
+        return Err(pre_dispatch_failure(
+            "The selected route does not declare request-scoped developer instructions.",
+        ));
     }
     project_codex_model_behavior(route, request, &mut encoded)?;
     project_sampling_temperature(request, &mut encoded)?;
@@ -975,6 +983,48 @@ fn validate_deepseek_anthropic_thinking_replay(
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+/// Places the fixed system text from the canonical Responses encoder at the start of the input.
+/// 将规范 Responses 编码器提供的固定系统正文放在输入开头。
+/// `encoded` holds the complete wire body. Only `request_instructions` applies to this physical call.
+/// `encoded` 包含完整线路正文，只有 `request_instructions` 属于本次物理调用。
+/// Returns success after preserving all history items in order, or an error for malformed input.
+/// 保持全部历史项顺序后返回成功，输入形状损坏时返回错误。
+fn project_responses_developer_prefix(
+    encoded: &mut EncodedWireRequest,
+    request_instructions: Option<&str>,
+) -> Result<(), ProviderExecutionFailure> {
+    // The canonical encoder derives this field exclusively from System messages.
+    // 规范编码器仅用 System 消息构建此字段。
+    let body = request_body_mut(encoded, "Responses developer prefix")?;
+    if let Some(fixed) = body.remove("instructions") {
+        if !fixed.is_string() {
+            return Err(pre_dispatch_failure(
+                "Fixed Responses instructions must be a string.",
+            ));
+        }
+        // Prepending after media projection keeps history, resource ranges and tool pairs intact.
+        // 在媒体投影完成后前置固定正文，保留历史、资源范围及工具配对。
+        let input = body
+            .get_mut("input")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| {
+                pre_dispatch_failure("Responses developer prefix requires an input array.")
+            })?;
+        input.insert(
+            0,
+            json!({
+                "role": "developer",
+                "type": "message",
+                "content": [{ "type": "input_text", "text": fixed }]
+            }),
+        );
+    }
+    if let Some(text) = request_instructions.filter(|text| !text.is_empty()) {
+        body.insert(String::from("instructions"), Value::String(text.to_owned()));
     }
     Ok(())
 }

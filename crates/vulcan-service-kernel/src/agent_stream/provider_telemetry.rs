@@ -255,6 +255,7 @@ mod tests {
         // 全部传输字段均不执行：这些测试只检查消费方的取消责任交接。
         let exact_request = vulcan_ai_contract::AiExecutionRequest {
             operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: "test-model".into(),
             cache_scope_id: None,
             continuation: None,

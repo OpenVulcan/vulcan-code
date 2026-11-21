@@ -712,6 +712,7 @@ mod tests {
         let encoded = CohereChatProfile
             .encode(&AiExecutionRequest {
                 operation: AiOperation::ConversationRespond,
+                request_instructions: None,
                 model_id: String::from("command"),
                 cache_scope_id: None,
                 continuation: None,

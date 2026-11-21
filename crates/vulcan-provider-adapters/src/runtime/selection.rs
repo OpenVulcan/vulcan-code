@@ -695,6 +695,7 @@ impl PublicAiRuntime {
         // Codex behavior is copied from the exact frozen binding and never inferred from a model name.
         // Codex 行为从精确冻结绑定复制，绝不根据模型名称推断。
         route.codex_behavior = protocol_binding.codex_behavior.clone();
+        route.responses_developer_prefix = protocol_binding.responses_developer_prefix;
         // toolSchemaProjection is resolved only from the active system Manifest or the exact
         // custom-model advanced setting. Protocol and model-name heuristics are intentionally absent.
         // toolSchemaProjection 只从活动系统 Manifest 或精确自定义模型高级设置解析。

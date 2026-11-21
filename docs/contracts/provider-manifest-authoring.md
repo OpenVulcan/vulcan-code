@@ -1040,6 +1040,8 @@ custom 历史只按其原始配对重放，不得借此向无声明的新请求�
 
 ### 7.1 Codex 模型行为与 Responses 路由特性
 
+公开 Responses 线路可在模型规则中配置 `responses_developer_prefix: true`（清单引擎 6 起），该规则必须选择 `openai-responses.v1`。当前只有 OpenAI 公开 API Key 入口的 GPT-6.2 Sol 和 Astra 启用。固定 System 正文按原顺序合并为 `input` 的第一条 developer 消息，调用方显式提供的 `request_instructions` 作为本次请求的顶层 `instructions`。已有 developer 消息、工具结果和带时序的宿主事件保留原顺序。模型规则或请求编码变化时，同步核对 [OpenAI 的 GPT-6.2 迁移说明](https://developers.openai.com/api/docs/guides/latest-model#migration-quickstart)。
+
 `model_rules[].codex_behavior` 是精确模型规则拥有的封闭契约，只能用于
 `openai-codex-responses.v1`。它冻结 wire 方言、补丁/终端/搜索工具形态、并行调用、
 图片细节、verbosity、多智能体版本、说明注入、Node 审核、压缩哈希、工具输出截断、WebSocket 偏好

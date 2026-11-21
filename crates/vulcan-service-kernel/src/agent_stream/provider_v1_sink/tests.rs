@@ -638,6 +638,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: facts.request.model.clone(),
             cache_scope_id: None,
             continuation: None,
@@ -3970,6 +3971,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: facts.request.model.clone(),
             cache_scope_id: None,
             continuation: None,

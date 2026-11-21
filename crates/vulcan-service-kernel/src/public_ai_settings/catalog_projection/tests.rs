@@ -313,6 +313,7 @@ fn codex_route_with_frozen_behavior_is_executable() {
             manifest_revision: 10,
             rule_id: String::from("codex-gpt-6-astra"),
             codex_behavior: Some(behavior),
+            responses_developer_prefix: false,
         }),
     };
     let catalogs = BTreeMap::from([(

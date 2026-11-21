@@ -1367,6 +1367,7 @@ mod tests {
     fn request(policy: PromptCachePolicy) -> AiExecutionRequest {
         AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: String::from("model"),
             cache_scope_id: None,
             continuation: None,

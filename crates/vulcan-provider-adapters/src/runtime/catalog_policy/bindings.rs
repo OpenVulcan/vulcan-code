@@ -258,6 +258,7 @@ pub(super) fn freeze_system_provider_protocol_bindings(
                     manifest_revision: manifest.revision,
                     rule_id: String::new(),
                     codex_behavior: None,
+                    responses_developer_prefix: false,
                 });
             project_frozen_model_binding_compatibility(model)?;
             continue;

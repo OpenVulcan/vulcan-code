@@ -147,7 +147,14 @@ pub(super) fn provider_execution_route_revision(
         overrides,
     ))
     .map_err(|error| format!("failed to serialize provider route revision: {error}"))?;
-    Ok(format!("sha256:{}", hex::encode(Sha256::digest(material))))
+    // Extend only opted-in fingerprints so existing routes retain their continuation identity.
+    // 仅扩展显式启用线路的指纹，保留既有线路的续接身份。
+    let mut digest = Sha256::new();
+    digest.update(material);
+    if route.responses_developer_prefix {
+        digest.update(b"\0responses_developer_prefix");
+    }
+    Ok(format!("sha256:{}", hex::encode(digest.finalize())))
 }
 
 #[cfg(test)]

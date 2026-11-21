@@ -528,6 +528,7 @@ impl LuaSkillsModelBridge {
         let context = self.call_context(&operation_id, Arc::clone(&cancellation));
         let execution_request = ResponsesExecutionRequest {
             contract_version: INFERENCE_CONTRACT_VERSION,
+            request_instructions: None,
             request_id: operation_id,
             idempotency_key: None,
             consumer_profile_id: String::from(LUASKILLS_CONSUMER_PROFILE_ID),

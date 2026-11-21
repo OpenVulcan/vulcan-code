@@ -230,6 +230,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
         );
         let rebuilt_public = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: config.model_id.clone(),
             cache_scope_id: Some(self.cache_scope_id.clone()),
             continuation,

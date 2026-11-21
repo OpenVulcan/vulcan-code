@@ -141,6 +141,47 @@ fn minimal_manifest_validates() {
     assert_eq!(result, Ok(()), "minimal manifest must validate: {result:?}");
 }
 
+/// Verifies a new model can opt in by configuration and rejects an incompatible engine or protocol.
+/// 验证新模型仅通过配置即可启用该行为，并拒绝不兼容的引擎或协议。
+#[test]
+fn responses_developer_prefix_accepts_new_model_rules_only_on_standard_responses() {
+    // A synthetic future identifier proves placement is independent of model naming conventions.
+    // 合成的未来模型标识证明指令位置与模型命名无关。
+    let mut manifest = minimal_manifest();
+    manifest.model_rules.push(
+        serde_json::from_value(serde_json::json!({
+            "rule_id": "fixture-prefix",
+            "matcher": {"kind": "exact", "value": "fixture-model"},
+            "supported_protocols": [vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
+            "selected_protocol": vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+            "responses_developer_prefix": true
+        }))
+        .unwrap(),
+    );
+    let validate = |manifest: &ProviderManifestV1| {
+        validate_manifest(manifest, ManifestOwnership::System, &registry())
+    };
+    assert!(
+        validate(&manifest)
+            .unwrap_err()
+            .iter()
+            .any(|e| e.code == "responses_developer_prefix_requires_engine")
+    );
+    manifest.engine_contract.minimum_manifest_engine =
+        super::super::RESPONSES_DEVELOPER_PREFIX_MIN_ENGINE;
+    assert_eq!(validate(&manifest), Ok(()));
+    // Change the selected protocol while keeping the same model and placement declaration.
+    // 保留相同模型及位置声明，仅变更生效协议。
+    manifest.model_rules.first_mut().unwrap().selected_protocol =
+        Some(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID.into());
+    assert!(
+        validate(&manifest)
+            .unwrap_err()
+            .iter()
+            .any(|e| e.code == "responses_developer_prefix_requires_responses")
+    );
+}
+
 /// Verifies every used protocol must be declared by the manifest engine contract.
 /// 验证每个已使用协议都必须由 Manifest 引擎契约声明。
 #[test]
@@ -770,6 +811,7 @@ fn conflicting_same_rank_rules_reject_manifest() {
             supported_protocols: vec![String::from("openai-responses.v1")],
             selected_protocol: Some(String::from("openai-responses.v1")),
             codex_behavior: None,
+            responses_developer_prefix: false,
             capabilities: None,
             tool_schema_projection: Default::default(),
             protocol_capabilities: Default::default(),
@@ -796,6 +838,7 @@ fn conflicting_same_rank_rules_reject_manifest() {
             supported_protocols: vec![String::from("openai-responses.v1")],
             selected_protocol: Some(String::from("openai-responses.v1")),
             codex_behavior: None,
+            responses_developer_prefix: false,
             capabilities: None,
             tool_schema_projection: Default::default(),
             protocol_capabilities: Default::default(),
@@ -893,6 +936,7 @@ fn incomparable_same_rank_scopes_reject_manifest() {
             supported_protocols: vec![String::from("openai-responses.v1")],
             selected_protocol: Some(String::from("openai-responses.v1")),
             codex_behavior: None,
+            responses_developer_prefix: false,
             capabilities: None,
             tool_schema_projection: Default::default(),
             protocol_capabilities: Default::default(),
@@ -922,6 +966,7 @@ fn incomparable_same_rank_scopes_reject_manifest() {
             supported_protocols: vec![String::from("openai-responses.v1")],
             selected_protocol: Some(String::from("openai-responses.v1")),
             codex_behavior: None,
+            responses_developer_prefix: false,
             capabilities: None,
             tool_schema_projection: Default::default(),
             protocol_capabilities: Default::default(),
@@ -962,6 +1007,7 @@ fn rule_protocol_missing_on_entry_route_rejected() {
         supported_protocols: vec![String::from("anthropic-messages.v1")],
         selected_protocol: Some(String::from("anthropic-messages.v1")),
         codex_behavior: None,
+        responses_developer_prefix: false,
         capabilities: None,
         tool_schema_projection: Default::default(),
         protocol_capabilities: Default::default(),

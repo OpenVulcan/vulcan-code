@@ -18,6 +18,7 @@ fn successful_permit_fixture() -> PreparedPhysicalApi {
         dispatch_lease: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: "model".into(),
             cache_scope_id: None,
             continuation: None,

@@ -15,6 +15,7 @@ use vulcan_ai_contract::{
 fn request() -> AiExecutionRequest {
     AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: String::from("fixture-model"),
         cache_scope_id: None,
         continuation: None,

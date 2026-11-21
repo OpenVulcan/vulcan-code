@@ -43,6 +43,9 @@ pub struct ProviderExecutionRoute {
     /// Optional closed Codex behavior frozen from the model protocol binding.
     /// 从模型协议绑定冻结的可选封闭 Codex 行为。
     pub codex_behavior: Option<crate::provider_manifest::CodexModelBehavior>,
+    /// Places fixed system text in the first developer message on the selected Responses route.
+    /// 在所选 Responses 路线上将固定系统正文放入首条开发者消息。
+    pub responses_developer_prefix: bool,
     /// Ordered request-projection profile chain effective for this exact model route; route
     /// defaults form the base and an explicitly present model-rule list replaces them, including
     /// an explicit empty list that clears the chain (plan §R8.4/§R8.5).
@@ -162,6 +165,7 @@ impl ProviderExecutionRoute {
             custom_model_projection: None,
             tool_schema_projection: crate::provider_manifest::ToolSchemaProjectionMode::Lightweight,
             codex_behavior: None,
+            responses_developer_prefix: false,
             request_projection_profiles,
             response_projection_profiles,
             upload_channels: Vec::new(),

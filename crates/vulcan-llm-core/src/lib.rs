@@ -739,6 +739,7 @@ mod tests {
     ) -> vulcan_ai_contract::AiExecutionRequest {
         vulcan_ai_contract::AiExecutionRequest {
             operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: String::from("deepseek-chat"),
             cache_scope_id: None,
             continuation: None,

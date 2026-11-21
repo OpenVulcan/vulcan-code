@@ -86,6 +86,7 @@ pub(crate) fn bundled_manifest_route(
 pub(crate) fn minimal_request() -> AiExecutionRequest {
     AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: String::from("openai/gpt-4.1"),
         cache_scope_id: None,
         continuation: None,
@@ -161,7 +162,7 @@ pub(super) fn deepseek_route(protocol_id: &str) -> ProviderExecutionRoute {
 /// 返回值
 /// The complete UTF-8 request used only for transport assertions.
 /// 返回仅用于传输断言的完整 UTF-8 请求。
-pub(super) async fn read_test_http_request(stream: &mut TcpStream) -> String {
+pub(crate) async fn read_test_http_request(stream: &mut TcpStream) -> String {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4_096];
     let expected_length = loop {

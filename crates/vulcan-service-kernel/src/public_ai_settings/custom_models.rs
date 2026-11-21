@@ -279,6 +279,7 @@ pub(crate) async fn service_validate_public_ai_custom_model(
     let execution_id = uuid::Uuid::new_v4().to_string();
     let execution_request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: selection.model.id.clone(),
         // Validation belongs to no session, so it is its own scope: providers that route by a
         // session header or derive prefix identity from the cache scope reject a request without one.

@@ -240,6 +240,7 @@ async fn run_generation(
         .ok_or_else(|| String::from("Configured inference runtime is still starting."))?;
     let execution_request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: selection.model.id.clone(),
         // The request belongs to the session it titles: providers that route by a session header
         // (x-opencode-session) or derive prefix identity from the cache scope (Responses Lite)

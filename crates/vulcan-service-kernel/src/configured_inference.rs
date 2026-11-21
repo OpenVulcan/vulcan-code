@@ -4639,6 +4639,7 @@ fn responses_provider_request(
     )?;
     Ok(AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: request.request_instructions.clone(),
         model_id: selection.model.id.clone(),
         cache_scope_id: Some(responses_cache_scope_id(caller, request)),
         continuation: None,
@@ -6846,6 +6847,7 @@ mod tests {
     fn test_responses_request() -> ResponsesExecutionRequest {
         ResponsesExecutionRequest {
             contract_version: INFERENCE_CONTRACT_VERSION,
+            request_instructions: None,
             request_id: String::from("request-capability-1"),
             idempotency_key: None,
             consumer_profile_id: String::from("vmm"),
@@ -7639,6 +7641,7 @@ mod tests {
     fn llm_input_budget_uses_exact_utf8_bytes() {
         let request = ResponsesExecutionRequest {
             contract_version: INFERENCE_CONTRACT_VERSION,
+            request_instructions: None,
             request_id: String::from("request-1"),
             idempotency_key: None,
             consumer_profile_id: String::from("vmm"),

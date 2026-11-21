@@ -873,6 +873,7 @@ mod tests {
         let encoded = GeminiGenerateContentProfile
             .encode(&AiExecutionRequest {
                 operation: AiOperation::ConversationRespond,
+                request_instructions: None,
                 model_id: String::from("gemini-model"),
                 cache_scope_id: None,
                 continuation: None,
@@ -925,6 +926,7 @@ mod tests {
     fn encodes_tool_free_validation_request_without_serial_projection() {
         let request = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: String::from("gemini-model"),
             cache_scope_id: None,
             continuation: None,
@@ -962,6 +964,7 @@ mod tests {
     fn encodes_native_search_and_code_execution() {
         let mut request = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: String::from("gemini-model"),
             cache_scope_id: None,
             continuation: None,
@@ -1045,6 +1048,7 @@ mod tests {
 
         let request = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: String::from("gemini-model"),
             cache_scope_id: None,
             continuation: None,
@@ -1111,6 +1115,7 @@ mod tests {
     fn code_assist_wraps_request_and_unwraps_stream() {
         let request = AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: String::from("gemini-code-assist"),
             cache_scope_id: None,
             continuation: None,

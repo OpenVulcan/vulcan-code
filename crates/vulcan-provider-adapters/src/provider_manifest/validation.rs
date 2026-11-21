@@ -380,6 +380,21 @@ fn validate_engine_contract(
         "transformer",
         errors,
     );
+    if manifest
+        .model_rules
+        .iter()
+        .any(|rule| rule.responses_developer_prefix)
+        && contract.minimum_manifest_engine < super::RESPONSES_DEVELOPER_PREFIX_MIN_ENGINE
+    {
+        errors.push(ManifestValidationError::new(
+            "responses_developer_prefix_requires_engine",
+            "engine_contract.minimum_manifest_engine",
+            format!(
+                "Responses developer prefixes require manifest engine {} or newer.",
+                super::RESPONSES_DEVELOPER_PREFIX_MIN_ENGINE
+            ),
+        ));
+    }
     if contract.minimum_manifest_engine > super::CURRENT_MANIFEST_ENGINE {
         errors.push(ManifestValidationError::new(
             "unsupported_engine_contract",
@@ -2583,6 +2598,15 @@ fn validate_model_rule(
             "rule_requires_protocol_declaration",
             path(""),
             "rule must declare supported_protocols or selected_protocol",
+        ));
+    }
+    if rule.responses_developer_prefix
+        && rule.selected_protocol.as_deref() != Some(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID)
+    {
+        errors.push(ManifestValidationError::new(
+            "responses_developer_prefix_requires_responses",
+            path(".responses_developer_prefix"),
+            "The developer prefix requires an explicitly selected standard Responses protocol.",
         ));
     }
     validate_codex_model_behavior(rule, index, errors);

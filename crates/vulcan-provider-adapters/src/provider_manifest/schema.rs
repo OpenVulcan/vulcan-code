@@ -1102,6 +1102,10 @@ pub struct ModelRule {
     /// 当前精确模型规则持有的可选封闭 Codex 行为。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_behavior: Option<CodexModelBehavior>,
+    /// Places fixed system text in the first developer message on the selected Responses route.
+    /// 在所选 Responses 路线上将固定系统正文放入首条开发者消息。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub responses_developer_prefix: bool,
     /// Protocol-independent capability patch; omitted fields inherit.
     /// 协议无关能力补丁；省略字段继承。
     #[serde(default, skip_serializing_if = "Option::is_none")]

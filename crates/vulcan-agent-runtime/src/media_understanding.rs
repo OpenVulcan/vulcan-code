@@ -464,6 +464,7 @@ async fn execute_model_replacement_media_understanding(
     // 应用于图片、视频与音频理解请求。
     let request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: resolved_selection.model.id.clone(),
         cache_scope_id: owner_session_id.clone(),
         continuation: None,

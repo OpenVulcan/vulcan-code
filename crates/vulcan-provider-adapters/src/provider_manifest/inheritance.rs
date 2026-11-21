@@ -222,6 +222,9 @@ pub struct ResolvedRuleInstance {
     /// Rule-owned closed Codex behavior without provider-default inference.
     /// 规则自有的封闭 Codex 行为，不进行供应商默认推断。
     pub codex_behavior: Option<super::CodexModelBehavior>,
+    /// Places fixed system text in the first developer message on the selected Responses route.
+    /// 在所选 Responses 路线上将固定系统正文放入首条开发者消息。
+    pub responses_developer_prefix: bool,
     /// Inherited tool-schema projection contract.
     /// 继承后的工具 Schema 投影契约。
     pub tool_schema_projection: super::ToolSchemaProjectionMode,
@@ -509,6 +512,12 @@ fn resolve_rule_for_entry(
         provider_provenance()
     };
     field_provenance.insert(String::from("supported_protocols"), supported_provenance);
+    if rule.responses_developer_prefix {
+        field_provenance.insert(
+            String::from("responses_developer_prefix"),
+            rule_provenance(),
+        );
+    }
     if selected_protocol.is_some() {
         let entry_declares_selected = overlay
             .and_then(|value| value.selected_protocol.as_ref())
@@ -602,6 +611,7 @@ fn resolve_rule_for_entry(
         supported_protocols,
         selected_protocol,
         codex_behavior: rule.codex_behavior.clone(),
+        responses_developer_prefix: rule.responses_developer_prefix,
         tool_schema_projection,
         capabilities,
         capability_provenance,

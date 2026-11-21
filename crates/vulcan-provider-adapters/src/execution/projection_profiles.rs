@@ -74,6 +74,7 @@ pub(crate) fn project_json_request_profiles(
 ) -> Result<Value, String> {
     let request = AiExecutionRequest {
         operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+        request_instructions: None,
         model_id: model_id.to_string(),
         cache_scope_id: None,
         continuation: None,

@@ -1907,6 +1907,7 @@ impl NativeVmmHostDriver {
         let request_id = format!("vmm-llm-{}", request.effect_id.as_str());
         let ai_request = ResponsesExecutionRequest {
             contract_version: INFERENCE_CONTRACT_VERSION,
+            request_instructions: None,
             request_id: request_id.clone(),
             idempotency_key: None,
             consumer_profile_id: String::from(VMM_CONSUMER_PROFILE_ID),

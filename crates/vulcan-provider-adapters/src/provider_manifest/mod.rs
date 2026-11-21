@@ -203,7 +203,10 @@ pub const MAX_FIXED_HEADER_VALUE_BYTES: usize = 1_024;
 
 /// Manifest engine contract version currently understood by this host.
 /// 当前宿主理解的 Manifest 引擎契约版本。
-pub const CURRENT_MANIFEST_ENGINE: u32 = 5;
+pub const CURRENT_MANIFEST_ENGINE: u32 = RESPONSES_DEVELOPER_PREFIX_MIN_ENGINE;
+/// First manifest engine supporting model-scoped Responses instruction placement.
+/// 首次支持模型级 Responses 指令位置声明的清单引擎版本。
+const RESPONSES_DEVELOPER_PREFIX_MIN_ENGINE: u32 = 6;
 
 /// Manifest schema revision identifier fixed by this crate.
 /// 当前 crate 固定的 Manifest Schema 修订标识。

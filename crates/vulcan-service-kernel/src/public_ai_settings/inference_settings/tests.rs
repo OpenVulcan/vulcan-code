@@ -54,6 +54,7 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
             manifest_revision: 2,
             rule_id: String::from("responses-bound-model-rule"),
             codex_behavior: None,
+            responses_developer_prefix: false,
         }),
     };
     // mediaCapabilities exposes only image generation and must never become a conversation row.
@@ -85,6 +86,7 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
             manifest_revision: 2,
             rule_id: String::from("responses-media-model-rule"),
             codex_behavior: None,
+            responses_developer_prefix: false,
         }),
     };
     // configuration owns the exact credential identity used by the catalog.

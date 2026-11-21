@@ -52,6 +52,10 @@ pub struct ModelProtocolBinding {
     /// 从精确命中系统规则冻结的封闭 Codex 行为。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_behavior: Option<super::CodexModelBehavior>,
+    /// Places fixed system text in the first developer message on the selected Responses route.
+    /// 在所选 Responses 路线上将固定系统正文放入首条开发者消息。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub responses_developer_prefix: bool,
 }
 
 /// Why one model has no executable protocol binding.
@@ -215,6 +219,7 @@ pub fn resolve_system_model_protocol_binding(
             protocol_profile_id,
             source: ModelProtocolBindingSource::SystemManifest,
             codex_behavior: instance.codex_behavior.clone(),
+            responses_developer_prefix: instance.responses_developer_prefix,
             manifest_revision: resolved.revision,
             rule_id: instance.rule_id.clone(),
         });
@@ -240,6 +245,7 @@ pub fn resolve_system_model_protocol_binding(
                 protocol_profile_id,
                 source: ModelProtocolBindingSource::SystemManifest,
                 codex_behavior: None,
+                responses_developer_prefix: false,
                 manifest_revision: resolved.revision,
                 rule_id: String::new(),
             })
@@ -320,6 +326,7 @@ pub fn resolve_custom_model_protocol_binding(
             protocol_profile_id: only_protocol.to_string(),
             source: ModelProtocolBindingSource::CustomAutoDefault,
             codex_behavior: None,
+            responses_developer_prefix: false,
             manifest_revision,
             rule_id: String::from("unique_protocol"),
         });
@@ -329,6 +336,7 @@ pub fn resolve_custom_model_protocol_binding(
             protocol_profile_id: explicit_protocol.to_string(),
             source: ModelProtocolBindingSource::CustomUser,
             codex_behavior: None,
+            responses_developer_prefix: false,
             manifest_revision,
             rule_id: String::from("custom_user"),
         });
@@ -355,6 +363,7 @@ pub fn resolve_custom_model_protocol_binding(
         protocol_profile_id: (*auto_protocol).to_string(),
         source: ModelProtocolBindingSource::CustomAutoDefault,
         codex_behavior: None,
+        responses_developer_prefix: false,
         manifest_revision,
         rule_id: String::from("custom_auto_default"),
     })

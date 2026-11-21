@@ -1451,6 +1451,7 @@ mod tests {
     fn codex_request() -> AiExecutionRequest {
         AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
+            request_instructions: None,
             model_id: String::from("gpt-codex"),
             cache_scope_id: Some(String::from("session-stable")),
             continuation: None,

@@ -258,6 +258,7 @@ fn review_request(
 ) -> ResponsesExecutionRequest {
     ResponsesExecutionRequest {
         contract_version: INFERENCE_CONTRACT_VERSION,
+        request_instructions: None,
         request_id: format!("permission-review-{}", uuid::Uuid::new_v4()),
         idempotency_key: None,
         consumer_profile_id: String::from(PERMISSION_REVIEW_CONSUMER_PROFILE_ID),
