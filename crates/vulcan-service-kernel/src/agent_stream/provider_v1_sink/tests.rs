@@ -1366,6 +1366,50 @@ async fn economy_tool_free_stream_preserves_literal_handoff_without_another_requ
     }).unwrap();
 }
 
+/// Records the supplied tool call and output through the stream sink, leaving its root turn open.
+/// 将给定工具调用与返回值通过流接收器写入，保留其根回合为开放状态。
+async fn complete_economy_tool(
+    handle: &SessionHandle,
+    sink: &mut ProviderV1StreamSink,
+    call_id: &str,
+    name: &str,
+    arguments: serde_json::Value,
+    output: &str,
+) {
+    prepare_sink_request(handle, sink);
+    sink.accept_terminal(terminal_facts(1)).await.unwrap();
+    // The same provider call identity must survive preparation, execution and completion.
+    // 同一供应商调用标识应贯穿准备、执行与完成三个边界。
+    let request = recovery_request(call_id, name, arguments);
+    sink.apply_tool_boundary(
+        &ToolExecutionRecoveryBoundary::BatchPrepared(vec![request.clone()]),
+        9,
+    )
+    .await
+    .unwrap();
+    sink.apply_tool_boundary(
+        &ToolExecutionRecoveryBoundary::Started {
+            request: request.request.clone(),
+            binding_fingerprint: request.binding_fingerprint.clone(),
+        },
+        10,
+    )
+    .await
+    .unwrap();
+    sink.apply_tool_boundary(
+        &ToolExecutionRecoveryBoundary::Finished(ToolInvocationResult {
+            tool_call_id: call_id.into(),
+            tool_name: name.into(),
+            model_output: output.into(),
+            host_result: None,
+            is_error: false,
+        }),
+        11,
+    )
+    .await
+    .unwrap();
+}
+
 /// Persists a real tool call, then only its owning turn consumes the private terminal handoff.
 /// 持久化一次真实工具调用，只有其所属回合会消费最终答复的私有交接标记。
 #[tokio::test]
@@ -1388,36 +1432,15 @@ async fn economy_tool_handoff_is_private_and_does_not_leak_eligibility_to_next_t
             .unwrap()
             .open_turn_used_tools
     );
-    prepare_sink_request(&handle, &mut sink);
-    sink.accept_terminal(terminal_facts(1)).await.unwrap();
-    let request = recovery_request("read-once", "file_read", json!({"path":"notes.txt"}));
-    sink.apply_tool_boundary(
-        &ToolExecutionRecoveryBoundary::BatchPrepared(vec![request.clone()]),
-        9,
+    complete_economy_tool(
+        &handle,
+        &mut sink,
+        "read-once",
+        "file_read",
+        json!({"path":"notes.txt"}),
+        "notes",
     )
-    .await
-    .unwrap();
-    sink.apply_tool_boundary(
-        &ToolExecutionRecoveryBoundary::Started {
-            request: request.request.clone(),
-            binding_fingerprint: request.binding_fingerprint.clone(),
-        },
-        10,
-    )
-    .await
-    .unwrap();
-    sink.apply_tool_boundary(
-        &ToolExecutionRecoveryBoundary::Finished(ToolInvocationResult {
-            tool_call_id: "read-once".into(),
-            tool_name: "file_read".into(),
-            model_output: "notes".into(),
-            host_result: None,
-            is_error: false,
-        }),
-        11,
-    )
-    .await
-    .unwrap();
+    .await;
     assert!(
         handle
             .capture_controller_projection_snapshot()
@@ -1479,6 +1502,167 @@ async fn economy_tool_handoff_is_private_and_does_not_leak_eligibility_to_next_t
             .unwrap()
             .open_turn_used_tools
     );
+}
+
+/// A prior turn's live shell job gates a later file-read handoff; another turn can settle after it stops.
+/// 上一回合的后台作业阻止后续只读回合发布交接；作业停止后，新回合可以正常结算。
+#[tokio::test]
+async fn economy_cross_turn_background_job_blocks_handoff_until_stopped() {
+    use vulcan_host_tools::process_creation::new_background_tokio_command;
+    use vulcan_host_tools::shell_job::{ShellJobOrigin, ShellJobRuntime, ShellJobSpawn};
+    // Use an isolated stored session and the production process registry, scoped to this session UUID.
+    // 使用独立持久会话与生产进程注册表，作业归属固定到本测试的会话标识。
+    let (directory, handle) = published_stored_open_turn();
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |doc| doc.enable_draft_economy(Default::default(), 2),
+        )
+        .unwrap();
+    // Use a full provider stream for the turn that starts the job.
+    // 用完整供应商流记录启动作业的回合。
+    let mut sink = ProviderV1StreamSink::new(
+        handle.clone(),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    complete_economy_tool(
+        &handle,
+        &mut sink,
+        "start-job",
+        "shell_command",
+        json!({"command":"test"}),
+        "background",
+    )
+    .await;
+    // Identify the real shell call recorded in the previous turn.
+    // 定位上一回合实际记录的命令调用。
+    let origin = handle
+        .read(|doc| {
+            doc.events().iter().find_map(|event| match &event.event {
+                EventBody::ToolCall(tool) if tool.tool_name == "shell_command" => {
+                    Some(ShellJobOrigin {
+                        api_call_id: tool.api_call_id.value(),
+                        tool_call_id: tool.tool_call_id.value(),
+                    })
+                }
+                _ => None,
+            })
+        })
+        .unwrap()
+        .expect("owning shell invocation");
+    // Use the canonical job owner used by shell_command.
+    // 使用 shell_command 使用的规范作业所有者。
+    let session = vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
+        &handle.session_id().to_string(),
+    );
+    // Run the process in the same registry queried by settlement.
+    // 在结算时查询的同一注册表中运行进程。
+    let runtime = ShellJobRuntime::global();
+    // Each process exits on its own as a safeguard if the test aborts before requesting a stop.
+    // 即使测试在主动停止前失败，进程也会自行结束。
+    #[cfg(windows)]
+    let mut process = new_background_tokio_command("ping");
+    #[cfg(windows)]
+    process.args(["-n", "61", "127.0.0.1"]);
+    #[cfg(not(windows))]
+    let mut process = new_background_tokio_command("sleep");
+    #[cfg(not(windows))]
+    process.arg("60");
+    // Keep the registered process alive across the first file-read turn.
+    // 确保注册的进程跨越第一个文件读取回合持续运行。
+    let job = runtime
+        .spawn(
+            ShellJobSpawn {
+                owner_session_id: session.clone(),
+                origin: Some(origin),
+                command: "test".into(),
+                purpose: "test".into(),
+                shell_label: "test".into(),
+                cwd: directory.path().to_owned(),
+                jobs_dir: directory.path().to_owned(),
+                stdin: None,
+                background: true,
+                timeout: None,
+                capture_streams: false,
+            },
+            process,
+        )
+        .expect("start background job");
+    prepare_sink_request(&handle, &mut sink);
+    sink.append_assistant_delta("started", 12).unwrap();
+    sink.accept_terminal(terminal_facts(0)).await.unwrap();
+    for (call_id, running) in [("read-while-running", true), ("read-after-stop", false)] {
+        if !running {
+            job.request_stop("Stopped by regression test.");
+            tokio::time::timeout(std::time::Duration::from_secs(10), job.wait())
+                .await
+                .expect("background job stopped");
+            runtime.discard_notice(&session, job.id());
+        }
+        handle
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new(call_id).unwrap(),
+                    "read",
+                    Vec::new(),
+                ),
+                20,
+            )
+            .unwrap();
+        handle
+            .mutate_durable(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                |doc| doc.prepare_economy_turn(Default::default(), 21),
+            )
+            .unwrap();
+        // Capture the new turn before closure to distinguish its receipt from the job owner's.
+        // 在闭合前记录新回合标识，避免误用作业所属回合的回执。
+        let turn = handle
+            .read(|doc| doc.active_turn().unwrap().turn_id)
+            .unwrap();
+        let mut sink = ProviderV1StreamSink::new(
+            handle.clone(),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        complete_economy_tool(
+            &handle,
+            &mut sink,
+            call_id,
+            "file_read",
+            json!({"path":"notes.txt"}),
+            "notes",
+        )
+        .await;
+        prepare_sink_request(&handle, &mut sink);
+        sink.append_assistant_delta("answer\n<SUMMARY_INFO>handoff</SUMMARY_INFO>", 22)
+            .unwrap();
+        sink.accept_terminal(terminal_facts(0)).await.unwrap();
+        handle
+            .read(|doc| {
+                // Check publication separately from successful completion of the ordinary assistant answer.
+                // 分别检查交接发布和普通助手答复的成功完成。
+                let receipt = doc
+                    .metadata
+                    .config
+                    .economy
+                    .settled
+                    .iter()
+                    .find(|receipt| receipt.turn.turn_id == turn);
+                if running {
+                    assert!(receipt.is_none(), "running job must prevent settlement");
+                } else {
+                    assert_eq!(receipt.and_then(|r| r.summary.as_deref()), Some("handoff"));
+                }
+                assert!(
+                    doc.events().iter().any(|e| e.turn_id == Some(turn)
+                        && matches!(&e.event, EventBody::AssistantText(t)
+                        if t.status == AssistantSemanticStatus::Completed && t.text == "answer\n"))
+                );
+            })
+            .unwrap();
+    }
 }
 
 /// Verifies api_started is durable before semantic streaming and terminal closure.

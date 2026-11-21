@@ -188,6 +188,16 @@ pub(crate) fn settle_document_turn(
 ) -> Result<(), vulcan_session_core::v1::DomainError> {
     use vulcan_session_core::v1::Seq;
     use vulcan_session_core::v1::event::{EventBody, UserInputSource};
+    // A previous turn can still own a running job even when this turn only read a file.
+    // 即使本轮只读取文件，同一会话的早先回合仍可能有后台作业在运行。
+    let session = vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
+        &session_id.to_string(),
+    );
+    if vulcan_host_tools::shell_job::ShellJobRuntime::global().running_background_count(&session)
+        > 0
+    {
+        return Ok(());
+    }
     let prefix = match (
         document.metadata.config.economy.active.as_ref(),
         document.events().first(),
@@ -230,9 +240,6 @@ pub(crate) fn settle_document_turn(
                 .then_some(facts.job_id)
         })
         .collect();
-    let session = vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
-        &session_id.to_string(),
-    );
     // Load the session's job index once if a long task or a restart has outlived the live job registry.
     // 长任务或重启超出运行时作业缓存时，按需读取一次当前会话的持久索引。
     let archive = std::cell::OnceCell::new();

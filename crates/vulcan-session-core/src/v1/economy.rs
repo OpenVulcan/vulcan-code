@@ -350,13 +350,19 @@ impl EconomyState {
             match &mut entry.item {
                 ProjectedItem::UserInput { resource_ids, .. } if !resource_ids.is_empty() || !source.is_some_and(|e| matches!(&e.event, super::event::EventBody::UserInput(u) if u.input_source == super::event::UserInputSource::AgentMessage)) => projected.push(entry),
                 ProjectedItem::AssistantText {
+                    text,
                     reasoning,
                     tool_calls,
                     provider_source,
-                    ..
                 } if entry.source_to_seq >= receipt.answer && tool_calls.is_empty() => {
                     *reasoning = None;
-                    *provider_source = None;
+                    // Keep the exact native message (including its id and phase) until this answer ages out.
+                    // 此答复整轮移出前保留原始消息及其标识和阶段，保持同路由请求前缀稳定。
+                    if !provider_source.as_ref().and_then(|s| s.replay.as_ref())
+                        .is_some_and(|replay| replay.is_plain_responses_answer(text))
+                    {
+                        *provider_source = None;
+                    }
                     if let Some(summary) = &receipt.summary {
                         let body = summary
                             .replace('&', "&amp;")
@@ -379,8 +385,14 @@ impl EconomyState {
                     tool_calls,
                     ..
                 } if tool_calls.iter().all(|t| t.tool_name == "ask") && !tool_calls.is_empty() => {
-                    *reasoning = None;
-                    *provider_source = None;
+                    // Earlier settlement receipts also project through here; a retained signed ask needs its envelope.
+                    // 旧结算回执也通过此处投影；保留下来的带签名提问必须携带原封套。
+                    if !provider_source.as_ref().and_then(|s| s.replay.as_ref())
+                        .is_some_and(|replay| replay.requires_verbatim_replay(None))
+                    {
+                        *reasoning = None;
+                        *provider_source = None;
+                    }
                     projected.push(entry);
                 }
                 ProjectedItem::ToolResult { tool_name, .. } if tool_name == "ask" => {

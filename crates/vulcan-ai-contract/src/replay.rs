@@ -322,6 +322,94 @@ impl ProviderReplayEnvelope {
         }
     }
 
+    /// Returns whether the native Responses messages and canonical text exactly reproduce the supplied answer.
+    /// 判断 Responses 原始消息与规范文本能否逐字还原给定的答复。
+    pub fn is_plain_responses_answer(&self, answer: &str) -> bool {
+        if (self.provider_context_items.is_empty() && self.message_phases.is_empty())
+            || answer.is_empty()
+            || self
+                .message_phases
+                .iter()
+                .any(|entry| entry.phase != AiMessagePhase::FinalAnswer)
+        {
+            return false;
+        }
+        // Consume both representations in order. A non-text part or unmatched byte keeps the native dependency.
+        // 按顺序核对两种表示；非文本分块或不匹配的字节都需要保留原生依赖。
+        let mut canonical_tail = answer;
+        for item in &self.content {
+            let ContentItem::Text { text } = item else {
+                return false;
+            };
+            let Some(tail) = canonical_tail.strip_prefix(text.as_str()) else {
+                return false;
+            };
+            canonical_tail = tail;
+        }
+        // Phase-only snapshots have no native output items to compare.
+        // 仅携带消息阶段的快照没有原始输出项可供比对。
+        if !canonical_tail.is_empty() || self.provider_context_items.is_empty() {
+            return canonical_tail.is_empty();
+        }
+        // Compare raw message parts in order without allocating a copy of the answer.
+        // 依序比较原始消息分块，避免复制整段答复。
+        let mut native_tail = answer;
+        for message in &self.provider_context_items {
+            if message["type"] != "message"
+                || message["role"] != "assistant"
+                || !(message["phase"].is_null() || message["phase"] == "final_answer")
+                || !(message["status"].is_null() || message["status"] == "completed")
+            {
+                return false;
+            }
+            if let Some(text) = message["content"].as_str() {
+                let Some(tail) = native_tail.strip_prefix(text) else {
+                    return false;
+                };
+                native_tail = tail;
+                continue;
+            }
+            let Some(parts) = message["content"].as_array() else {
+                return false;
+            };
+            if parts.is_empty() {
+                return false;
+            }
+            for part in parts {
+                if part["type"] != "output_text"
+                    || !(part["annotations"].is_null()
+                        || part["annotations"].as_array().is_some_and(Vec::is_empty))
+                {
+                    return false;
+                }
+                let Some(tail) = part["text"]
+                    .as_str()
+                    .and_then(|text| native_tail.strip_prefix(text))
+                else {
+                    return false;
+                };
+                native_tail = tail;
+            }
+        }
+        native_tail.is_empty()
+    }
+
+    /// Reports whether rewriting this envelope would drop native state needed for replay.
+    /// 判断改写该封套是否会丢失回放所需的原生状态。
+    /// Pass the completed assistant text when classifying a reply, or None for a tool call or reasoning event.
+    /// 分类答复时传入已完成的助手正文；工具调用和推理事件传入 None。
+    pub fn requires_verbatim_replay(&self, answer: Option<&str>) -> bool {
+        if !self.provider_context_items.is_empty() || !self.message_phases.is_empty() {
+            return !answer.is_some_and(|text| self.is_plain_responses_answer(text));
+        }
+        self.content.iter().any(|item| match item {
+            ContentItem::Text { .. } => false,
+            ContentItem::ToolCall { call } => call.signature.is_some(),
+            ContentItem::Reasoning { signature, .. } => signature.is_some(),
+            _ => true,
+        })
+    }
+
     /// Attaches validated message phases observed for this exact provider response.
     /// 附加从当前精确供应商响应观察到的已校验消息阶段。
     ///
@@ -908,6 +996,56 @@ mod tests {
             content,
             provider_context_items,
         )
+    }
+
+    /// Only a completed answer matching both text representations may age out with its native envelope.
+    /// 只有规范正文与原生正文均匹配的已完成答复才能连同其原生封套按龄移出。
+    #[test]
+    fn economy_native_answer_requires_exact_text_and_preserves_continuations() {
+        // Start with the message shape produced by Responses and vary one piece of evidence at a time.
+        // 从 Responses 产出的消息结构出发，每次仅更改一项证据。
+        let message = json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]});
+        let canonical = vec![ContentItem::Text {
+            text: "answer".into(),
+        }];
+        let mut envelope = projection_envelope(canonical.clone(), vec![message.clone()]);
+        assert!(!envelope.requires_verbatim_replay(Some("answer")));
+        assert!(envelope.requires_verbatim_replay(None));
+        assert!(envelope.requires_verbatim_replay(Some("different answer")));
+        for (pointer, value) in [
+            ("/content/0/text", json!("different")),
+            ("/content/0/type", json!("refusal")),
+            (
+                "/content/0",
+                json!({"type":"output_text","text":"answer","annotations":[{"type":"url_citation"}]}),
+            ),
+            ("/content", json!([])),
+            ("/role", json!("user")),
+        ] {
+            let mut changed = message.clone();
+            *changed.pointer_mut(pointer).expect("fixture field") = value;
+            assert!(
+                projection_envelope(canonical.clone(), vec![changed])
+                    .requires_verbatim_replay(Some("answer")),
+                "{pointer}"
+            );
+        }
+        // Even a complete visible answer can also carry a separate encrypted continuation.
+        // 可见答复即使完整，也可能另外携带加密延续项目。
+        envelope
+            .provider_context_items
+            .push(json!({"type":"reasoning","encrypted_content":"opaque"}));
+        assert!(envelope.requires_verbatim_replay(Some("answer")));
+        envelope.provider_context_items.clear();
+        envelope
+            .message_phases
+            .push(crate::ProviderMessagePhaseSnapshot {
+                item_id: "msg".into(),
+                phase: crate::AiMessagePhase::FinalAnswer,
+            });
+        assert!(!envelope.requires_verbatim_replay(Some("answer")));
+        envelope.message_phases.last_mut().unwrap().phase = crate::AiMessagePhase::Commentary;
+        assert!(envelope.requires_verbatim_replay(Some("answer")));
     }
 
     /// Verifies a fully matching route replays ordered provider items instead of canonical content.

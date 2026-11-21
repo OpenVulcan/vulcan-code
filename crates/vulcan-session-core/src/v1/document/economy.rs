@@ -291,29 +291,15 @@ impl SessionDocument {
         {
             // Signed or opaque provider items cannot be reconstructed from a human-readable handoff.
             // 签名或不透明的供应商项目无法从交接摘要重建。
-            let source = match &event.event {
-                EventBody::AssistantReasoning(t) => t.provider_source.as_ref(),
-                EventBody::AssistantText(t) => t.provider_source.as_ref(),
-                EventBody::ToolCall(t) => t.provider_source.as_ref(),
-                _ => None,
+            let (source, answer_text) = match &event.event {
+                EventBody::AssistantReasoning(t) => (t.provider_source.as_ref(), None),
+                EventBody::AssistantText(t) => (t.provider_source.as_ref(), Some(t.text.as_str())),
+                EventBody::ToolCall(t) => (t.provider_source.as_ref(), None),
+                _ => (None, None),
             };
             if source
                 .and_then(|source| source.replay.as_ref())
-                .is_some_and(|replay| {
-                    !replay.provider_context_items.is_empty()
-                        || !replay.message_phases.is_empty()
-                        || replay.content.iter().any(|item| {
-                            !matches!(
-                                item,
-                                vulcan_ai_contract::ContentItem::Text { .. }
-                                    | vulcan_ai_contract::ContentItem::ToolCall { .. }
-                                    | vulcan_ai_contract::ContentItem::Reasoning {
-                                        signature: None,
-                                        ..
-                                    }
-                            )
-                        })
-                })
+                .is_some_and(|replay| replay.requires_verbatim_replay(answer_text))
             {
                 protected = true;
                 retained_reason.get_or_insert("native_replay");
