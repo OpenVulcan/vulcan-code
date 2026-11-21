@@ -93,6 +93,9 @@ export interface ComposerInitialGoalSnapshot {
 export interface ComposerSessionSettingsSnapshot {
   // Explicit answer mode for the new session; absence copies the global default.
   // 新会话的显式回答模式；缺省时复制全局默认值。
+  // Explicit economy selection for the first user turn.
+  // 首个用户回合的显式节约模式选择。
+  economyEnabled?: boolean;
   answerMode?: AnswerMode;
   // Explicit permission mode for the new session; absence keeps the session default.
   // 新会话的显式权限模式；缺省时保留会话默认值。

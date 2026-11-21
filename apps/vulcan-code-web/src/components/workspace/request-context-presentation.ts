@@ -4,6 +4,7 @@ import type { RequestContextNode } from "./request-context-dialog";
 // Producer keys are taken from V1 SystemContext and the prompt source contract.
 // 生产者键取自 V1 SystemContext 与提示词来源契约。
 const CONTEXT_KEYS: Readonly<Record<string, TranslationKey>> = {
+  "dynamic.economy_mode": "economy.title",
   "dynamic.html_answers": "requestContext.answerMode",
   "dynamic.permission_mode": "requestContext.permissionMode",
   "dynamic.runtime_context": "requestContext.runtimeContext",
@@ -16,6 +17,7 @@ const CONTEXT_KEYS: Readonly<Record<string, TranslationKey>> = {
 // Exact wrapper tags rendered by project rules, memory and skill producers.
 // 项目规则、记忆和技能生产者渲染的精确信封标签。
 const INSTRUCTION_TAGS = {
+  vulcan_turn_summary: "economy.summary",
   vulcan_context_agent_md: "requestContext.projectRules",
   vmm_profile: "requestContext.memoryProfile",
   vmm_profile_delta: "requestContext.memoryProfile",
@@ -96,7 +98,7 @@ function parseInjection(text: string, truncated: boolean): ContextInjection | un
   const body = text.slice(open[0].length).trimEnd();
   if (!body.endsWith(close) && !truncated) return undefined;
   const inner = body.endsWith(close) ? body.slice(0, -close.length).trim() : body.trimStart();
-  return { tag, title, attributes, body: dynamic || tag === "vulcan_context_agent_md" ? decodeEnvelopeText(inner) : inner };
+  return { tag, title, attributes, body: dynamic || tag === "vulcan_context_agent_md" || tag === "vulcan_turn_summary" ? decodeEnvelopeText(inner) : inner };
 }
 
 /** Resolves a semantic title, preview body, and optional injection metadata for one request row. */
@@ -111,7 +113,7 @@ export function presentRequestNode(node: RequestContextNode): {
   // Rust 对有界正文独立解码，使其不受有界原始 JSON 表示的截断影响。
   const text = node.text ?? null;
   const user = node.role === "user" || node.kind === "user_input";
-  const injection = user && text ? parseInjection(text, node.truncated) : undefined;
+  const injection = (user || node.kind === "system_text") && text ? parseInjection(text, node.truncated) : undefined;
   if (injection) return { title: injection.title, kind: "injection", body: injection.body, injection };
   if (node.toolParts?.length && !text?.trim()) {
     return {

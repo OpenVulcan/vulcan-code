@@ -55,6 +55,7 @@ mod collaboration;
 mod compaction;
 mod dedicated;
 mod dynamic_context;
+mod economy;
 mod generation;
 mod hydration;
 mod input;
@@ -634,6 +635,7 @@ impl SessionDocument {
         self.validate_runtime_initialization_state()?;
         self.validate_compaction_state()?;
         self.validate_loaded_metadata()?;
+        self.metadata.config.economy.validate()?;
         Ok(())
     }
 

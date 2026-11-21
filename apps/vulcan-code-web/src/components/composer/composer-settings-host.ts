@@ -1,5 +1,9 @@
 import { createContext } from "react";
 
+// Opens the application history-window settings from the composer.
+// 从输入区打开应用的历史窗口设置。
+export const EconomySettingsNavigation = createContext<(() => void) | null>(null);
+
 // This presentation-only slot moves the menu without duplicating its session/draft state or service subscriptions.
 // 此纯展示插槽移动菜单，但不复制会话／草稿状态或服务订阅。
 export const ComposerSettingsHostContext = createContext<HTMLDivElement | null>(null);

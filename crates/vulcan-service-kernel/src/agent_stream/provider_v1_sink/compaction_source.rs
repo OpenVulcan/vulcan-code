@@ -22,6 +22,21 @@ pub(super) struct CompactionSourceWindow {
     pub(super) image_excerpts: Vec<vulcan_session_core::v1::context::CompactedImageExcerpt>,
 }
 
+/// Restricts one frozen summary source to complete turns before the newly admitted user input.
+/// 将冻结摘要来源限制在新接纳用户输入之前的完整回合。
+fn retain_before_root(snapshot: &mut SessionProviderProjectionSnapshot, start: Seq) {
+    let keep = snapshot
+        .sourced_items
+        .iter()
+        .take_while(|item| item.source_from_seq < start)
+        .count();
+    snapshot.sourced_items.truncate(keep);
+    snapshot.items.truncate(keep);
+    snapshot
+        .preparing_user_prompt_media_seqs
+        .retain(|seq| *seq < start);
+}
+
 impl CompactionSourceWindow {
     /// Binds `state` to a real planning `snapshot`; rejects any semantic drift before execution.
     /// 将`state`绑定到真实规划`snapshot`；执行前拒绝任何语义漂移。
@@ -200,6 +215,7 @@ impl ProviderV1StreamSink {
     pub(crate) fn bind_compaction_source(
         &mut self,
         state: &SessionConversationState,
+        economy_start: Option<vulcan_session_core::v1::Seq>,
     ) -> Result<(), String> {
         if self.active.is_some() || self.compaction_source.is_some() {
             return Err(String::from(
@@ -208,10 +224,15 @@ impl ProviderV1StreamSink {
         }
         // Capture through the unique registered owner before any attempt starts.
         // 任何尝试开始前，通过唯一注册所有者捕获。
-        let snapshot = self
+        let mut snapshot = self
             .handle
             .capture_context_compaction_planning_snapshot()
             .map_err(|error| error.to_string())?;
+        // Freeze only the completed history; the user's new task and its media belong to business execution.
+        // 只冻结此前已完成的历史；新任务及其附件由业务请求持有。
+        if let Some(start) = economy_start {
+            retain_before_root(&mut snapshot, start);
+        }
         self.compaction_source = Some(
             CompactionSourceWindow::capture(snapshot, state).map_err(|error| error.to_string())?,
         );
@@ -324,6 +345,32 @@ pub(super) fn verify_compaction_transport_selection(
     );
     assert_eq!(result.projection.through_seq, snapshot.through_seq);
     assert!(result.user_prompt_media.is_empty());
+
+    // Activation uses the same transport reconstruction, but excludes the newly admitted input and media.
+    // 启用模式复用同一传输重建，摘要请求排除刚接纳的新输入与附件。
+    let current_start = snapshot.sourced_items.last().unwrap().source_from_seq;
+    let mut old_history = snapshot.clone();
+    old_history
+        .preparing_user_prompt_media_seqs
+        .push(current_start);
+    retain_before_root(&mut old_history, current_start);
+    assert!(old_history.preparing_user_prompt_media_seqs.is_empty());
+    let prior_state =
+        vulcan_context::conversation_state_from_session_messages(&messages[..messages.len() - 1])
+            .unwrap();
+    let mut activation = CompactionSourceWindow::capture(old_history, &prior_state)?;
+    activation.select(
+        &vulcan_context::conversation_state_to_compaction_source_messages(&prior_state).unwrap(),
+    )?;
+    let history_only = rebuild_provider_transport_candidate_with_compaction(
+        snapshot.clone(),
+        facts,
+        candidate.clone(),
+        media::PreparedV1UserMedia::default(),
+        Some(&activation),
+    )?;
+    let wire = serde_json::to_string(&history_only.transport.exact_request.messages).unwrap();
+    assert!(wire.contains("early-business-body") && !wire.contains("recent-summary-source"));
 
     let mut stale = snapshot.clone();
     stale.segment_generation += 1;

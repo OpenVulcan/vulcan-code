@@ -1,5 +1,5 @@
 import React from "react";
-import { ComposerAccountHostContext, ComposerSettingsHostContext } from "@/components/composer/composer-settings-host";
+import { ComposerAccountHostContext, ComposerSettingsHostContext, EconomySettingsNavigation } from "@/components/composer/composer-settings-host";
 import { DraftComposerContext, type DraftComposerContextValue } from "@/components/composer/dedicated/draft-composer-context";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
@@ -1433,6 +1433,7 @@ export function WorkbenchLayout(props: {
       activeConversationId: selectedConversationId,
       saveDefault: handleSaveToolCollapseDefault,
     }}>
+    <EconomySettingsNavigation.Provider value={() => { setActiveSettingsSubArea("economy-mode"); handleSelectTopFeatureArea("settings"); }}>
     <ComposerSettingsHostContext.Provider value={settingsHost}>
     <ComposerAccountHostContext.Provider value={accountHostValue}>
     <DraftComposerContext.Provider value={draftComposerContext}>
@@ -1665,6 +1666,7 @@ export function WorkbenchLayout(props: {
     </DraftComposerContext.Provider>
     </ComposerAccountHostContext.Provider>
     </ComposerSettingsHostContext.Provider>
+    </EconomySettingsNavigation.Provider>
     </ToolCollapsePreferencesContext.Provider>
     </ThinkingDisplaySystemContext.Provider>
     </FeedbackCenterContext.Provider>

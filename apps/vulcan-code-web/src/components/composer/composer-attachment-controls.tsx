@@ -65,6 +65,10 @@ export type ComposerAttachmentMenuProps = {
   // Owner-scoped answer mode for the current conversation or draft.
   // 当前会话或草稿的按归属限定回答模式。
   answerMode: ComposerAnswerModeController;
+  // Draft selection travels with the first submitted prompt.
+  // 草稿选择随首次提交的提示词传递。
+  draftEconomyEnabled?: boolean;
+  onDraftEconomyChange?: (enabled: boolean) => void;
   // Enabled attachment capability gates available for this prompt.
   // 当前提示词可用的已启用附件能力门控。
   capabilities: ComposerAttachmentCapabilitySummary[];

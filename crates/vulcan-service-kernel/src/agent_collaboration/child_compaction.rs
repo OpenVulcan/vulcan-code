@@ -213,7 +213,7 @@ pub(super) async fn compact_admitted(
     // This sink alone owns summary API preparation, output normalization and physical completion.
     // 此接收器独占摘要 API 准备、输出规范化与物理完成。
     let mut sink = crate::agent_stream::ProviderV1StreamSink::new(Arc::clone(&handle), resources);
-    sink.bind_compaction_source(&planned.full_context_state)?;
+    sink.bind_compaction_source(&planned.full_context_state, None)?;
     sink.require_child_compaction_source_owner(owner.turn_id, &invocation.execution_id)?;
     // Preserve the exact task prompt controls while replacing only its source media authority with the durable plan.
     // 保留精确任务提示控制，仅将来源媒体权威替换为可靠规划。

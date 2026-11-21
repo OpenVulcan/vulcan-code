@@ -191,6 +191,21 @@ fn upgrade_step(
         // Existing sessions have no published independent history until explicitly cleaned.
         // 旧会话在显式清理之前没有已发布的独立历史。
         14 => {}
+        // Existing conversations start in normal mode with no historical settlements.
+        // 现有会话从常规模式开始，不推断旧回合的结算信息。
+        15 => {
+            let config = raw
+                .get_mut("config")
+                .and_then(serde_json::Value::as_object_mut)
+                .ok_or_else(|| corrupt(path, "metadata config must be an object"))?;
+            if config.contains_key("economy") {
+                return Err(corrupt(path, "unexpected economy setting in v15 metadata"));
+            }
+            config.insert(
+                "economy".into(),
+                serde_json::json!(vulcan_session_core::v1::economy::EconomyState::default()),
+            );
+        }
         other => {
             return Err(SessionV1Error::unsupported(
                 path,

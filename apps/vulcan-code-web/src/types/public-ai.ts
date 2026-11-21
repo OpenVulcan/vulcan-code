@@ -1415,6 +1415,12 @@ export interface PublicAiSettingsSnapshot {
   // contextCompactionWindowNodes exposes the complete fixed system node configuration.
   // contextCompactionWindowNodes 公开完整的固定系统节点配置。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowConfiguration;
+  /** Settled-turn thresholds saved by Core.
+   * Core 保存的已结算回合阈值。 */
+  economyWindow: { triggerTurns: number; batchTurns: number };
+  /** Core-owned factory defaults for the editor.
+   * 编辑器使用的 Core 出厂值。 */
+  defaultEconomyWindow: PublicAiSettingsSnapshot["economyWindow"];
   // newSessionContextCompactionWindowNodeId applies only to newly created conversations.
   // newSessionContextCompactionWindowNodeId 仅应用于新建会话。
   newSessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;

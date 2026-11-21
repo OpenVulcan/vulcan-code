@@ -620,6 +620,7 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
         "auto_budget",
         ContextCompactionCommitMode::ContinueActive {
             task_id: active_stream_task_id,
+            economy_owner: None,
         },
         WebuiContextCompactionExecution {
             image_excerpts: Vec::new(),

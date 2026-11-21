@@ -66,6 +66,9 @@ export interface RequestContextRows {
   /** Encoded node count and the bounded rows returned by Core. */
   /** 编码节点数量与 Core 返回的有限行。 */
   nodeCount: number;
+  /** Local counts frozen at the request frontier, plus the last verbatim retention reason. */
+  /** 请求前沿的本地计数，以及最近一次保留原文的原因。 */
+  economy?: { retained: number; summarized: number; retired: number; lastRetainedReason: { turnId: number; reason: string } | null } | null;
   nodes: RequestContextNode[];
   /** Initial prompt sources matched against the displayed message bodies. */
   /** 与当前展示消息正文匹配的初始提示词来源。 */
@@ -92,7 +95,7 @@ export interface RequestContextPromptOrigin {
 // A lightweight unchanged response avoids repeatedly shipping large context bodies.
 // 轻量的未更新响应避免重复传输大型上下文正文。
 type RequestContextResult =
-  | { status: "available"; snapshot: RequestContextSnapshot; assistantResponse?: RequestContextAssistantResponse | null }
+  | { status: "available"; snapshot: RequestContextSnapshot; assistantResponse?: RequestContextAssistantResponse | null; economy?: RequestContextRows["economy"] }
   | { status: "unchanged" | "empty" };
 
 // Finalized assistant text from the same physical call as the inspected request.
@@ -159,7 +162,7 @@ export function RequestContextDialog({ sessionId, onClose }: { sessionId: string
         if (result.status === "available") {
           knownExecutionId = result.snapshot.dispatch.executionId;
           knownAssistantResponse = result.assistantResponse != null;
-          setSnapshot(result.snapshot);
+          setSnapshot({ ...result.snapshot, economy: result.economy });
           setAssistantResponse(result.assistantResponse ?? null);
           setSimulation(undefined);
         } else if (result.status === "empty") {
@@ -229,6 +232,8 @@ export function RequestContextDialog({ sessionId, onClose }: { sessionId: string
               </>
             ) : simulated ? <strong>{t("requestContext.simulate")}</strong> : null}
             {rows ? <span>{formatMessage(t("requestContext.nodeCount"), { count: rows.nodeCount })}</span> : null}
+            {rows?.economy && <span>{formatMessage(t("economy.coverage"), { retained: rows.economy.retained, summarized: rows.economy.summarized, retired: rows.economy.retired })}</span>}
+            {rows?.economy?.lastRetainedReason && <code>#{rows.economy.lastRetainedReason.turnId} · {rows.economy.lastRetainedReason.reason}</code>}
             {status ? <span role={error ? "alert" : "status"}>{status}</span> : null}
           </DialogDescription>
         </DialogHeader>

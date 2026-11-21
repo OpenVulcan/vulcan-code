@@ -230,6 +230,9 @@ fn prepare_sink_request_with_facts(
         "first physical API preparation must commit"
     );
     sink.active = Some(ActiveProviderV1Projection {
+        economy_revision: handle
+            .read(SessionDocument::economy_revision_for_request)
+            .unwrap(),
         api_call_id: prepared.value.api_call_id,
         request_facts: facts,
         locked_baseline: LockedBaselineProjection::empty(),
@@ -282,6 +285,7 @@ fn interrupted_tool_result_projects_in_complete_controller_state()
         open_turn_id: None,
         child_business_execution_id: None,
         current_compaction_id: None,
+        economy_position_revision: None,
         document_revision: 19,
         retained_from_seq: Seq::try_new(1)?,
         through_seq: Seq::try_new(12)?,
@@ -362,6 +366,7 @@ fn complete_v1_history_projects_attachment_only_tail_without_transport_state()
         open_turn_id: None,
         child_business_execution_id: None,
         current_compaction_id: None,
+        economy_position_revision: None,
         document_revision: 31,
         retained_from_seq: Seq::try_new(1)?,
         through_seq: Seq::try_new(20)?,
@@ -456,6 +461,7 @@ fn prompt_media_frontier_rejects_non_exact_source_before_io()
     let mut snapshot = SessionProviderProjectionSnapshot {
         unenveloped_assistant_requests: Default::default(),
         current_compaction_id: None,
+        economy_position_revision: None,
         preparing_user_prompt_media_seqs: vec![seq],
         compaction_frontier_seq: None,
         image_replay_from_seq: None,
@@ -516,6 +522,7 @@ fn user_input_source_resolves_exact_projected_controller_message_id()
         image_replay_from_seq: None,
         segment_generation: 1,
         current_compaction_id: None,
+        economy_position_revision: None,
         document_revision: 2,
         open_turn_id: None,
         child_business_execution_id: None,
@@ -759,6 +766,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
         open_turn_id: None,
         child_business_execution_id: None,
         current_compaction_id: None,
+        economy_position_revision: None,
         document_revision: 7,
         retained_from_seq: Seq::try_new(1).expect("valid retained seq"),
         through_seq: Seq::try_new(3).expect("valid through seq"),
@@ -1301,6 +1309,45 @@ async fn summary_reasoning_delta_marks_the_event_display_only() {
     assert_eq!(reasoning.text, "summary model");
     assert_eq!(reasoning.status, AssistantSemanticStatus::Completed);
     assert!(reasoning.display_only);
+}
+
+/// Checks streaming and terminal handling of split handoff markers on a tool-free root response.
+/// 验证无工具根回合的分片交接标记在流式输出及最终结算中的处理。
+#[tokio::test]
+async fn economy_stream_does_not_display_handoff_or_dispatch_another_request() {
+    let handle = published_open_turn();
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |doc| doc.enable_draft_economy(Default::default(), 2),
+        )
+        .unwrap();
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    prepare_sink_request(&handle, &mut sink);
+    for chunk in [
+        "answer\n",
+        "<SUM",
+        "MARY_INFO>",
+        "synthetic handoff",
+        "</SUMMARY_INFO>",
+    ] {
+        sink.append_assistant_delta(chunk, 4).unwrap();
+        handle.read(|doc| {
+            assert!(doc.events().iter().all(|event| !matches!(&event.event, EventBody::AssistantText(text) if text.text.trim_end() != "answer")));
+        }).unwrap();
+    }
+    sink.accept_terminal(terminal_facts(0)).await.unwrap();
+    handle.read(|doc| {
+        let receipts = &doc.metadata.config.economy.settled;
+        assert_eq!(receipts.len(), 1);
+        assert!(receipts[0].summary.is_none());
+        assert_eq!(doc.events().iter().filter(|event| matches!(event.event, EventBody::ApiStarted(_))).count(), 1);
+        assert!(doc.events().iter().any(|event| matches!(&event.event, EventBody::AssistantText(text) if text.status == AssistantSemanticStatus::Completed && text.text.trim_end() == "answer")));
+    }).unwrap();
 }
 
 /// Verifies api_started is durable before semantic streaming and terminal closure.
@@ -2038,6 +2085,13 @@ async fn owned_child_return_keeps_parent_open_until_publication() {
             2,
         )
         .unwrap();
+    parent_handle
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |doc| doc.enable_draft_economy(Default::default(), 2),
+        )
+        .unwrap();
     // Produce the opaque return using the real child sink's durable terminal facts.
     // 使用真实子接收器的可靠终态事实产生不透明回流。
     let child_id = SessionId::new_v4();
@@ -2160,7 +2214,10 @@ async fn owned_child_return_keeps_parent_open_until_publication() {
     );
     prepare_sink_request(&parent_handle, &mut parent_sink);
     parent_sink
-        .append_assistant_delta("parent physical output", 5)
+        .append_assistant_delta(
+            "parent physical output\n<SUMMARY_INFO>premature handoff</SUMMARY_INFO>",
+            5,
+        )
         .unwrap();
     parent_sink
         .accept_terminal(terminal_facts(0))
@@ -2175,6 +2232,7 @@ async fn owned_child_return_keeps_parent_open_until_publication() {
     parent_handle
         .read(|document| {
             assert!(!document.active_turn().unwrap().closed);
+            assert!(document.metadata.config.economy.settled.is_empty());
             assert_eq!(
                 document
                     .completion_obligations(parent_turn)
@@ -3938,6 +3996,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
         image_replay_from_seq: None,
         segment_generation: 1,
         current_compaction_id: None,
+        economy_position_revision: None,
         document_revision: 1,
         open_turn_id: None,
         child_business_execution_id: None,

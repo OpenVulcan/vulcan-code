@@ -66,6 +66,7 @@ pub(crate) fn latest_context_assistant_response(
 /// 给定前沿决定保留范围与系统状态回填；摘要会追加其精确续接内容。
 pub(super) fn assemble_sourced_request_history(
     events: &[ConversationEvent],
+    economy: &vulcan_session_core::v1::economy::EconomyState,
     dedicated: Option<&DedicatedSessionProfile>,
     open_turn: Option<TurnId>,
     retained_from: Seq,
@@ -81,6 +82,9 @@ pub(super) fn assemble_sourced_request_history(
         retained_from,
         instruction_frontier,
     )?;
+    if dedicated.is_none() {
+        economy.project(&mut items, summary.map(|node| node.occurred_at_seq), events);
+    }
     if let Some(summary) = summary {
         compaction_continuation::insert_summary_continuation(&mut items, summary)?;
     }
@@ -108,8 +112,7 @@ pub(crate) fn simulate_request_context(
     // The current compaction pointer is the sole authority for the already published context boundary.
     // 当前压缩指针是已发布上下文边界的唯一权威。
     let summary = document
-        .runtime_lock
-        .current_compaction_id
+        .effective_context_compaction_id()
         .map(|id| {
             document
                 .compactions
@@ -126,6 +129,7 @@ pub(crate) fn simulate_request_context(
     };
     let assembled = assemble_sourced_request_history(
         document.events(),
+        &document.metadata.config.economy,
         document.dedicated_profile(),
         document
             .active_turn()
@@ -184,6 +188,9 @@ pub(crate) fn simulate_request_context(
     if let Err(error) = tool_definitions {
         tracing::warn!("Request context tool preview failed: {error}");
         rows["toolsUnavailable"] = Value::Bool(true);
+    }
+    if let Some(last) = document.events().last() {
+        rows["economy"] = json!(crate::economy_mode::diagnostics(document, last.seq));
     }
     Ok(rows)
 }

@@ -489,6 +489,12 @@ export async function queryPublicAiConnectionUsage(connectionId: string): Promis
   return usage;
 }
 
+// Saves the trigger and batch sizes together and returns the published settings.
+// 一次保存触发轮数和裁剪轮数，返回已发布的设置快照。
+export async function saveEconomyWindow(request: PublicAiSettingsSnapshot["economyWindow"]): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request("service_save_economy_window", { request });
+}
+
 // savePublicAiUsageRefreshSettings persists the background usage refresh interval.
 // savePublicAiUsageRefreshSettings 持久化后台用量刷新间隔。
 export async function savePublicAiUsageRefreshSettings(intervalSeconds: number): Promise<PublicAiSettingsSnapshot> {

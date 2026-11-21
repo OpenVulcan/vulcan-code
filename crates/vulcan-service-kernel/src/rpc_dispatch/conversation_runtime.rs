@@ -40,6 +40,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_clear_session_goal",
     "service_update_session_goal_status",
     "service_set_session_plan_mode",
+    "service_session_economy_mode",
+    "service_set_session_economy_mode",
     "service_set_session_answer_mode",
     "service_set_dedicated_memory_lock",
     "service_convert_conversation_to_assistant",
@@ -90,6 +92,21 @@ pub(super) async fn dispatch(
     // result preserves service failures inside Handled so the top-level return trace still runs.
     // result 把服务失败保留在 Handled 内，使顶层返回追踪仍会执行。
     let result = match method {
+        "service_session_economy_mode" => rpc_json_result(
+            crate::economy_mode::preference(state, rpc_required_param(params, "sessionId")?, None)
+                .await,
+        ),
+        "service_set_session_economy_mode" => rpc_json_result(
+            crate::economy_mode::preference(
+                state,
+                rpc_required_param(params, "sessionId")?,
+                Some((
+                    rpc_required_param(params, "enabled")?,
+                    rpc_required_param(params, "expectedRevision")?,
+                )),
+            )
+            .await,
+        ),
         "service_set_session_answer_mode" => rpc_json_result(
             crate::answer_mode::service_set_session_answer_mode(
                 state,

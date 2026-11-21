@@ -23,6 +23,34 @@ use super::{
 };
 use crate::{SharedServiceBridgeState, begin_public_ai_configuration_transaction};
 
+/// Validates and commits a complete economy window, returning the published settings snapshot.
+/// 校验并提交完整的节约轮数窗口，返回发布后的设置快照。
+pub(crate) async fn service_save_economy_window(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: vulcan_ai_contract::economy_window::EconomyWindow,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    request.validate()?;
+    let _transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current) = public_ai_runtime_and_configuration(&state)?;
+    if request == current.economy_window {
+        return build_public_ai_settings_snapshot(runtime.as_ref(), &current);
+    }
+    let (_, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current,
+        "Failed to save the economy window",
+        |config| {
+            config.economy_window = request;
+            Ok(())
+        },
+        |config| build_public_ai_settings_snapshot(runtime.as_ref(), config),
+    )?;
+    Ok(snapshot)
+}
+
 /// Updates the background account-usage refresh interval.
 /// 更新后台账号用量刷新间隔。
 #[derive(Clone, Deserialize)]

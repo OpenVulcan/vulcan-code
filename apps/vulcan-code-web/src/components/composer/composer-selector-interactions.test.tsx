@@ -566,6 +566,7 @@ it("validates a typed custom window before saving it", async () => {
 // settings 返回包含一条精确图片理解目标的完整合成目录。
 function settings(): PublicAiSettingsSnapshot {
   return {
+    economyWindow: { triggerTurns: 36, batchTurns: 12 }, defaultEconomyWindow: { triggerTurns: 40, batchTurns: 20 },
     manualModelDefaults: { contextLimit: 200_000, outputLimit: 32_000 },
     usageRefreshIntervalSeconds: 300, mediaDelivery: mediaDeliverySettingsFixture(), contextCompactionWindowNodes: { nodes: [
       { id: "compression-window-1", tokens: 200_000 }, { id: "compression-window-2", tokens: 256_000 },

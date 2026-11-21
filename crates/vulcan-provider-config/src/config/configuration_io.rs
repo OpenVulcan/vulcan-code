@@ -1009,6 +1009,8 @@ mod public_ai_connections_tests {
         );
 
         loaded.configuration.usage_refresh_interval_seconds = 601;
+        loaded.configuration.economy_window.trigger_turns = 36;
+        loaded.configuration.economy_window.batch_turns = 12;
         save_public_ai_connections_at_path(&loaded.configuration, &central_path, &store)
             .expect("a healthy setting save should preserve the isolated provider source");
         let saved_central_text =
@@ -1017,6 +1019,10 @@ mod public_ai_connections_tests {
         let saved = parse_public_ai_connections_text(saved_central_text.as_str())
             .expect("saved central document should remain valid");
         assert_eq!(saved.configuration.usage_refresh_interval_seconds, 601);
+        assert_eq!(
+            saved.configuration.economy_window,
+            loaded.configuration.economy_window
+        );
         assert_eq!(
             saved.configuration.custom_provider_file_refs,
             BTreeSet::from([

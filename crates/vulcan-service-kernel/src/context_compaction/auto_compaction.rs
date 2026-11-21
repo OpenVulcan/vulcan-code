@@ -111,7 +111,15 @@ async fn maybe_auto_compact_webui_session_with_mode(
     preparation: &ExecutionPreparation,
     mode: AutoCompactionMode,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
-    let force_compaction = mode != AutoCompactionMode::Check;
+    let initialization = if mode == AutoCompactionMode::Check
+        && request.prompt_purpose.supports_host_auto_compaction()
+        && request.dedicated_session.is_none()
+    {
+        crate::economy_mode::prepare_root_window(state, agent_runtime, request.session_id)?
+    } else {
+        None
+    };
+    let force_compaction = initialization.is_some() || mode != AutoCompactionMode::Check;
     if !request.prompt_purpose.supports_host_auto_compaction() {
         return Ok(None);
     }
@@ -319,6 +327,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         prepared_policy,
         "Automatic context compaction found no history context to compact; this request was stopped to avoid a budget overflow.",
         mode == AutoCompactionMode::ImageBudget,
+        initialization.map(|(_, start, _)| start),
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -379,12 +388,14 @@ async fn maybe_auto_compact_webui_session_with_mode(
         // 文本和图片同时产生压力时，同一次压缩必须保留历史图片的摘取内容。
         let replay_from_seq = source.preparing_user_prompt_media_seqs.first().copied();
         let execution = match preparation.model_blueprint.frozen_selection.clone() {
-            Some(selection) if replay_from_seq.is_some() => Some(Arc::new(
-                agent_runtime
-                    .public_ai_runtime
-                    .resolve_execution_from_frozen_selection(selection)
-                    .await?,
-            )),
+            Some(selection) if replay_from_seq.is_some() && initialization.is_none() => {
+                Some(Arc::new(
+                    agent_runtime
+                        .public_ai_runtime
+                        .resolve_execution_from_frozen_selection(selection)
+                        .await?,
+                ))
+            }
             _ if mode == AutoCompactionMode::ImageBudget => {
                 return Err(String::from(
                     "Image compaction lost its frozen route or pending media.",
@@ -456,11 +467,68 @@ async fn maybe_auto_compact_webui_session_with_mode(
             AUTO_CONTEXT_COMPACTION_TRIGGER,
             None,
             Some((image_excerpts, replay_from_seq)),
+            initialization.map(|(_, start, _)| start),
         )
         .await
         .map(|execution| (execution, extraction_usage))
     }
     .await;
+    // Mode changes invalidate only the activation. Preserve physical usage and recheck normal capacity.
+    // 切换模式只撤销启用操作；保留物理调用用量，并重新检查普通容量条件。
+    if let Some((owner, _, revision)) = initialization {
+        let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+            state, session_id,
+        )?;
+        let superseded = handle
+            .read(|doc| {
+                doc.active_turn()
+                    .is_some_and(|turn| !turn.closed && turn.turn_id == owner)
+                    && doc.metadata.config.economy.revision != revision
+            })
+            .map_err(|error| error.to_string())?;
+        if superseded {
+            let snapshot = discard_economy_preparation(
+                app,
+                state,
+                session_id,
+                active_stream_task_id,
+                &status_message_id,
+                previous_phase,
+            )?;
+            persist_context_compaction_snapshot(
+                state.clone(),
+                controller_runtime.clone(),
+                snapshot,
+                session_id,
+                status_message_id,
+                Some(String::from("economy_activation_superseded")),
+            )
+            .await?;
+            let mut pending = request.clone();
+            if let Ok((execution, extraction_usage)) = terminal_result {
+                pending
+                    .embedded_turn_usage_segments
+                    .extend(extraction_usage);
+                pending.embedded_turn_usage_segments.push(
+                    context_compaction_usage_segment_from_execution(
+                        AUTO_CONTEXT_COMPACTION_TRIGGER,
+                        &execution.execution,
+                    ),
+                );
+            }
+            let normal = Box::pin(maybe_auto_compact_webui_session_before_provider_request(
+                app,
+                state,
+                controller_runtime,
+                agent_runtime,
+                active_stream_task_id,
+                &pending,
+                preparation,
+            ))
+            .await?;
+            return Ok(Some(normal.unwrap_or(pending)));
+        }
+    }
     match terminal_result {
         Ok((execution, extraction_usage)) => {
             let compaction_usage_segment = context_compaction_usage_segment_from_execution(
@@ -480,19 +548,26 @@ async fn maybe_auto_compact_webui_session_with_mode(
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
                 ContextCompactionCommitMode::ContinueActive {
                     task_id: active_stream_task_id,
+                    economy_owner: initialization.map(|(turn, _, revision)| (turn, revision)),
                 },
                 execution,
             )
             .await?;
             // rejection_error must survive outcome consumption so automatic continuation can stop.
             // rejection_error 必须跨越终态结果消费，以便停止自动续接。
+            let superseded = matches!(
+                &finish_outcome,
+                ContextCompactionFinishOutcome::Superseded { .. }
+            );
             let rejection_error = finish_outcome.rejection_error().map(str::to_owned);
             // snapshot always requires persistence, including a committed rejection record.
             // snapshot 始终需要持久化，包括已提交的拒绝记录。
             let snapshot = finish_outcome.into_workspace_snapshot();
             // persist_reason preserves the authoritative terminal classification for diagnostics.
             // persist_reason 为诊断保留权威终态分类。
-            let persist_reason = if rejection_error.is_some() {
+            let persist_reason = if superseded {
+                "economy_activation_superseded"
+            } else if rejection_error.is_some() {
                 "auto_context_compaction_rejected"
             } else {
                 "auto_context_compaction"
@@ -511,6 +586,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
             }
             // This reads the current durable VMM cache; the V1 compaction receipt alone does not advance its epoch.
             // 此处读取当前持久 VMM 缓存；V1 压缩回执本身不会推进其纪元。
+
             let refreshed_vmm_state = match vmm_controller.as_ref() {
                 Some(controller) => controller.snapshot()?,
                 None => vulcan_vmm::VmmSessionMemoryState::default(),
@@ -526,6 +602,19 @@ async fn maybe_auto_compact_webui_session_with_mode(
             refreshed
                 .embedded_turn_usage_segments
                 .push(compaction_usage_segment);
+            if superseded {
+                let normal = Box::pin(maybe_auto_compact_webui_session_before_provider_request(
+                    app,
+                    state,
+                    controller_runtime,
+                    agent_runtime,
+                    active_stream_task_id,
+                    &refreshed,
+                    preparation,
+                ))
+                .await?;
+                return Ok(Some(normal.unwrap_or(refreshed)));
+            }
             Ok(Some(refreshed))
         }
         Err(error) => {
@@ -631,7 +720,7 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
     policy: ContextCompactionPolicy,
     empty_error: &str,
 ) -> Result<WebuiContextCompactionPlan, String> {
-    capture_webui_context_compaction_plan(state, session_id, policy, empty_error, false)
+    capture_webui_context_compaction_plan(state, session_id, policy, empty_error, false, None)
 }
 
 /// Captures the durable planning source and optionally permits an image-only retirement boundary.
@@ -642,6 +731,7 @@ fn capture_webui_context_compaction_plan(
     policy: ContextCompactionPolicy,
     empty_error: &str,
     retain_text_for_images: bool,
+    economy_start: Option<Seq>,
 ) -> Result<WebuiContextCompactionPlan, String> {
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
@@ -656,6 +746,7 @@ fn capture_webui_context_compaction_plan(
         snapshot,
         source,
         retain_text_for_images,
+        economy_start,
     )
 }
 
@@ -695,6 +786,7 @@ pub(crate) fn plan_manual_webui_context_compaction(
         snapshot,
         source,
         false,
+        None,
     )?;
     Ok((plan, target))
 }
@@ -713,6 +805,7 @@ fn plan_webui_context_compaction(
     snapshot: crate::session_runtime_registry_v1::SessionProviderProjectionSnapshot,
     source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
     retain_text_for_images: bool,
+    economy_start: Option<Seq>,
 ) -> Result<WebuiContextCompactionPlan, String> {
     let projected_messages = snapshot
         .sourced_items
@@ -730,12 +823,24 @@ fn plan_webui_context_compaction(
     if full_session_messages.is_empty() {
         return Err(empty_error.to_string());
     }
+    // Summarize history through the last message before this root input.
+    // 只总结本次根输入之前的历史，当前输入及附件仍在保留尾部。
+    let source_until = economy_start
+        .map(|start| {
+            projected_messages
+                .iter()
+                .rev()
+                .find(|(_, seq, _)| *seq < start)
+                .map(|(message, _, _)| message.id.as_str())
+                .ok_or_else(|| "Economy initialization has no prior projected history.".to_owned())
+        })
+        .transpose()?;
     let input = CompactionPlanInput {
         session_label: &session_id.to_string(),
         messages: &full_session_messages,
         all_messages: &full_session_messages,
         context_start_message_id: None,
-        source_until_message_id: None,
+        source_until_message_id: source_until,
         policy,
     };
     let plan = if retain_text_for_images {
@@ -758,10 +863,13 @@ fn plan_webui_context_compaction(
                 "V1 compaction retained message `{retained_message_id}` has no durable source seq"
             )
         })?;
-    let full_context_state = vulcan_context::conversation_state_from_session_messages(
-        &full_session_messages,
-    )
-    .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
+    let full_context_state =
+        vulcan_context::conversation_state_from_session_messages(if economy_start.is_some() {
+            &plan.source_messages
+        } else {
+            &full_session_messages
+        })
+        .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
     // Capture the existing catalog owner without retaining the service mutex during resource preparation.
     // 捕获既有目录所有者，不在资源准备期间持有服务互斥锁。
     let resource_registry = Arc::clone(
@@ -777,6 +885,7 @@ fn plan_webui_context_compaction(
         session_id.to_string(),
         projected_messages
             .iter()
+            .filter(|(_, seq, _)| economy_start.is_none_or(|start| *seq < start))
             .map(|(message, _, index)| (message.id.clone(), *index))
             .collect(),
         resource_registry,
@@ -797,6 +906,18 @@ pub(crate) fn compaction_message_from_v1_projection(
 ) -> Option<Result<(SessionMessageEntry, Seq), String>> {
     let created_at = String::new();
     match &projected.item {
+        ProjectedItem::SystemText { context_key, text, .. } if context_key.starts_with(vulcan_session_core::v1::economy::SUMMARY_KEY_PREFIX) => Some(Ok((
+            SessionMessageEntry {
+                id: format!("v1-settled-summary-{}", projected.source_from_seq.value()),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("TURN HANDOFF"),
+                body: text.clone(),
+                metadata: None,
+                created_at,
+            }, projected.source_from_seq,
+        ))),
         ProjectedItem::SystemText { .. } => None,
         ProjectedItem::UserInput { text, resource_ids } => {
             let mut body = text.clone();
@@ -1171,6 +1292,7 @@ pub(crate) async fn persist_failed_webui_context_compaction(
         trigger,
         ContextCompactionCommitMode::ContinueActive {
             task_id: active_stream_task_id,
+            economy_owner: None,
         },
         error,
     )?;
@@ -1396,6 +1518,79 @@ pub(crate) fn build_webui_context_compaction_job_request(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// Superseding an activation closes its display section while the same business stream keeps ownership.
+    /// 撤销启用时只关闭其展示分段，当前业务流继续持有所有权。
+    #[tokio::test]
+    async fn economy_superseded_activation_keeps_business_stream() {
+        let session = SessionId::new_v4();
+        let task = Uuid::new_v4();
+        let mut service =
+            crate::tests::test_support::test_service_state_with_parent_session(session);
+        let workspace = service.workspace_snapshot.as_mut().unwrap();
+        let section = append_webui_context_compaction_status_message_to_workspace(
+            workspace,
+            session,
+            "test",
+            AUTO_CONTEXT_COMPACTION_TRIGGER,
+        )
+        .unwrap();
+        let state = Arc::new(std::sync::Mutex::new(service));
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        crate::spawn_registered_active_stream_task_with_mode(
+            &state,
+            session,
+            task,
+            None,
+            crate::ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+            async {
+                let _ = wait.await;
+            },
+        )
+        .unwrap();
+        let app = ServiceEventEmitter::new(Vec::new());
+        assert!(
+            discard_economy_preparation(
+                &app,
+                &state,
+                session,
+                Uuid::new_v4(),
+                &section,
+                SessionRunPhase::Ready
+            )
+            .is_err()
+        );
+        let snapshot = discard_economy_preparation(
+            &app,
+            &state,
+            session,
+            task,
+            &section,
+            SessionRunPhase::Ready,
+        )
+        .unwrap();
+        assert!(active_stream_task_matches_id(
+            &state.lock().unwrap(),
+            session,
+            task
+        ));
+        assert_eq!(
+            snapshot.session_run_phases[&session],
+            SessionRunPhase::Ready
+        );
+        let runtime = &snapshot.session_runtime_state[&session];
+        assert_eq!(runtime.auto_compaction_consecutive_failures, 0);
+        assert!(
+            !runtime
+                .conversation_state
+                .records
+                .iter()
+                .find(|record| record.id == section)
+                .unwrap()
+                .visible
+        );
+        let _ = release.send(());
+    }
 
     /// Verifies compaction refresh revokes stopped memory without changing canonical or unrelated input.
     /// 验证压缩刷新撤销已停用记忆，不改变规范输入或无关注入。

@@ -52,6 +52,130 @@ fn user_text(snapshot: &SessionProviderProjectionSnapshot) -> String {
         .join("\n")
 }
 
+/// Compares physical preparation with cold simulation across the first batch retirement.
+/// 对比首次整批移出之后的物理请求准备与磁盘冷载模拟。
+#[tokio::test]
+async fn economy_cold_simulation_matches_provider_after_batch_retirement() {
+    use vulcan_session_core::v1::economy::EconomyCandidate;
+    let temporary = tempfile::tempdir().unwrap();
+    let id = SessionId::new_v4();
+    let locator = create_session_v1_storage_fixture(temporary.path(), &id.to_string(), 1).unwrap();
+    let handle = SessionHandle::new(
+        id,
+        locator.clone(),
+        load_session_v1_full(&locator).unwrap().document,
+    );
+    let window = vulcan_ai_contract::economy_window::EconomyWindow {
+        trigger_turns: 3,
+        batch_turns: 1,
+    };
+    for (index, prompt) in ["oldest-mark", "middle-mark", "last-mark"]
+        .iter()
+        .enumerate()
+    {
+        let now = 10 + index as i64 * 10;
+        handle
+            .submit_root_input(test_client_input(prompt, prompt), now)
+            .unwrap();
+        handle
+            .mutate_durable(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::MetadataChanged,
+                |doc| {
+                    if index == 0 {
+                        doc.enable_draft_economy(window, now)
+                    } else {
+                        doc.prepare_economy_turn(window, now).map(|_| ())
+                    }
+                },
+            )
+            .unwrap();
+        let request = ApiRequestSnapshot::new("openai", "fixture");
+        let start = handle
+            .read(|doc| {
+                test_prepare_api_input(
+                    doc,
+                    ApiPurposeKind::MainGeneration,
+                    request.clone(),
+                    now + 1,
+                )
+            })
+            .unwrap();
+        let api = handle
+            .prepare_and_start_api_durable(start)
+            .unwrap()
+            .value
+            .api_call_id;
+        handle
+            .mutate_durable(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                |doc| {
+                    doc.apply_atomic_transition(|doc| {
+                        doc.append_assistant_text(
+                            api,
+                            format!("answer {prompt}"),
+                            AssistantSemanticStatus::Completed,
+                            now + 2,
+                        )?;
+                        doc.complete_api_group(
+                            api,
+                            ApiCompletion {
+                                request,
+                                usage: UsageSnapshot::default(),
+                                status: ApiCallStatus::Completed,
+                                end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                                error: None,
+                                continuation_eligibility: ContinuationEligibility::Forbidden,
+                                timing: ApiTimings::default(),
+                                provider_source: None,
+                                completed_at_ms: now + 3,
+                            },
+                        )
+                    })
+                },
+            )
+            .unwrap();
+        handle
+            .complete_successful_turn_with_economy(
+                now + 4,
+                Some(EconomyCandidate {
+                    api,
+                    revision: 1,
+                    summary: None,
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    let before = handle.capture_controller_projection_snapshot().unwrap();
+    assert!(!user_text(&before).contains("oldest-mark"));
+    assert!(user_text(&before).contains("middle-mark"));
+    drop(handle);
+    let loaded = load_session_v1_full(&locator).unwrap();
+    assert_eq!(loaded.document.metadata.config.economy.settled.len(), 3);
+    let cold = SessionHandle::new(id, locator.clone(), loaded.document);
+    assert_eq!(
+        before.items,
+        cold.capture_controller_projection_snapshot().unwrap().items
+    );
+    let config = vulcan_agent_runtime::agent_runtime::config::AgentRuntimeConfig::from_sources(
+        &Default::default(),
+        &Default::default(),
+    );
+    let preview = simulate_request_context(
+        &locator,
+        temporary.path().to_str().unwrap(),
+        &config,
+        |_| Ok(Vec::new()),
+    )
+    .unwrap();
+    let rows = preview["nodes"].to_string();
+    assert!(
+        !rows.contains("oldest-mark") && rows.contains("middle-mark") && rows.contains("last-mark")
+    );
+}
+
 /// Verifies an unused session previews current project rules in the initial system prompt without dispatch.
 /// 验证未使用的会话无需派发即可在初始系统提示词中预览当前项目规则。
 #[test]

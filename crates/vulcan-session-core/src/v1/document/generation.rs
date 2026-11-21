@@ -510,6 +510,7 @@ impl SessionDocument {
             })
             .cloned()
             .collect();
+        metadata.config.economy.rewind(target_seq);
         let selected_compaction =
             select_node_for_seq(&kept_compactions, target_seq).map(|node| node.compaction_id);
         let runtime_lock = RuntimeLock {

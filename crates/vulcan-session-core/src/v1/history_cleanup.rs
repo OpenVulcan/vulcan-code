@@ -270,7 +270,7 @@ impl CleanedHistory {
 pub fn protected_start(document: &SessionDocument) -> Result<Option<Seq>, DomainError> {
     // The runtime pointer is the authority for the effective compaction.
     // 运行时指针是生效压缩的权威来源。
-    let Some(compaction_id) = document.runtime_lock.current_compaction_id else {
+    let Some(compaction_id) = document.effective_context_compaction_id() else {
         return Ok(None);
     };
     // The referenced node supplies the original retained request window.
@@ -293,6 +293,23 @@ pub fn protected_start(document: &SessionDocument) -> Result<Option<Seq>, Domain
     // A retained turn may start before the actual provider projection boundary.
     // 保留回合可能早于实际供应商投影边界开始。
     let mut cut = complete_turn_start(events, node.retained_from_seq)?;
+    // An executing economy turn can still restore its older baseline when it closes.
+    // 执行中的节约回合在交付时仍可恢复到较早基线，此前缀同样需要保护。
+    if let Some(active) = &document.metadata.config.economy.active
+        && document
+            .active_turn()
+            .is_some_and(|turn| !turn.closed && turn.turn_id == active.turn_id)
+    {
+        let Some(baseline_id) = active.baseline else {
+            return Ok(None);
+        };
+        let baseline = document
+            .compactions
+            .iter()
+            .find(|node| node.compaction_id == baseline_id)
+            .ok_or_else(|| DomainError::reference("economy.baseline", baseline_id.value()))?;
+        cut = cut.min(complete_turn_start(events, baseline.retained_from_seq)?);
+    }
     // A still-active goal may rely on an older root prompt independently of the Provider window.
     // 仍生效的目标可能独立于供应商窗口依赖更早的根提示。
     if let Some(origin) = document
@@ -605,7 +622,7 @@ pub fn build_cleanup_candidate(
     let node = document
         .compactions
         .iter()
-        .find(|node| Some(node.compaction_id) == document.runtime_lock.current_compaction_id)
+        .find(|node| Some(node.compaction_id) == document.effective_context_compaction_id())
         .ok_or(DomainError::InvalidGenerationInput {
             field: "history_cleanup.requires_compaction",
         })?;

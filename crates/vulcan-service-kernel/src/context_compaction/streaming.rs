@@ -87,6 +87,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
         Vec<vulcan_session_core::v1::context::CompactedImageExcerpt>,
         Option<Seq>,
     )>,
+    economy_start: Option<Seq>,
 ) -> Result<WebuiContextCompactionExecution, String> {
     // outputMessageId identifies the visible compaction status output row.
     // outputMessageId 标识可见的压缩状态输出行。
@@ -111,7 +112,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                 "Context compaction requires a registered V1 session owner before Provider dispatch.",
             )
         })?.with_manual_compaction_request(manual_request);
-    provider_v1_sink.bind_compaction_source(&request.full_context_state)?;
+    provider_v1_sink.bind_compaction_source(&request.full_context_state, economy_start)?;
     let (image_excerpts, image_replay_from_seq) = match images {
         Some((excerpts, replay_from_seq)) => {
             provider_v1_sink.attach_compaction_image_excerpts(excerpts.clone())?;
@@ -455,6 +456,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                         &budget_note,
                         &trigger,
                         manual_request,
+                        None,
                         None,
                     )
                     .await

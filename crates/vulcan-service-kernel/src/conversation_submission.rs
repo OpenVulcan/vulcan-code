@@ -224,6 +224,10 @@ struct SubmissionProviderToolSettings {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SubmissionSessionSettings {
+    /// Explicit first-turn economy selection; an absent value starts in normal mode.
+    /// 首回合显式节约模式选择，缺省时以常规模式开始。
+    #[serde(default)]
+    economy_enabled: bool,
     /// Explicit answer mode captured by the draft; absent copies the global default.
     /// 草稿捕获的显式回答模式；缺省时复制全局默认值。
     #[serde(default)]
@@ -623,6 +627,20 @@ async fn apply_submission_session_settings(
                 .unwrap_or(global_answer_mode),
             updated_at_ms,
         )?;
+        if settings.is_some_and(|settings| settings.economy_enabled) {
+            use crate::session_runtime_registry_v1::{
+                SessionFlushReason, SessionMutationAdmission,
+            };
+            handle
+                .mutate_durable(
+                    SessionMutationAdmission::MetadataOnly,
+                    SessionFlushReason::MetadataChanged,
+                    |document| {
+                        document.enable_draft_economy(configuration.economy_window, updated_at_ms)
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+        }
         crate::permission_mode::set_session_permission_mode_v1(
             handle.as_ref(),
             settings
@@ -4320,6 +4338,7 @@ mod submission_session_settings_tests {
     #[test]
     fn ordinary_submission_keeps_output_style_snapshot_unchanged() {
         let settings = SubmissionSessionSettings {
+            economy_enabled: false,
             answer_mode: None,
             permission_mode: None,
             output_style_id: Some(String::from("rigorous")),

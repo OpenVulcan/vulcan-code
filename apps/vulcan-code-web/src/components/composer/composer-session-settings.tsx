@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type { ComposerAttachmentMenuProps } from "./composer-attachment-controls";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
+import { ComposerEconomyMode } from "./composer-economy-mode";
 import { SessionSettingsGroup, SessionSettingsRow } from "./composer-session-settings-parts";
 import { ComposerSubagentModelsBlock } from "./composer-subagent-models";
 import { ComposerToolChainBlock } from "./composer-tool-chain";
@@ -133,6 +134,7 @@ export function ComposerSettingsMenu(props: ComposerAttachmentMenuProps) {
                 sessionOutputStyle={props.sessionOutputStyle}
               />
               <AnswerModeRow controller={props.answerMode} />
+              <ComposerEconomyMode key={props.conversationId} sessionId={props.conversationId} draftEnabled={props.draftEconomyEnabled} setDraft={props.onDraftEconomyChange} />
               <ComposerKnowledgeControl
                 conversationId={props.conversationId}
                 draftSelection={props.draftKnowledgeSelection}

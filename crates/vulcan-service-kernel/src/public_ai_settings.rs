@@ -52,7 +52,7 @@ pub(super) use general_settings::{
     PublicAiUsageRefreshSettingsRequest,
 };
 pub(super) use general_settings::{
-    service_ack_public_ai_model_takeover_notices,
+    service_ack_public_ai_model_takeover_notices, service_save_economy_window,
     service_save_public_ai_context_compaction_window_nodes,
     service_save_public_ai_context_window_policy_overrides,
     service_save_public_ai_model_context_window_default,

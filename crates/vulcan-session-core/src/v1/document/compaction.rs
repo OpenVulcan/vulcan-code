@@ -82,7 +82,7 @@ pub(super) fn validate_provider_projection_proof(
             field: "through_seq",
         });
     }
-    let expected_retained = match document.runtime_lock.current_compaction_id {
+    let expected_retained = match document.effective_context_compaction_id() {
         Some(compaction_id) => document
             .compactions
             .iter()

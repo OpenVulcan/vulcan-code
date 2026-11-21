@@ -14,6 +14,7 @@ export type SettingsSubAreaId =
   | "credential-management"
   | "model-list"
   | "context-basics"
+  | "economy-mode"
   | "ai-capabilities"
   | "ai-vendors"
   | "ai-web-search"

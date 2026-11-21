@@ -238,6 +238,9 @@ pub(crate) struct SessionProviderProjectionSnapshot {
     /// Exact durable compaction identity captured with this projection's retained boundary.
     /// 与本投影保留边界一同捕获的准确持久压缩身份。
     pub(crate) current_compaction_id: Option<CompactionId>,
+    /// Last economy settlement that changed existing model-visible positions.
+    /// 上次改变模型可见历史位置的节约结算。
+    pub(crate) economy_position_revision: Option<u64>,
     /// Exact pending prompt sequences admitted by Core before their first physical API.
     /// 在首次物理API前由Core准入的精确待准备提示词序号。
     pub(crate) preparing_user_prompt_media_seqs: Vec<Seq>,
@@ -335,6 +338,9 @@ pub(crate) struct SessionPreparedPhysicalApi<T> {
     /// Core receipt proving the physical API start is durable.
     /// 证明物理 API 起始已可靠落盘的 Core 回执。
     pub(crate) core_start: PreparedApiStart,
+    /// Economy protocol revision admitted with this exact request.
+    /// 与本次准确请求一同准入的节约协议修订。
+    pub(crate) economy_revision: Option<u64>,
     /// Exact transport value reconstructed before the Core start transaction.
     /// 在 Core 起始事务前重建的精确传输值。
     pub(crate) transport: T,
@@ -2133,6 +2139,14 @@ impl SessionHandle {
         let receipt = self.mutate_in_memory_if_changed_with_publisher_locked(
             SessionFlushReason::ApiStarted,
             move |document| {
+                let economy_revision = matches!(
+                    purpose,
+                    ApiPurposeKind::MainGeneration
+                        | ApiPurposeKind::RetryGeneration
+                        | ApiPurposeKind::Continue
+                )
+                .then(|| document.economy_revision_for_request())
+                .flatten();
                 let mutation = document.prepare_and_start_api_with_manual_compaction_request(
                     PrepareAndStartApiInput {
                         purpose,
@@ -2151,6 +2165,7 @@ impl SessionHandle {
                         Ok(SessionMutationChange::Changed(SessionPreparedPhysicalApi {
                             dispatch_lease,
                             core_start,
+                            economy_revision,
                             transport: prepared.transport,
                             locked_baseline: receipt_locked_baseline,
                         }))
@@ -2183,6 +2198,7 @@ impl SessionHandle {
                             SessionPreparedPhysicalApi {
                                 dispatch_lease,
                                 core_start,
+                                economy_revision,
                                 transport: prepared.transport,
                                 locked_baseline: receipt_locked_baseline,
                             },
@@ -2237,7 +2253,7 @@ impl SessionHandle {
         self.capture_durable_projection_with(
             SessionProjectionPurpose::CompactionContext,
             |document| {
-                let Some(id) = document.runtime_lock.current_compaction_id else {
+                let Some(id) = document.effective_context_compaction_id() else {
                     return Ok(Vec::new());
                 };
                 let node = document
@@ -2377,6 +2393,7 @@ impl SessionHandle {
             open_turn_id,
             child_business_execution_id,
             dedicated_profile,
+            economy,
         ) = {
             let document = self
                 .document
@@ -2401,7 +2418,7 @@ impl SessionHandle {
             // Both identities come from the same committed node; later requests never advance this frontier.
             // 两种身份来自同一已提交节点；后续请求绝不推进此前沿。
             let (retained_from_seq, context_frozen_at, summary_compaction) =
-                match document.runtime_lock.current_compaction_id {
+                match document.effective_context_compaction_id() {
                     Some(compaction_id) => document
                         .compactions
                         .iter()
@@ -2431,7 +2448,7 @@ impl SessionHandle {
                 Seq::try_new(through_value)?,
                 document.preparing_user_prompt_media_seqs(),
                 LockedBaselineProjection::from_initialized_runtime_lock(&document.runtime_lock)?,
-                document.runtime_lock.current_compaction_id,
+                document.effective_context_compaction_id(),
                 document
                     .active_turn()
                     .filter(|turn| !turn.closed)
@@ -2442,6 +2459,7 @@ impl SessionHandle {
                     .as_ref()
                     .map(|profile| profile.business_execution_id.clone()),
                 document.dedicated_profile().cloned(),
+                document.metadata.config.economy.clone(),
             )
         };
         let range = locator.load_event_range(Seq::try_new(1)?, through_seq)?;
@@ -2461,6 +2479,7 @@ impl SessionHandle {
         };
         let sourced_items = assemble_sourced_request_history(
             &range.events,
+            &economy,
             dedicated_profile.as_ref(),
             open_turn_id,
             retained_from_seq,
@@ -2488,6 +2507,7 @@ impl SessionHandle {
             open_turn_id,
             child_business_execution_id,
             current_compaction_id,
+            economy_position_revision: economy.position_revision(),
             preparing_user_prompt_media_seqs,
             compaction_frontier_seq: context_frozen_at,
             image_replay_from_seq,
@@ -2499,7 +2519,12 @@ impl SessionHandle {
             sourced_items,
             unenveloped_assistant_requests,
             project_directory: locator.project_directory(),
-            provider_usage_budget_anchor: latest_provider_usage_budget_anchor(&range.events),
+            provider_usage_budget_anchor: latest_provider_usage_budget_anchor(&range.events)
+                .filter(|anchor| {
+                    economy
+                        .position_revision()
+                        .is_none_or(|seq| anchor.projection.through_seq.value() >= seq)
+                }),
             initialized_locked_baseline,
         })
     }
@@ -2871,9 +2896,22 @@ impl SessionHandle {
     /// 返回值
     /// Returns a continuation with any promoted inputs, or one durable closure and successor receipt.
     /// 返回续跑决策及可能提升的输入，或一份可靠回合闭合及后继回执。
+    #[cfg(test)]
     pub(crate) async fn complete_successful_turn(
         self: &Arc<Self>,
         now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<SuccessfulTurnSettlement>, SessionRuntimeError>
+    {
+        self.complete_successful_turn_with_economy(now_ms, None)
+            .await
+    }
+
+    /// Completes the business owner and publishes its eligible economy receipt in the same mutation.
+    /// 在同一事务中关闭业务回合并发布符合条件的节约回执。
+    pub(crate) async fn complete_successful_turn_with_economy(
+        self: &Arc<Self>,
+        now_ms: i64,
+        economy_candidate: Option<vulcan_session_core::v1::economy::EconomyCandidate>,
     ) -> Result<SessionConditionalMutationReceipt<SuccessfulTurnSettlement>, SessionRuntimeError>
     {
         // Read accounting inside the document transaction; accounting never locks documents.
@@ -2947,6 +2985,15 @@ impl SessionHandle {
                     document.apply_atomic_transition(move |document| {
                         // Only true logical completion transfers the insertion batch to a fresh queued Turn.
                         // 只有真实逻辑完成才把插队批次转交给新的排队回合。
+                        if let Some(candidate) = economy_candidate.as_ref() {
+                            crate::economy_mode::settle_document_turn(
+                                document,
+                                expected_turn_id,
+                                candidate,
+                                usage_handle.locator.as_ref(),
+                                session_id,
+                            )?;
+                        }
                         let transition = document.complete_turn_with_lifetime_usage(
                             expected_turn_id,
                             now_ms,

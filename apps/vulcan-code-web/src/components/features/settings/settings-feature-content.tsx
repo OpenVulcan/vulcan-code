@@ -23,6 +23,7 @@ import { AppUpdateSettingsArea } from "@/components/features/settings/app-update
 import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area";
 import { OpenVulcanAccountArea } from "@/components/features/account/openvulcan-account-area";
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
+import { EconomySettingsArea } from "./economy-settings-area";
 import { SettingsPage } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import { AppearanceSettingsArea } from "@/components/features/settings/appearance-settings-area";
@@ -129,6 +130,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
   if (props.activeSettingsSubArea === "visual-lab") {
     return <VisualLabSettingsArea />;
   }
+  if (props.activeSettingsSubArea === "economy-mode") return <EconomySettingsArea />;
   if (props.activeSettingsSubArea === "appearance") {
     return <AppearanceSettingsArea />;
   }

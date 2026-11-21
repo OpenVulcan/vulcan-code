@@ -82,6 +82,8 @@
 15 增加可选的 `cleaned_history` 发布指针。14→15 保留原始元数据备份，旧会话继续读取原始历史。
 只有显式快速清理才发布独立历史和对应的事件分段。
 
+16 增加必填的 `config.economy`。15→16 保留原字节备份，将旧会话设为常规模式、修订零、无回执。打开会话不触发摘要请求。模式切换、执行期基线和窗口的归属见[节约用量模式](session-economy-mode.md)。
+
 ## 新增或修改字段的固定步骤
 
 1. 修改强类型模型，将 `METADATA_SCHEMA_VERSION`（或对应的嵌套版本，如 `CHILD_EXECUTION_PROFILE_VERSION`）递增

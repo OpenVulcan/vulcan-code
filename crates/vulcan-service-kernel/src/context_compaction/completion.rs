@@ -116,6 +116,9 @@ pub(crate) enum ContextCompactionCommitMode {
         /// Exact Provider stream task identity that owns the auto-compaction commit.
         /// 拥有自动压缩提交的精确 Provider 流任务身份。
         task_id: Uuid,
+        /// Root and preference revision owning an optional first-activation baseline.
+        /// 可选首次启用基线所属的根回合及偏好修订。
+        economy_owner: Option<(vulcan_session_core::v1::TurnId, u64)>,
     },
     /// Validate and atomically terminate the standalone manual-compaction stream.
     /// 校验并原子终结独立手动压缩流。
@@ -146,7 +149,7 @@ impl ContextCompactionCommitMode {
     /// 返回所有者流注册时捕获的不可变 task id。
     const fn task_id(self) -> Uuid {
         match self {
-            Self::ContinueActive { task_id }
+            Self::ContinueActive { task_id, .. }
             | Self::FinishStandalone { task_id }
             | Self::FinishBorrowed { task_id, .. } => task_id,
         }
@@ -247,6 +250,13 @@ pub(crate) enum ContextCompactionFinishOutcome {
         /// 包含已提交压缩检查点的工作区快照。
         workspace_snapshot: WorkspaceSnapshot,
     },
+    /// The user changed modes while preparing the baseline; the business stream may continue.
+    /// 用户在准备基线期间切换了模式，原业务流可继续执行。
+    Superseded {
+        /// Snapshot with the obsolete preparation closed and its previous phase restored.
+        /// 已结束过期准备并恢复原阶段的快照。
+        workspace_snapshot: WorkspaceSnapshot,
+    },
     /// The attempt was rejected and its failure record was committed for persistence.
     /// 本次尝试已被拒绝，其失败记录已提交并等待持久化。
     Rejected {
@@ -269,7 +279,7 @@ impl ContextCompactionFinishOutcome {
     /// 返回精确拒绝错误；压缩已提交时返回 `None`。
     pub(crate) fn rejection_error(&self) -> Option<&str> {
         match self {
-            Self::Committed { .. } => None,
+            Self::Committed { .. } | Self::Superseded { .. } => None,
             Self::Rejected { error, .. } => Some(error),
         }
     }
@@ -284,11 +294,61 @@ impl ContextCompactionFinishOutcome {
     pub(crate) fn into_workspace_snapshot(self) -> WorkspaceSnapshot {
         match self {
             Self::Committed { workspace_snapshot }
+            | Self::Superseded { workspace_snapshot }
             | Self::Rejected {
                 workspace_snapshot, ..
             } => workspace_snapshot,
         }
     }
+}
+
+/// Discards only the display draft owned by a replaced mode selection and restores the active stream phase.
+/// 仅撤销旧模式选择拥有的展示草稿并恢复原业务流阶段。
+pub(super) fn discard_economy_preparation(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+    section_id: &str,
+    previous_phase: SessionRunPhase,
+) -> Result<WorkspaceSnapshot, String> {
+    let (snapshot, phase) = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        ensure_context_compaction_commit_owner(
+            &guard,
+            session_id,
+            ContextCompactionCommitMode::ContinueActive {
+                task_id,
+                economy_owner: None,
+            },
+        )?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or("Workspace is not ready.")?;
+        if let Some(runtime) = workspace.session_runtime_state.get_mut(&session_id) {
+            for record in &mut runtime.conversation_state.records {
+                if record
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("context_compaction_section_id"))
+                    .and_then(Value::as_str)
+                    == Some(section_id)
+                {
+                    record.visible = false;
+                }
+            }
+        }
+        let phase = apply_session_phase_to_state(&mut guard, session_id, previous_phase)?;
+        let snapshot = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or("Workspace is not ready.")?
+            .clone();
+        (snapshot, phase)
+    };
+    project_committed_context_compaction_surfaces(app, state, session_id, phase);
+    Ok(snapshot)
 }
 
 /// Projects committed context-compaction state without reclassifying it as a pre-commit failure.
@@ -479,10 +539,61 @@ pub(crate) async fn finish_webui_context_compaction_execution(
                     )
                 },
             ),
+        ContextCompactionCommitMode::ContinueActive {
+            economy_owner: Some((owner, revision)),
+            ..
+        } => handle.mutate_durable_if_changed(
+            crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
+            crate::session_runtime_registry_v1::SessionFlushReason::ContextChanged,
+            |document| {
+                document.apply_atomic_transition(|document| {
+                    let mode = &document.metadata.config.economy;
+                    if !mode.enabled
+                        || mode.revision != revision
+                        || mode.active.as_ref().map(|turn| turn.turn_id) != Some(owner)
+                    {
+                        return Err(
+                            vulcan_session_core::v1::DomainError::InvalidSelectionConfiguration {
+                                field: "economy.activation_owner",
+                            },
+                        );
+                    }
+                    let committed = document.record_compaction(commit_input, now_ms)?;
+                    let initialized =
+                        document.finish_economy_initialization(owner, revision, now_ms)?;
+                    use crate::session_runtime_registry_v1::SessionMutationChange;
+                    use vulcan_session_core::v1::document::IdempotentMutation;
+                    Ok(match committed {
+                        IdempotentMutation::Idempotent(id) if !initialized => {
+                            SessionMutationChange::Unchanged(id)
+                        }
+                        _ => SessionMutationChange::Changed(committed.into_value()),
+                    })
+                })
+            },
+        ),
         _ => handle.record_compaction(commit_input, now_ms),
     };
     let compaction_receipt = match publication {
         Ok(receipt) => receipt,
+        Err(crate::session_runtime_registry_v1::SessionRuntimeError::Domain(cause))
+            if matches!(
+                cause.as_ref(),
+                vulcan_session_core::v1::DomainError::InvalidSelectionConfiguration {
+                    field: "economy.activation_owner"
+                }
+            ) =>
+        {
+            let workspace_snapshot = discard_economy_preparation(
+                app,
+                state,
+                session_id,
+                commit_mode.task_id(),
+                section_id,
+                previous_phase,
+            )?;
+            return Ok(ContextCompactionFinishOutcome::Superseded { workspace_snapshot });
+        }
         Err(error) => {
             let rejection_error =
                 format!("Context compaction V1 context publication failed: {error}");
@@ -508,11 +619,12 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     // VMM 派生自已提交 V1 ID；失败会停止续接，但不会伪称回滚该提交。
     // Read generation and compaction together from the same authoritative owner after commit.
     // 提交后从同一权威归属方同时读取代次与压缩身份。
-    let (generation, current_compaction_id) = handle
+    let (generation, current_compaction_id, economy_position) = handle
         .read(|document| {
             (
                 document.segment_generation(),
                 document.runtime_lock.current_compaction_id,
+                document.metadata.config.economy.position_revision(),
             )
         })
         .map_err(|error| format!("Failed to read committed V1 context epoch: {error}"))?;
@@ -524,7 +636,8 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     let context = vulcan_vmm::VmmContextEpoch::new(
         generation,
         Some(compaction_receipt.value.value().to_string()),
-    )?;
+    )?
+    .with_economy_revision(economy_position);
     super::vmm_projection::publish_vmm_compaction_epoch(state, agent_runtime, session_id, &context)
         .await
         .map_err(|error| {

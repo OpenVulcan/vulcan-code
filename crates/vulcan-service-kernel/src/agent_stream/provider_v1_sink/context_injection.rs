@@ -401,6 +401,13 @@ pub(super) fn synchronize_project_request_dynamic_context(
             inputs.push(permission_mode_input(document));
             inputs.push(provider_tools_input(document));
             inputs.push(tool_chain_input(document));
+            const ECONOMY_KEY: &str = "dynamic.economy_mode";
+            let rule = if document.economy_revision_for_request().is_some() {
+                Some("Economy mode: only at the end of this user task, after using tools and resolving all questions, jobs and child results, write your final answer, then on a new line append <SUMMARY_INFO>your brief handoff</SUMMARY_INFO>. Summarize only this task's verified changes, important decisions, artifacts and pitfalls. Keep tool output and private reasoning out. Omit the tag for simple answers, exact-output tasks, partial progress, tool calls and while waiting.".to_owned())
+            } else if document.metadata.dynamic_context.contains_key(ECONOMY_KEY) {
+                Some("Economy handoff instructions are inactive. Answer normally without a summary tag.".to_owned())
+            } else { None };
+            inputs.push(DynamicContextInput::new(ECONOMY_KEY, rule, SystemContextScope::Session, None));
             if let Some(directory) =
                 project.and_then(|project| project_directory_input(document, project))
             {
@@ -650,6 +657,7 @@ pub(super) fn anchored_prefixes(
                 .map(|id| id.value().to_string()),
         )
         .map_err(provider_projection_runtime_error)?
+        .with_economy_revision(snapshot.economy_position_revision)
         .cache_epoch_id();
         if (!injection.anchored_prefixes.is_empty() || injection.cache_epoch_id.is_some())
             && injection.cache_epoch_id.as_deref() != Some(expected_epoch.as_str())
@@ -746,6 +754,7 @@ mod tests {
         SessionProviderProjectionSnapshot {
             unenveloped_assistant_requests: Default::default(),
             current_compaction_id: None,
+            economy_position_revision: None,
             open_turn_id: None,
             child_business_execution_id: None,
             preparing_user_prompt_media_seqs: Vec::new(),

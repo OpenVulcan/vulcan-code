@@ -98,6 +98,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_media_delivery_policy",
     "service_reset_public_ai_media_delivery_policy",
     "service_save_public_ai_context_compaction_window_nodes",
+    "service_save_economy_window",
     "service_save_public_ai_new_session_context_window_default",
     "service_save_public_ai_model_context_window_default",
     "service_ack_public_ai_model_takeover_notices",
@@ -685,6 +686,9 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "request")?,
             )
             .await,
+        ),
+        "service_save_economy_window" => rpc_json_result(
+            service_save_economy_window(app, state, rpc_required_param(params, "request")?).await,
         ),
         "service_save_public_ai_context_compaction_window_nodes" => rpc_json_result(
             service_save_public_ai_context_compaction_window_nodes(

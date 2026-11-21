@@ -747,7 +747,7 @@ pub struct ToolPayload(serde_json::Value);
 impl ToolPayload {
     /// Reads a documented top-level string argument by its exact name.
     /// 按精确名称读取有协议定义的顶层字符串参数。
-    pub(crate) fn string_argument(&self, name: &str) -> Option<&str> {
+    pub fn string_argument(&self, name: &str) -> Option<&str> {
         self.0.get(name).and_then(serde_json::Value::as_str)
     }
 

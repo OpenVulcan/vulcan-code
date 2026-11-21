@@ -230,12 +230,27 @@ async fn latest_request_context(
         .api_call_id
         .parse::<u64>()
         .map_err(|error| format!("The dispatched context has an invalid API call ID: {error}"))?;
-    let assistant_response = handle
+    let (assistant_response, economy) = handle
         .read(|document| {
-            crate::session_runtime_registry_v1::latest_context_assistant_response(
+            let response = crate::session_runtime_registry_v1::latest_context_assistant_response(
                 document.events(),
                 api_call_id,
-            )
+            );
+            let coverage = document
+                .events()
+                .iter()
+                .rev()
+                .find_map(|event| match &event.event {
+                    vulcan_session_core::v1::event::EventBody::ApiStarted(a)
+                        if a.api_call_id.value() == api_call_id
+                            && a.projection.segment_generation == document.segment_generation() =>
+                    {
+                        Some(a.projection.through_seq)
+                    }
+                    _ => None,
+                })
+                .and_then(|through| crate::economy_mode::diagnostics(document, through));
+            (response, coverage)
         })
         .map_err(|error| error.to_string())?;
     if known_execution && assistant_response.is_none() {
@@ -245,6 +260,7 @@ async fn latest_request_context(
         "status": "available",
         "snapshot": snapshot.as_ref(),
         "assistantResponse": assistant_response,
+        "economy": economy,
     }))
 }
 

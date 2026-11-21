@@ -168,6 +168,7 @@ mod conversation_resources_v1;
 mod conversation_run_services;
 mod conversation_submission;
 mod dedicated_session;
+mod economy_mode;
 mod environment_variables;
 mod execution_report_memory;
 mod fallback_workbench_projection;

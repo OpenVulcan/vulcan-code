@@ -11,6 +11,7 @@
 mod api;
 mod business_api_boundaries;
 mod compaction;
+mod economy;
 mod hydration;
 mod inactive_admission;
 mod input;

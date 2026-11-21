@@ -17,6 +17,9 @@ import type { SessionGoalSummary } from "@/types";
 interface DraftSessionSettingsEntry {
   // Explicit answer mode captured with all other first-turn settings.
   // 与其他首轮设置一同捕获的显式回答模式。
+  // Explicit economy selection for the first user turn.
+  // 首个用户回合的显式节约模式选择。
+  economyEnabled?: boolean;
   answerMode?: AnswerMode;
   // Explicit permission mode captured with all other first-turn settings.
   // 与其他首轮设置一同捕获的显式权限模式。
@@ -80,6 +83,10 @@ export interface ComposerDraftSessionSettingsController {
   // Explicit draft answer mode, or null while the draft follows the global default.
   // 显式草稿回答模式；草稿跟随全局默认值时为空。
   answerMode: AnswerMode | null;
+  // Effective draft preference and its slot-local setter.
+  // 生效的草稿偏好与草稿槽内的更新方法。
+  economyEnabled: boolean;
+  setEconomyEnabled: (enabled: boolean) => void;
   // Capture a new draft answer mode synchronously for the next submission.
   // 同步捕获新草稿回答模式供下一次提交使用。
   setAnswerMode: (mode: AnswerMode) => void;
@@ -280,6 +287,8 @@ export function useComposerDraftSessionSettings(
     ? syntheticDraftGoal(scopeKey, current.initialGoal)
     : null;
   return {
+    economyEnabled: current.economyEnabled ?? false,
+    setEconomyEnabled: (enabled) => updateCurrent((entry) => ({ ...entry, economyEnabled: enabled })),
     answerMode: current.answerMode ?? null,
     setAnswerMode,
     permissionMode: current.permissionMode ?? null,

@@ -950,7 +950,7 @@ impl SessionDocument {
         } else {
             None
         };
-        let retained_from_seq = match self.runtime_lock.current_compaction_id {
+        let retained_from_seq = match self.effective_context_compaction_id() {
             Some(compaction_id) => self
                 .compactions
                 .iter()

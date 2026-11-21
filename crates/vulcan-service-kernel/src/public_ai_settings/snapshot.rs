@@ -151,6 +151,12 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// Fixed system context-compaction window nodes in immutable display order.
     /// 按不可变展示顺序排列的固定系统上下文压缩窗口节点。
     context_compaction_window_nodes: ContextCompactionWindowConfiguration,
+    /// Saved and factory-default economy windows for the dedicated editor.
+    /// 独立设置页使用的已保存轮数窗口与出厂值。
+    economy_window: vulcan_ai_contract::economy_window::EconomyWindow,
+    /// Factory defaults supplied by the domain model.
+    /// 领域模型提供的出厂默认值。
+    default_economy_window: vulcan_ai_contract::economy_window::EconomyWindow,
     /// Default window node applied only when a new conversation is created.
     /// 仅在新建会话时应用的默认窗口节点。
     new_session_context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
@@ -809,6 +815,8 @@ pub(super) fn build_public_ai_settings_snapshot(
         context_window_policy_overrides: configuration.context_window_policy_overrides,
         context_window_policy_defaults: ContextWindowPolicy::default(),
         context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),
+        economy_window: configuration.economy_window,
+        default_economy_window: Default::default(),
         new_session_context_compaction_window_node_id: configuration
             .new_session_context_compaction_window_node_id,
         model_context_window_defaults: configuration

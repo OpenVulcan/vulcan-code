@@ -933,6 +933,10 @@ pub struct PersistedAiConfiguration {
     /// Token 值可由用户编辑的固定系统上下文压缩窗口节点。
     #[serde(default)]
     pub context_compaction_window_nodes: ContextCompactionWindowConfiguration,
+    /// Global settled-turn thresholds shared by economy sessions.
+    /// 所有节约模式会话共用的已结算轮数阈值。
+    #[serde(default)]
+    pub economy_window: vulcan_ai_contract::economy_window::EconomyWindow,
     /// Default fixed window node for newly created conversations; None follows the selected model.
     /// 新建会话默认使用的固定窗口节点；空值表示遵循所选模型。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1147,6 +1151,7 @@ impl Default for PersistedAiConfiguration {
             provider_capability_overrides: BTreeMap::new(),
             context_window_policy_overrides: ContextWindowPolicyOverrides::default(),
             context_compaction_window_nodes: ContextCompactionWindowConfiguration::default(),
+            economy_window: Default::default(),
             new_session_context_compaction_window_node_id: None,
             model_context_window_defaults: BTreeMap::new(),
             internal_model_enabled_overrides: BTreeMap::new(),
@@ -1403,6 +1408,7 @@ impl PersistedAiConfiguration {
             default.validate()?;
         }
         self.context_compaction_window_nodes.validate()?;
+        self.economy_window.validate()?;
         self.validate_context_window_policy()?;
         self.effective_media_delivery_policy().validate()?;
         Ok(())

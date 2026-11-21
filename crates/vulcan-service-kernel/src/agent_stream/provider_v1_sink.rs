@@ -635,6 +635,9 @@ struct ActiveProviderV1Projection {
     /// Main-ledger seq of the assistant semantic, once allocated.
     /// assistant 语义分配后的主账本 seq。
     assistant_text_seq: Option<Seq>,
+    /// Preference revision frozen for the dispatched business request.
+    /// 本次派发业务请求冻结的偏好修订。
+    economy_revision: Option<u64>,
     /// Provider terminal retained while a real tool batch remains pending.
     /// 真实工具批次仍待处理时保留的 Provider 终态。
     pending_terminal: Option<ProviderV1ApiTerminalFacts>,
@@ -2482,6 +2485,7 @@ impl ProviderV1StreamSink {
             reasoning_display_only: false,
             assistant_text: String::new(),
             assistant_text_seq: None,
+            economy_revision: prepared.economy_revision,
             pending_terminal: None,
             prepared_tools: BTreeMap::new(),
             tool_batch_prepared: false,
@@ -2634,9 +2638,18 @@ impl ProviderV1StreamSink {
         }
         let mut next_text = active.assistant_text.clone();
         next_text.push_str(delta);
+        let visible = if active.economy_revision.is_some() {
+            vulcan_session_core::v1::economy::streaming_body(&next_text)
+        } else {
+            &next_text
+        };
+        if visible.is_empty() {
+            active.assistant_text = next_text;
+            return Ok(());
+        }
         let receipt = self.handle.update_assistant_text(
             active.api_call_id,
-            next_text.clone(),
+            visible.to_owned(),
             AssistantSemanticStatus::Streaming,
             now_ms,
         )?;
@@ -2753,6 +2766,24 @@ impl ProviderV1StreamSink {
         }
         // Quoted file lines are captured once, as the reply stands when it is sealed.
         // 引用的文件行只抓取一次，即回答封口时的状态。
+        let mut economy_candidate = None;
+        if terminal.tool_call_count == 0 && terminal.status == ApiCallStatus::Completed {
+            if let Some(active) = self.active.as_mut()
+                && let Some(revision) = active.economy_revision
+            {
+                let handoff =
+                    vulcan_session_core::v1::economy::split_summary(&active.assistant_text);
+                let summary = handoff.map(|(_, text)| text.to_owned());
+                if let Some((body, _)) = handoff {
+                    active.assistant_text.truncate(body.len());
+                }
+                economy_candidate = Some(vulcan_session_core::v1::economy::EconomyCandidate {
+                    revision,
+                    api: active.api_call_id,
+                    summary,
+                });
+            }
+        }
         let code_snapshots = match self.active.as_ref() {
             Some(active) if active.assistant_text_seq.is_some() => {
                 answer_code::capture_answer_code_snapshots(
@@ -2792,7 +2823,7 @@ impl ProviderV1StreamSink {
             // 结算原子选择关闭或子任务回流续跑，不留下读写间隙。
             let receipt = self
                 .handle
-                .complete_successful_turn(completed_at_ms)
+                .complete_successful_turn_with_economy(completed_at_ms, economy_candidate)
                 .await?;
             match receipt.value {
                 SuccessfulTurnSettlement::Completed(value) => {
@@ -3242,7 +3273,7 @@ impl ProviderV1StreamSink {
         }
         // Seal every allocated semantic event, including an exact empty physical response.
         // 封口每个已分配语义事件，包括真实的空物理回复。
-        if active.assistant_text_seq.is_some() {
+        if active.assistant_text_seq.is_some() || !active.assistant_text.is_empty() {
             let receipt = self.handle.seal_assistant_text(
                 active.api_call_id,
                 active.assistant_text.clone(),

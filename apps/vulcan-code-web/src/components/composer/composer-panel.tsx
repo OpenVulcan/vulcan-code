@@ -882,17 +882,15 @@ export function ComposerPanel(props: {
               conversationId={props.conversationId}
               providers={props.providers}
               sessionModelLabel={activeModelChoice?.modelName}
+              draftEconomyEnabled={draftSessionSettings.economyEnabled}
+              onDraftEconomyChange={draftSessionSettings.setEconomyEnabled}
               draftOutputStyleId={draftSessionSettings.outputStyleId}
               onOutputStyleChange={handleOutputStyleChange}
               outputStyleCatalog={props.outputStyleCatalog}
               projectId={props.projectId}
               thinkingDisplayMode={props.thinkingDisplayMode}
               planModeEnabled={planModeEnabled}
-              sessionVmmPolicy={
-                props.conversationId
-                  ? props.sessionVmmPolicy
-                  : draftSessionSettings.vmmPolicy
-              }
+              sessionVmmPolicy={props.conversationId ? props.sessionVmmPolicy : draftSessionSettings.vmmPolicy}
               sessionOutputStyle={props.sessionOutputStyle}
               vmmAvailable={props.vmmAvailable}
               vmmStatus={props.vmmStatus}

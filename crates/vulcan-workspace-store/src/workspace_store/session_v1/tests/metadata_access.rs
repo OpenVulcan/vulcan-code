@@ -19,6 +19,9 @@ fn fixture() -> (tempfile::TempDir, SessionV1Layout, MetadataDocument) {
 fn write_schema(layout: &SessionV1Layout, metadata: &MetadataDocument, schema: u32) -> Vec<u8> {
     let mut raw = serde_json::to_value(metadata).unwrap();
     raw["schema_version"] = schema.into();
+    if schema < 16 {
+        raw["config"].as_object_mut().unwrap().remove("economy");
+    }
     let bytes = serde_json::to_vec(&raw).unwrap();
     std::fs::write(layout.metadata_path(), &bytes).unwrap();
     bytes
@@ -121,6 +124,7 @@ fn metadata_access_upgrade_preserves_child_maintenance_identity() {
     // 版本 10 始终编码具体子执行身份。
     let mut raw = serde_json::to_value(metadata).unwrap();
     raw["schema_version"] = 10.into();
+    raw["config"].as_object_mut().unwrap().remove("economy");
     raw["context_maintenance"] = serde_json::json!({
         "execution_id": "maintenance-owner", "business_execution_id": "child-owner",
         "business_turn_id": 1, "turn_id": 2, "segment_generation": 1, "source_revision": 1,
@@ -153,6 +157,7 @@ fn metadata_access_upgrade_moves_window_node_into_selection() {
     let (_root, layout, metadata) = fixture();
     let mut raw = serde_json::to_value(&metadata).unwrap();
     raw["schema_version"] = 13.into();
+    raw["config"].as_object_mut().unwrap().remove("economy");
     raw["config"]["context_compaction_window_node_id"] = "compression-window-4".into();
     let original = serde_json::to_vec(&raw).unwrap();
     std::fs::write(layout.metadata_path(), &original).unwrap();

@@ -24,6 +24,7 @@ pub mod context_maintenance;
 pub mod dedicated;
 pub mod document;
 pub mod dynamic_context;
+pub mod economy;
 pub mod errors;
 pub mod event;
 pub mod goal;

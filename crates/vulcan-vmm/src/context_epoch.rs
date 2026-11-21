@@ -17,6 +17,9 @@ pub struct VmmContextEpoch {
     /// Exact committed compaction identity, or explicit absence after creation or rewind.
     /// 准确已提交压缩身份，或创建及回退后的明确缺失。
     compaction_id: Option<String>,
+    /// Last historical position change published by economy-mode settlement.
+    /// 节约模式结算最近发布的历史位置变化。
+    economy_revision: Option<u64>,
 }
 
 impl VmmContextEpoch {
@@ -36,7 +39,15 @@ impl VmmContextEpoch {
         Ok(Self {
             generation,
             compaction_id,
+            economy_revision: None,
         })
+    }
+
+    /// Binds the host's settled history frontier without changing the physical compaction identity.
+    /// 绑定宿主已结算历史前沿，并保留物理压缩身份。
+    pub fn with_economy_revision(mut self, revision: Option<u64>) -> Self {
+        self.economy_revision = revision;
+        self
     }
 
     /// Returns the exact optional compaction identity independently of the cache epoch's encoding.
@@ -52,7 +63,7 @@ impl VmmContextEpoch {
     /// Returns an unambiguous ID; absence and a literal compaction name can never collide.
     /// 返回无歧义 ID；缺失状态与字面压缩名称绝不会冲突。
     pub fn cache_epoch_id(&self) -> String {
-        match &self.compaction_id {
+        let lineage = match &self.compaction_id {
             Some(id) => format!(
                 "v{PROVIDER_PROJECTION_REVISION}:{}:compaction:{id}",
                 self.generation
@@ -61,6 +72,10 @@ impl VmmContextEpoch {
                 "v{PROVIDER_PROJECTION_REVISION}:{}:uncompacted",
                 self.generation
             ),
+        };
+        match self.economy_revision {
+            Some(revision) => format!("economy:{revision}:{lineage}"),
+            None => lineage,
         }
     }
 }

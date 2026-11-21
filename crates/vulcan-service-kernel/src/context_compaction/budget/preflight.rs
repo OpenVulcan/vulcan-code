@@ -79,8 +79,7 @@ fn observed_compaction_budget_from_document(
     // A committed summary invalidates all earlier usage, including the summary request's own usage.
     // 已提交摘要会使之前的全部用量失效，包含摘要请求自身的用量。
     let current_compaction = document
-        .runtime_lock
-        .current_compaction_id
+        .effective_context_compaction_id()
         .map(|id| {
             document
                 .compactions
@@ -131,7 +130,13 @@ fn observed_compaction_budget_from_document(
                 stats.api_call_id.value()
             ));
         };
-        if started.projection.segment_generation != document.segment_generation()
+        if document
+            .metadata
+            .config
+            .economy
+            .position_revision()
+            .is_some_and(|seq| started.projection.through_seq.value() < seq)
+            || started.projection.segment_generation != document.segment_generation()
             || started.projection.retained_from_seq.value() != retained_from_seq
             || current_compaction
                 .is_some_and(|node| started.projection.through_seq < node.api_stats_seq)
