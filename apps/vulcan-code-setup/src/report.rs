@@ -32,6 +32,10 @@ pub enum Stage {
     /// Downloading and verifying the rest.
     /// 下载并校验其余部分。
     Downloading,
+    /// Installing the shared Microsoft Visual C++ runtime.
+    /// 安装共享的 Microsoft Visual C++ 运行库。
+    #[cfg(windows)]
+    Runtime,
     /// Making the new version the current one.
     /// 把新版本设为当前版本。
     Switching,
@@ -379,6 +383,8 @@ impl Reporter for Plain {
         match stage {
             Stage::Checking(channel) => println!("Checking the {} channel...", channel.as_str()),
             Stage::Preparing => println!("Checking which files are already here..."),
+            #[cfg(windows)]
+            Stage::Runtime => println!("Installing the Microsoft Visual C++ x64 runtime..."),
             Stage::Service => println!("Registering the service..."),
             Stage::Downloading | Stage::Switching | Stage::Integrating | Stage::Cleaning => {}
         }

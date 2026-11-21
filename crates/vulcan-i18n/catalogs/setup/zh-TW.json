@@ -125,6 +125,7 @@
   "setup.stage.checking": "正在查詢最新版本（{channel}）",
   "setup.stage.preparing": "正在檢查本機已有的檔案",
   "setup.stage.downloading": "正在下載並驗證",
+  "setup.stage.runtime": "正在安裝 Microsoft Visual C++ x64 執行階段",
   "setup.stage.switching": "正在切換至新版本",
   "setup.stage.integrating": "正在設定命令與捷徑",
   "setup.stage.service": "正在註冊服務",

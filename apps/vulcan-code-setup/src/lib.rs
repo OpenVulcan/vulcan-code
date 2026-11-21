@@ -31,6 +31,8 @@ pub mod state;
 mod status;
 mod uninstall;
 #[cfg(windows)]
+mod vc_runtime;
+#[cfg(windows)]
 mod windows;
 mod wizard;
 

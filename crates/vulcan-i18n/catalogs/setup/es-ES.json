@@ -125,6 +125,7 @@
   "setup.stage.checking": "Buscando la versión más reciente ({channel})",
   "setup.stage.preparing": "Comprobando qué archivos ya están aquí",
   "setup.stage.downloading": "Descargando y verificando",
+  "setup.stage.runtime": "Instalando el entorno de ejecución Microsoft Visual C++ x64",
   "setup.stage.switching": "Cambiando a la nueva versión",
   "setup.stage.integrating": "Configurando comandos y accesos directos",
   "setup.stage.service": "Registrando el servicio",

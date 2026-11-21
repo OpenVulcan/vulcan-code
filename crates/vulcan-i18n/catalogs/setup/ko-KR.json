@@ -125,6 +125,7 @@
   "setup.stage.checking": "최신 버전 확인 중({channel})",
   "setup.stage.preparing": "이미 있는 파일 확인 중",
   "setup.stage.downloading": "다운로드 및 검증 중",
+  "setup.stage.runtime": "Microsoft Visual C++ x64 런타임 설치 중",
   "setup.stage.switching": "새 버전으로 전환 중",
   "setup.stage.integrating": "명령과 바로 가기 설정 중",
   "setup.stage.service": "서비스 등록 중",

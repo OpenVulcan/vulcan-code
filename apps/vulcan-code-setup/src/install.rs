@@ -881,6 +881,8 @@ fn assemble(
     let (manifest, indexes) = match work {
         Work::Refresh(_) => {
             decide(reporter, &review)?;
+            #[cfg(windows)]
+            crate::vc_runtime::ensure(reporter)?;
             reporter.before_change(root.path(), Change::Apply)?;
             return Ok(false);
         }
@@ -924,12 +926,7 @@ fn assemble(
                 .complete(downloader)
                 .map_err(|error| failure(cancel, error))?;
         }
-        check_release_build(&version_dir)?;
-        reporter.before_change(root.path(), Change::Apply)?;
-        reporter.stage(Stage::Switching);
-        root.switch_to(lock, version)
-            .map_err(|error| error.to_string())?;
-        return Ok(true);
+        return activate_release(root, lock, version, reporter, cancel, check_release_build);
     }
     reporter.stage(Stage::Preparing);
     let prepared = Assembly::new(root, lock, &manifest, indexes)
@@ -962,10 +959,30 @@ fn assemble(
         result
     });
     result.map_err(|error| failure(cancel, error))?;
-    if let Err(error) = check_release_build(&version_dir) {
-        let _ = std::fs::remove_dir_all(&version_dir);
-        return Err(error);
+    activate_release(root, lock, version, reporter, cancel, check_release_build)
+}
+
+/// Probes a verified release before switching the install root's active version.
+/// 切换安装根目录的活动版本之前，探测已校验的发行版本。
+/// `lock` protects `root`, `reporter` coordinates changes, `cancel` tracks cancellation,
+/// and `probe` checks whether the release can run.
+/// `lock` 保护 `root`，`reporter` 协调变更，`cancel` 跟踪取消，`probe` 检查版本能否运行。
+/// Returns true when `version` becomes active, or an error while retaining the assembled files.
+/// `version` 激活后返回 true，失败时返回错误并保留已组装文件。
+fn activate_release(
+    root: &InstallRoot,
+    lock: &InstallLock,
+    version: &ReleaseVersion,
+    reporter: &dyn Reporter,
+    cancel: &AtomicBool,
+    probe: impl FnOnce(&Path, &dyn Reporter) -> Result<(), String>,
+) -> Result<bool, String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(String::from(crate::CANCELLED));
     }
+    // Runtime failures do not invalidate signed content. A retry verifies it through prepare_repair.
+    // 运行失败不代表已签名内容损坏。重试时通过 prepare_repair 核验并复用。
+    probe(&root.version_dir(version), reporter)?;
     reporter.before_change(root.path(), Change::Apply)?;
     reporter.stage(Stage::Switching);
     root.switch_to(lock, version)
@@ -1121,9 +1138,13 @@ pub fn uninstall_hint(root: &Path, on_path: bool) -> String {
     hint
 }
 
-/// Requires the assembled version to be a release build that loads here.
-/// 要求组装好的版本是能在本机加载的发行构建。
-fn check_release_build(version_dir: &Path) -> Result<(), String> {
+/// Checks that the service in `version_dir` runs and is a release build.
+/// 检查 `version_dir` 中的服务可运行且为发行构建。
+/// `_reporter` reports Windows prerequisite installation. Returns an error if the build cannot run.
+/// `_reporter` 报告 Windows 前置依赖安装。构建无法运行时返回错误。
+fn check_release_build(version_dir: &Path, _reporter: &dyn Reporter) -> Result<(), String> {
+    #[cfg(windows)]
+    crate::vc_runtime::ensure(_reporter)?;
     if Description::read(version_dir)?.profile != "release" {
         return Err(format!("{} is not a release build", version_dir.display()));
     }
@@ -1465,6 +1486,38 @@ mod tests {
         let undo = Undo::note(&existing, &version);
         undo.run();
         assert!(existing.staging_dir(&version).is_dir());
+    }
+
+    /// A failed launch probe leaves the assembled version available for the next verified retry.
+    /// 启动探测失败时保留已组装的版本，供下一次核验后重试。
+    #[test]
+    fn failed_activation_preserves_the_assembled_release() {
+        let temp = tempfile::tempdir().expect("temporary install directory");
+        let root = InstallRoot::new(temp.path());
+        let version: ReleaseVersion = "1.2.3".parse().expect("release version");
+        let lock = root.lock().expect("installation lock");
+        let directory = root.version_dir(&version);
+        std::fs::create_dir_all(&directory).expect("assembled version directory");
+        let record = directory.join(RECORD_FILE_NAME);
+        std::fs::write(&record, b"assembled record fixture").expect("assembled record");
+
+        let result = activate_release(
+            &root,
+            &lock,
+            &version,
+            &Plain::new(true),
+            &AtomicBool::new(false),
+            |path, _reporter| {
+                assert_eq!(path, directory);
+                Err(String::from("fixture loader failure"))
+            },
+        );
+        assert!(result.is_err());
+        assert!(record.is_file());
+        assert_eq!(
+            root::current(&root).expect("read current version"),
+            Current::None
+        );
     }
 
     #[test]

@@ -1,6 +1,5 @@
-//! The few Windows registry and message calls the setup program needs; the only unsafe code in
-//! this crate.
-//! 安装器所需的少量 Windows 注册表与消息调用；本 crate 中唯一的 unsafe 代码。
+//! Native Windows integration for setup; the only unsafe code in this crate.
+//! 安装器的 Windows 原生集成；本 crate 中唯一的 unsafe 代码。
 #![allow(unsafe_code)]
 
 use std::ffi::{OsStr, OsString};
@@ -53,6 +52,123 @@ pub fn interactive_desktop() -> bool {
     // SAFETY: GetShellWindow has no parameters and returns a borrowed window handle or null.
     // 安全性：GetShellWindow 无参数，返回借用的窗口句柄或空值。
     !unsafe { GetShellWindow() }.is_null()
+}
+
+/// Checks whether the system copy of the Visual C++ DLL required by the Windows Core can load.
+/// 检查 Windows Core 依赖的系统 Visual C++ DLL 能否加载。
+/// Returns false for a missing or unusable DLL, or an error if the system directory is unknown.
+/// DLL 缺失或无法加载时返回 false，无法确定系统目录时返回错误。
+pub fn vc_runtime_available() -> Result<bool, String> {
+    use windows_sys::Win32::Foundation::FreeLibrary;
+    use windows_sys::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
+
+    let runtime = system_directory()?.join("vcruntime140.dll");
+    if !runtime
+        .try_exists()
+        .map_err(|error| format!("cannot inspect {}: {error}", runtime.display()))?
+    {
+        return Ok(false);
+    }
+    // The path is absolute and NUL-terminated; dependencies also resolve only from System32.
+    // 路径为以 NUL 结尾的绝对路径，依赖项也只从 System32 解析。
+    let library = unsafe {
+        LoadLibraryExW(
+            wide(&runtime).as_ptr(),
+            null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    if library.is_null() {
+        return Ok(false);
+    }
+    unsafe { FreeLibrary(library) };
+    Ok(true)
+}
+
+/// Returns the OS-provided system directory, or an error if Windows cannot report it.
+/// 返回操作系统给出的系统目录，Windows 无法提供时返回错误。
+fn system_directory() -> Result<PathBuf, String> {
+    use windows_sys::Win32::Foundation::MAX_PATH;
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+    // The writable buffer is valid for the character count passed to Windows.
+    // 可写缓冲区可容纳传给 Windows 的字符数。
+    let mut directory = [0; MAX_PATH as usize];
+    let length = unsafe { GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32) };
+    if length == 0 {
+        return Err(format!(
+            "cannot locate the Windows system directory: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if length as usize >= directory.len() {
+        return Err(String::from(
+            "the Windows system directory path is too long",
+        ));
+    }
+    Ok(PathBuf::from(OsString::from_wide(
+        &directory[..length as usize],
+    )))
+}
+
+/// Runs the verified Microsoft `program` with normal Windows UAC and waits for its exit code.
+/// 通过 Windows 标准 UAC 运行已校验的微软 `program`，等待并返回退出码。
+/// Returns an error if the program could not be started or its exit status could not be read.
+/// 无法启动程序或获取退出状态时返回错误。
+pub fn run_runtime_installer(program: &Path) -> Result<u32, String> {
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WIN32_ERROR};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, INFINITE};
+    use windows_sys::Win32::UI::Shell::{
+        SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+        ShellExecuteExW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let program = wide(program);
+    // Avoid launching an elevated process with a caller-controlled working directory.
+    // 避免提权进程继承由调用方控制的工作目录。
+    let directory = wide(system_directory()?);
+    let verb = wide("runas");
+    let arguments = wide("/install /quiet /norestart");
+    let mut execution = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI,
+        lpFile: program.as_ptr(),
+        lpVerb: verb.as_ptr(),
+        lpParameters: arguments.as_ptr(),
+        lpDirectory: directory.as_ptr(),
+        nShow: SW_HIDE,
+        ..Default::default()
+    };
+    // All strings outlive ShellExecuteExW. Balance COM only if this call initialized it.
+    // 所有字符串在 ShellExecuteExW 返回前保持有效。仅当本次成功初始化 COM 时成对退出。
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
+    let launched = unsafe { ShellExecuteExW(&mut execution) };
+    let launch_error = std::io::Error::last_os_error();
+    if initialized {
+        unsafe { CoUninitialize() };
+    }
+    if launched == 0 {
+        return Err(format!(
+            "cannot start the Microsoft Visual C++ installer with administrator approval: {launch_error}"
+        ));
+    }
+    if execution.hProcess.is_null() {
+        return Err(String::from(
+            "Windows returned no handle for the Microsoft runtime installer",
+        ));
+    }
+    let process = Handle(execution.hProcess);
+    let wait = unsafe { WaitForSingleObject(process.0, INFINITE) };
+    let mut status: WIN32_ERROR = 0;
+    if wait != WAIT_OBJECT_0 || unsafe { GetExitCodeProcess(process.0, &mut status) } == 0 {
+        return Err(format!(
+            "cannot read the Microsoft runtime installer result: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(status)
 }
 
 /// Reports whether Explorer started the installer without a shared interactive console.

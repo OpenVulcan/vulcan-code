@@ -502,6 +502,8 @@ fn working_lines<'a>(translator: &'a Translator, session: &Session) -> Vec<Line<
             ),
             Stage::Preparing => text(translator, "setup.stage.preparing").to_owned(),
             Stage::Downloading => text(translator, "setup.stage.downloading").to_owned(),
+            #[cfg(windows)]
+            Stage::Runtime => text(translator, "setup.stage.runtime").to_owned(),
             Stage::Switching => text(translator, "setup.stage.switching").to_owned(),
             Stage::Integrating => text(translator, "setup.stage.integrating").to_owned(),
             Stage::Service => text(translator, "setup.stage.service").to_owned(),

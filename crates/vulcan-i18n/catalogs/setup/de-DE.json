@@ -125,6 +125,7 @@
   "setup.stage.checking": "Neueste Version wird gesucht ({channel})",
   "setup.stage.preparing": "Vorhandene Dateien werden geprüft",
   "setup.stage.downloading": "Herunterladen und prüfen",
+  "setup.stage.runtime": "Microsoft Visual C++-Laufzeit (x64) wird installiert",
   "setup.stage.switching": "Wechsel zur neuen Version",
   "setup.stage.integrating": "Befehle und Verknüpfungen werden eingerichtet",
   "setup.stage.service": "Dienst wird registriert",

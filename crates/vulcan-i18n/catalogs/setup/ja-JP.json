@@ -125,6 +125,7 @@
   "setup.stage.checking": "最新バージョンを確認しています（{channel}）",
   "setup.stage.preparing": "既にあるファイルを確認しています",
   "setup.stage.downloading": "ダウンロードと検証",
+  "setup.stage.runtime": "Microsoft Visual C++ x64 ランタイムをインストール中",
   "setup.stage.switching": "新しいバージョンに切り替えています",
   "setup.stage.integrating": "コマンドとショートカットを設定しています",
   "setup.stage.service": "サービスを登録しています",

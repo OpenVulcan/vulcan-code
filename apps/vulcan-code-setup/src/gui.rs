@@ -1019,6 +1019,8 @@ impl Setup {
         String::from(self.text(match self.stage {
             Some(Stage::Preparing) => "setup.stage.preparing",
             Some(Stage::Downloading) => "setup.stage.downloading",
+            #[cfg(windows)]
+            Some(Stage::Runtime) => "setup.stage.runtime",
             Some(Stage::Switching) => "setup.stage.switching",
             Some(Stage::Integrating) => "setup.stage.integrating",
             Some(Stage::Service) => "setup.stage.service",

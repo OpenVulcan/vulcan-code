@@ -392,7 +392,8 @@ impl Description {
             .map_err(|error| format!("cannot run {}: {error}", program.display()))?;
         if !output.status.success() {
             return Err(format!(
-                "this build cannot run on this system:\n{}",
+                "this build cannot run on this system ({}):\n{}",
+                output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
