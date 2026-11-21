@@ -238,9 +238,12 @@ pub(crate) struct SessionProviderProjectionSnapshot {
     /// Exact durable compaction identity captured with this projection's retained boundary.
     /// 与本投影保留边界一同捕获的准确持久压缩身份。
     pub(crate) current_compaction_id: Option<CompactionId>,
-    /// Last economy settlement that changed existing model-visible positions.
-    /// 上次改变模型可见历史位置的节约结算。
-    pub(crate) economy_position_revision: Option<u64>,
+    /// Coverage of source-based memory anchors, separate from token-accounting changes.
+    /// 按来源定位的记忆锚点覆盖范围，与用量计量变化分别维护。
+    pub(crate) economy_anchor_revision: Option<u64>,
+    /// Whether the open turn already called a tool at this exact durable frontier.
+    /// 当前持久前沿上，开放回合此前是否已调用过工具。
+    pub(crate) open_turn_used_tools: bool,
     /// Exact pending prompt sequences admitted by Core before their first physical API.
     /// 在首次物理API前由Core准入的精确待准备提示词序号。
     pub(crate) preparing_user_prompt_media_seqs: Vec<Seq>,
@@ -341,6 +344,9 @@ pub(crate) struct SessionPreparedPhysicalApi<T> {
     /// Economy protocol revision admitted with this exact request.
     /// 与本次准确请求一同准入的节约协议修订。
     pub(crate) economy_revision: Option<u64>,
+    /// Only a response to a tool-using turn may carry a private handoff.
+    /// 仅已有工具调用的回合响应可以携带私有交接摘要。
+    pub(crate) economy_handoff_allowed: bool,
     /// Exact transport value reconstructed before the Core start transaction.
     /// 在 Core 起始事务前重建的精确传输值。
     pub(crate) transport: T,
@@ -2127,6 +2133,7 @@ impl SessionHandle {
         // 只有仍为当前状态的最终预算拒绝才能作为宿主控制流离开准备所有者。
         let prepared = prepared?;
         let expected_request = request.clone();
+        let used_tools = snapshot.open_turn_used_tools;
         let expected_projection = prepared.projection.clone();
         let expected_request_budget_evidence = prepared.request_budget_evidence.clone();
         // An initialized generation owns its persisted baseline. The newly assembled candidate is
@@ -2166,6 +2173,7 @@ impl SessionHandle {
                             dispatch_lease,
                             core_start,
                             economy_revision,
+                            economy_handoff_allowed: economy_revision.is_some() && used_tools,
                             transport: prepared.transport,
                             locked_baseline: receipt_locked_baseline,
                         }))
@@ -2199,6 +2207,7 @@ impl SessionHandle {
                                 dispatch_lease,
                                 core_start,
                                 economy_revision,
+                                economy_handoff_allowed: economy_revision.is_some() && used_tools,
                                 transport: prepared.transport,
                                 locked_baseline: receipt_locked_baseline,
                             },
@@ -2507,7 +2516,8 @@ impl SessionHandle {
             open_turn_id,
             child_business_execution_id,
             current_compaction_id,
-            economy_position_revision: economy.position_revision(),
+            economy_anchor_revision: economy.anchor_revision(),
+            open_turn_used_tools: economy.open_turn_used_tools(open_turn_id, &range.events),
             preparing_user_prompt_media_seqs,
             compaction_frontier_seq: context_frozen_at,
             image_replay_from_seq,

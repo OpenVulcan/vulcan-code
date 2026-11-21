@@ -102,6 +102,29 @@ fn provider_projection_message_id(index: usize) -> String {
     format!("v1-provider-message-{}", index + 1)
 }
 
+/// Resolves the controller ID, using the durable user event once a session has adopted economy history.
+/// 解析控制器标识；已采用节约历史的会话按持久用户事件定位，避免摘要移动锚点。
+fn controller_message_id(
+    snapshot: &SessionProviderProjectionSnapshot,
+    index: usize,
+) -> Result<String, String> {
+    if snapshot.economy_anchor_revision.is_some()
+        && matches!(snapshot.items[index], ProjectedItem::UserInput { .. })
+    {
+        let entry = snapshot
+            .sourced_items
+            .get(index)
+            .ok_or("Missing durable source for economy user anchor.")?;
+        if entry.source_from_seq != entry.source_to_seq
+            || !matches!(entry.item, ProjectedItem::UserInput { .. })
+        {
+            return Err("Economy user anchor requires one exact user event.".to_owned());
+        }
+        return Ok(format!("v1-user-seq-{}", entry.source_from_seq.value()));
+    }
+    Ok(provider_projection_message_id(index))
+}
+
 /// Adds the fixed host guidance while the initial locked baseline is established.
 /// 在初始锁定基线建立时加入固定宿主指引。
 ///
@@ -243,7 +266,7 @@ where
     for (index, item) in snapshot.items.iter().enumerate() {
         // message_id uses the same stable position identity as physical request reconstruction.
         // message_id 使用与物理请求重建相同的稳定位置身份。
-        let message_id = provider_projection_message_id(index);
+        let message_id = controller_message_id(snapshot, index)?;
         // payload omits system/developer layers because those remain request prompt layers, not controller messages.
         // payload 会跳过 system/developer 层，因为它们属于请求提示词层而非控制器消息。
         let payload = match item {
@@ -256,6 +279,16 @@ where
                 attachments: Vec::new(),
             }),
             ProjectedItem::SystemText { .. } => None,
+            ProjectedItem::AssistantHandoff { text } => {
+                Some(SessionConversationPayload::Assistant {
+                    text: text.clone(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                })
+            }
             ProjectedItem::UserInput { text, resource_ids } => {
                 // attachments retain logical ResourceId identity while excluding every request-local delivery decision.
                 // attachments 保留逻辑 ResourceId 身份，同时排除全部请求局部投递决策。
@@ -429,7 +462,7 @@ pub(crate) fn provider_projection_user_message_id_for_source(
             input_seq.value()
         ));
     }
-    Ok(provider_projection_message_id(index))
+    controller_message_id(snapshot, index)
 }
 
 /// Rebuilds the complete canonical controller state from the durable V1 projection and resource catalog.
@@ -638,6 +671,9 @@ struct ActiveProviderV1Projection {
     /// Preference revision frozen for the dispatched business request.
     /// 本次派发业务请求冻结的偏好修订。
     economy_revision: Option<u64>,
+    /// Frozen tool-use evidence controls both streaming and terminal protocol parsing.
+    /// 冻结的工具使用证据控制流式展示和最终协议解析。
+    economy_handoff_allowed: bool,
     /// Provider terminal retained while a real tool batch remains pending.
     /// 真实工具批次仍待处理时保留的 Provider 终态。
     pending_terminal: Option<ProviderV1ApiTerminalFacts>,
@@ -1211,6 +1247,9 @@ pub(crate) fn precheck_projected_assistant_replay(
                     text.clone(),
                 ));
             }
+            ProjectedItem::AssistantHandoff { text } if check_protocol => {
+                messages.push(text_ai_message(MessageRole::Assistant, text.clone()));
+            }
             ProjectedItem::ToolResult {
                 tool_call_id,
                 provider_tool_call_id,
@@ -1562,6 +1601,9 @@ fn rebuild_provider_transport_candidate_with_compaction(
                 }
                 request_messages.push(text_ai_message(message_role, text.clone()));
             }
+            ProjectedItem::AssistantHandoff { text } => {
+                request_messages.push(text_ai_message(MessageRole::Assistant, text.clone()));
+            }
             ProjectedItem::UserInput { text, resource_ids } => {
                 // Resource-bearing prompts must use the exact prevalidated result, never an unconditional Base64 fallback.
                 // 带资源提示词必须使用精确预校验结果，绝不使用无条件Base64回退。
@@ -1714,6 +1756,7 @@ fn rebuild_provider_transport_candidate_with_compaction(
         // Budgeting and request diagnostics include physical prefixes while controller history stays canonical.
         // 预算及请求诊断包含物理前缀，而控制器历史保持规范内容。
         history: context_injection::request_history_with_anchors(
+            &snapshot,
             &controller_snapshot,
             &anchored_prefixes,
         )?,
@@ -2486,6 +2529,7 @@ impl ProviderV1StreamSink {
             assistant_text: String::new(),
             assistant_text_seq: None,
             economy_revision: prepared.economy_revision,
+            economy_handoff_allowed: prepared.economy_handoff_allowed,
             pending_terminal: None,
             prepared_tools: BTreeMap::new(),
             tool_batch_prepared: false,
@@ -2638,12 +2682,14 @@ impl ProviderV1StreamSink {
         }
         let mut next_text = active.assistant_text.clone();
         next_text.push_str(delta);
-        let visible = if active.economy_revision.is_some() {
+        let visible = if active.economy_handoff_allowed {
             vulcan_session_core::v1::economy::streaming_body(&next_text)
         } else {
             &next_text
         };
-        if visible.is_empty() {
+        // Withhold only a nonempty protocol prefix. An explicit empty response still owns its provider source.
+        // 仅暂缓非空的协议前缀；明确返回的空正文仍是供应商来源记录的归属。
+        if visible.is_empty() && !next_text.is_empty() {
             active.assistant_text = next_text;
             return Ok(());
         }
@@ -2771,8 +2817,12 @@ impl ProviderV1StreamSink {
             if let Some(active) = self.active.as_mut()
                 && let Some(revision) = active.economy_revision
             {
-                let handoff =
-                    vulcan_session_core::v1::economy::split_summary(&active.assistant_text);
+                let handoff = active
+                    .economy_handoff_allowed
+                    .then(|| {
+                        vulcan_session_core::v1::economy::split_summary(&active.assistant_text)
+                    })
+                    .flatten();
                 let summary = handoff.map(|(_, text)| text.to_owned());
                 if let Some((body, _)) = handoff {
                     active.assistant_text.truncate(body.len());

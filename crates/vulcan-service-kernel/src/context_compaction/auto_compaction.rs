@@ -906,11 +906,11 @@ pub(crate) fn compaction_message_from_v1_projection(
 ) -> Option<Result<(SessionMessageEntry, Seq), String>> {
     let created_at = String::new();
     match &projected.item {
-        ProjectedItem::SystemText { context_key, text, .. } if context_key.starts_with(vulcan_session_core::v1::economy::SUMMARY_KEY_PREFIX) => Some(Ok((
+        ProjectedItem::AssistantHandoff { text } => Some(Ok((
             SessionMessageEntry {
                 id: format!("v1-settled-summary-{}", projected.source_from_seq.value()),
-                kind: SessionMessageKind::User,
-                record_kind: SessionMessageRecordKind::Transcript,
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
                 visible: true,
                 title: String::from("TURN HANDOFF"),
                 body: text.clone(),

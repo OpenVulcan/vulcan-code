@@ -101,6 +101,13 @@ pub enum ProjectedItem {
         /// 附着于输入的有序项目资源身份。
         resource_ids: Vec<ResourceId>,
     },
+    /// An assistant-authored handoff published when its business turn settled.
+    /// 业务回合结算时发布的助手交接摘要。
+    AssistantHandoff {
+        /// Escaped summary inside its host-generated turn envelope.
+        /// 宿主回合信封内经过转义的摘要。
+        text: String,
+    },
     /// One complete assistant message of an API group.
     /// 一个 API 组的完整 assistant 消息。
     AssistantText {
@@ -1413,6 +1420,7 @@ mod tests_projection {
                 ProjectedItem::ToolResult { .. } => "tool_result",
                 ProjectedItem::SystemText { .. } => "system",
                 ProjectedItem::SubagentReturnText { .. } => "subagent",
+                ProjectedItem::AssistantHandoff { .. } => "assistant_handoff",
             })
             .collect()
     }

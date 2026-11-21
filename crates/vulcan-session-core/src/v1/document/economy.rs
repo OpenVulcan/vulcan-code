@@ -407,20 +407,21 @@ impl SessionDocument {
                 field: "economy.window",
             }
         })?;
-        // Protect an entire batch if any member still anchors a resource or live obligation.
-        // 一批中只要有成员仍是资源或待办锚点，就整体保留该批。
+        // Keep pinned dependencies and the current answer; retire complete batches of the oldest eligible turns.
+        // 保留受保护依赖和当前答复，将最旧的可移出回合按完整批次裁剪。
+        let eligible =
+            |r: &SettledEconomyTurn| r.retired_at.is_none() && !r.protected && r.answer < answer;
         let removable = state
             .settled
             .iter()
-            .filter(|r| r.retired_at.is_none())
+            .filter(|r| eligible(r))
             .take(remove)
-            .take_while(|r| !r.protected)
             .count();
         let batch = window.batch_turns as usize;
         for old in state
             .settled
             .iter_mut()
-            .filter(|r| r.retired_at.is_none())
+            .filter(|r| eligible(r))
             .take(removable / batch * batch)
         {
             old.retired_at = Some(answer);

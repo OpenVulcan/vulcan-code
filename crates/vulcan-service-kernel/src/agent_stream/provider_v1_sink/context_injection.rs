@@ -657,7 +657,7 @@ pub(super) fn anchored_prefixes(
                 .map(|id| id.value().to_string()),
         )
         .map_err(provider_projection_runtime_error)?
-        .with_economy_revision(snapshot.economy_position_revision)
+        .with_economy_revision(snapshot.economy_anchor_revision)
         .cache_epoch_id();
         if (!injection.anchored_prefixes.is_empty() || injection.cache_epoch_id.is_some())
             && injection.cache_epoch_id.as_deref() != Some(expected_epoch.as_str())
@@ -674,8 +674,9 @@ pub(super) fn anchored_prefixes(
         .iter()
         .enumerate()
         .filter(|(_, item)| matches!(item, ProjectedItem::UserInput { .. }))
-        .map(|(index, _)| (provider_projection_message_id(index), index))
-        .collect::<BTreeMap<_, _>>();
+        .map(|(index, _)| controller_message_id(snapshot, index).map(|id| (id, index)))
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(provider_projection_runtime_error)?;
     // Group in declared anchor order; multiple distinct anchors may share one canonical user.
     // 按已声明锚点顺序分组；多个不同锚点可以共享同一规范用户。
     let mut prefixes = BTreeMap::<usize, String>::new();
@@ -706,6 +707,7 @@ pub(super) fn anchored_prefixes(
 /// Takes canonical history and validated position prefixes; returns a separate history without changing the ledger.
 /// 接收规范历史及已验证位置前缀，返回独立历史而不修改账本。
 pub(super) fn request_history_with_anchors(
+    snapshot: &SessionProviderProjectionSnapshot,
     canonical: &ConversationSnapshot,
     prefixes: &BTreeMap<usize, String>,
 ) -> Result<Vec<ConversationMessage>, SessionRuntimeError> {
@@ -714,8 +716,9 @@ pub(super) fn request_history_with_anchors(
     let mut remaining = prefixes
         .iter()
         .filter(|(_, prefix)| !prefix.is_empty())
-        .map(|(index, prefix)| (provider_projection_message_id(*index), prefix))
-        .collect::<BTreeMap<_, _>>();
+        .map(|(index, prefix)| controller_message_id(snapshot, *index).map(|id| (id, prefix)))
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(provider_projection_runtime_error)?;
     // Only this request-local copy receives rendering; continuation checkpoints keep canonical text.
     // 仅此请求局部副本接收渲染；续接检查点保留规范正文。
     let mut history = canonical.messages.clone();
@@ -754,7 +757,8 @@ mod tests {
         SessionProviderProjectionSnapshot {
             unenveloped_assistant_requests: Default::default(),
             current_compaction_id: None,
-            economy_position_revision: None,
+            economy_anchor_revision: None,
+            open_turn_used_tools: false,
             open_turn_id: None,
             child_business_execution_id: None,
             preparing_user_prompt_media_seqs: Vec::new(),
@@ -976,6 +980,100 @@ mod tests {
                 && input.operation
                     == vulcan_session_core::v1::dynamic_context::DynamicContextOperation::Remove
         }));
+    }
+
+    /// Checks assistant authorship and an existing memory anchor after a handoff changes the next user's position.
+    /// 验证新增交接摘要导致下一用户位置移动后，摘要仍归助手且原有记忆锚点指向同一输入。
+    #[test]
+    fn economy_handoff_preserves_wire_and_compaction_roles_and_user_anchor() {
+        use vulcan_session_core::v1::projection::SourcedProjectedItem;
+        let mut snapshot = projection();
+        snapshot.economy_anchor_revision = Some(0);
+        snapshot.sourced_items = snapshot
+            .items
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, item)| {
+                let seq = Seq::try_new(i as u64 + 3).unwrap();
+                SourcedProjectedItem {
+                    source_from_seq: seq,
+                    source_to_seq: seq,
+                    user_prompt_parameters: None,
+                    item,
+                }
+            })
+            .collect();
+        snapshot.through_seq = snapshot.sourced_items.last().unwrap().source_to_seq;
+        let source = snapshot
+            .sourced_items
+            .iter()
+            .find(|e| matches!(e.item, ProjectedItem::UserInput { .. }))
+            .unwrap()
+            .source_from_seq;
+        let anchor = provider_projection_user_message_id_for_source(&snapshot, source).unwrap();
+        let injection = ProviderContextInjection {
+            cache_epoch_id: Some(
+                vulcan_vmm::VmmContextEpoch::new(1, None)
+                    .unwrap()
+                    .with_economy_revision(Some(0))
+                    .cache_epoch_id(),
+            ),
+            anchored_prefixes: vec![ProviderContextAnchor {
+                anchor_id: "memory".into(),
+                target_message_id: anchor.clone(),
+                prefix: "remembered".into(),
+            }],
+            ..Default::default()
+        };
+        let before = anchored_prefixes(&snapshot, Some(&injection))
+            .unwrap()
+            .into_keys()
+            .next()
+            .unwrap();
+        let text = "<vulcan_turn_summary turn_id=\"1\">handoff</vulcan_turn_summary>";
+        let handoff = SourcedProjectedItem {
+            source_from_seq: snapshot.retained_from_seq,
+            source_to_seq: snapshot.retained_from_seq,
+            user_prompt_parameters: None,
+            item: ProjectedItem::AssistantHandoff { text: text.into() },
+        };
+        let (planned, _) =
+            crate::context_compaction::compaction_message_from_v1_projection(&handoff)
+                .unwrap()
+                .unwrap();
+        assert_eq!(planned.kind, vulcan_context::SessionMessageKind::Assistant);
+        assert_eq!(planned.body, text);
+        snapshot.items.insert(0, handoff.item.clone());
+        snapshot.sourced_items.insert(0, handoff);
+        assert_eq!(
+            provider_projection_user_message_id_for_source(&snapshot, source).unwrap(),
+            anchor
+        );
+        assert_eq!(
+            anchored_prefixes(&snapshot, Some(&injection)).unwrap(),
+            BTreeMap::from([(before + 1, "remembered".into())])
+        );
+        let mut retired = snapshot.clone();
+        retired.economy_anchor_revision = Some(source.value());
+        assert!(anchored_prefixes(&retired, Some(&injection)).is_err());
+        let request =
+            super::super::memory_acceptance::rebuild_memory_acceptance_request(snapshot, injection)
+                .unwrap();
+        assert!(request.controller_snapshot.messages.iter().any(|m| matches!(&m.payload, ConversationPayload::Assistant { text: body, .. } if body == text)));
+        assert!(request.request_snapshot.history.iter().any(|m| m.id == anchor && matches!(&m.payload, ConversationPayload::UserText { text, .. } if text.starts_with("remembered\n\n"))));
+        let encoded = vulcan_llm_core::ProtocolRegistry::first_batch()
+            .unwrap()
+            .require(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID)
+            .unwrap()
+            .encode(&request.exact_request)
+            .unwrap();
+        let messages = encoded.body["messages"].as_array().unwrap();
+        let wire = messages
+            .iter()
+            .find(|m| m["content"] == text)
+            .expect("wire handoff");
+        assert_eq!(wire["role"], "assistant");
     }
 
     /// Rejects stale memory even when compaction reuses the same canonical position identifier.

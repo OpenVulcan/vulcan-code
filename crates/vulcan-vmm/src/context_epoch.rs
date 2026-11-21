@@ -17,9 +17,9 @@ pub struct VmmContextEpoch {
     /// Exact committed compaction identity, or explicit absence after creation or rewind.
     /// 准确已提交压缩身份，或创建及回退后的明确缺失。
     compaction_id: Option<String>,
-    /// Last historical position change published by economy-mode settlement.
-    /// 节约模式结算最近发布的历史位置变化。
-    economy_revision: Option<u64>,
+    /// Coverage frontier for economy anchors addressed by durable user input.
+    /// 按持久用户输入定位的节约模式锚点覆盖前沿。
+    economy_anchor_revision: Option<u64>,
 }
 
 impl VmmContextEpoch {
@@ -39,14 +39,14 @@ impl VmmContextEpoch {
         Ok(Self {
             generation,
             compaction_id,
-            economy_revision: None,
+            economy_anchor_revision: None,
         })
     }
 
     /// Binds the host's settled history frontier without changing the physical compaction identity.
     /// 绑定宿主已结算历史前沿，并保留物理压缩身份。
     pub fn with_economy_revision(mut self, revision: Option<u64>) -> Self {
-        self.economy_revision = revision;
+        self.economy_anchor_revision = revision;
         self
     }
 
@@ -73,8 +73,8 @@ impl VmmContextEpoch {
                 self.generation
             ),
         };
-        match self.economy_revision {
-            Some(revision) => format!("economy:{revision}:{lineage}"),
+        match self.economy_anchor_revision {
+            Some(revision) => format!("economy-source-v1:{revision}:{lineage}"),
             None => lineage,
         }
     }

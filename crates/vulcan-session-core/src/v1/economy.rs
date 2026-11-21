@@ -102,10 +102,6 @@ pub struct EconomyCandidate {
     pub summary: Option<String>,
 }
 
-/// Stable key namespace for model-visible handoffs, including global compaction input.
-/// 模型可见交接信息的稳定键前缀，全局压缩输入也使用此键。
-pub const SUMMARY_KEY_PREFIX: &str = "economy.turn.";
-
 /// Maximum UTF-8 bytes per handoff; oversized output stays in the ordinary history.
 /// 每份交接摘要的 UTF-8 字节上限；超限输出沿用普通历史。
 const MAX_SUMMARY_BYTES: usize = 4096;
@@ -225,8 +221,8 @@ impl EconomyState {
         }
     }
 
-    /// Returns the last publication that could shift an already anchored provider message.
-    /// 返回最近一次可能移动已锚定供应商消息位置的发布序号。
+    /// Returns the last history rewrite that invalidates a provider token-budget observation.
+    /// 返回使供应商用量观测失效的最近历史改写序号。
     pub fn position_revision(&self) -> Option<u64> {
         self.settled
             .iter()
@@ -241,6 +237,40 @@ impl EconomyState {
             .map(Seq::value)
     }
 
+    /// Returns whether the owned open turn has called a tool in the captured event range.
+    /// 根据捕获的事件范围判断当前开放回合是否已经调用工具。
+    pub fn open_turn_used_tools(
+        &self,
+        owner: Option<TurnId>,
+        events: &[super::event::ConversationEvent],
+    ) -> bool {
+        self.active.as_ref().is_some_and(|turn| {
+            Some(turn.turn_id) == owner
+                && events
+                    .iter()
+                    .rev()
+                    .take_while(|event| event.seq >= turn.start)
+                    .any(|event| {
+                        event.turn_id == owner
+                            && matches!(event.event, super::event::EventBody::ToolCall(_))
+                    })
+        })
+    }
+
+    /// Changes the anchor namespace only at a committed history rewrite, never between admission and dispatch.
+    /// 仅在已提交的历史改写边界切换锚点命名空间，避免在准入与派发之间改变身份。
+    /// After adoption, durable input sequences remain valid across handoffs until an eviction removes coverage.
+    /// 启用后持久输入序号跨摘要保持有效，直到实际裁剪改变覆盖范围。
+    pub fn anchor_revision(&self) -> Option<u64> {
+        self.position_revision()?;
+        Some(
+            self.settled
+                .iter()
+                .filter_map(|receipt| receipt.retired_at)
+                .max()
+                .map_or(0, Seq::value),
+        )
+    }
     /// Rewinds receipts and batch evictions when editing or forking at a durable sequence.
     /// 在某个持久序号编辑或分叉时回退已结算回执和批量裁剪。
     pub fn rewind(&mut self, target: Seq) {
@@ -336,9 +366,7 @@ impl EconomyState {
                             source_from_seq: receipt.answer,
                             source_to_seq: receipt.answer,
                             user_prompt_parameters: None,
-                            item: ProjectedItem::SystemText {
-                                role: super::projection::ProjectedSystemRole::HiddenUserShell,
-                                context_key: format!("{SUMMARY_KEY_PREFIX}{}", receipt.turn.turn_id.value()),
+                            item: ProjectedItem::AssistantHandoff {
                                 text: format!("<vulcan_turn_summary turn_id=\"{}\">\n{body}\n</vulcan_turn_summary>", receipt.turn.turn_id.value()),
                             },
                         });

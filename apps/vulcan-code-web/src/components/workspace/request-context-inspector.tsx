@@ -152,13 +152,13 @@ function NodeDetails({ node }: { node: RequestContextNode }) {
   const { t } = useI18n();
   // Tagged nodes show the host metadata separately from the Markdown body.
   // 带标签节点把宿主元数据与 Markdown 正文分开展示。
-  const { injection, body } = presentRequestNode(node);
+  const { envelope, kind, title, body } = presentRequestNode(node);
   return (
     <>
-      {injection ? (
+      {envelope ? (
         <dl className="vk-request-context-metadata">
-          <div><dt>{t("requestContext.injection")}</dt><dd><code>{injection.tag}</code></dd></div>
-          {injection.attributes.map(([key, value]) => (
+          <div><dt>{t(kind === "injection" ? "requestContext.injection" : title)}</dt><dd><code>{envelope.tag}</code></dd></div>
+          {envelope.attributes.map(([key, value]) => (
             <div key={key}><dt><code>{key}</code></dt><dd>{value}</dd></div>
           ))}
         </dl>

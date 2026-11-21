@@ -523,20 +523,20 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
             state, session_id,
         )?;
-        let (generation, compaction_id, economy_position) = handle
+        let (generation, compaction_id, economy_anchor_revision) = handle
             .read(|document| {
                 (
                     document.segment_generation(),
                     document
                         .effective_context_compaction_id()
                         .map(|id| id.value().to_string()),
-                    document.metadata.config.economy.position_revision(),
+                    document.metadata.config.economy.anchor_revision(),
                 )
             })
             .map_err(|error| format!("Failed to read VMM host context epoch: {error}"))?;
         Some(
             vulcan_vmm::VmmContextEpoch::new(generation, compaction_id)?
-                .with_economy_revision(economy_position),
+                .with_economy_revision(economy_anchor_revision),
         )
     } else {
         None

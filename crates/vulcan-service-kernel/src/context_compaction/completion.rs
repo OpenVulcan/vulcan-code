@@ -619,12 +619,12 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     // VMM 派生自已提交 V1 ID；失败会停止续接，但不会伪称回滚该提交。
     // Read generation and compaction together from the same authoritative owner after commit.
     // 提交后从同一权威归属方同时读取代次与压缩身份。
-    let (generation, current_compaction_id, economy_position) = handle
+    let (generation, current_compaction_id, economy_anchor_revision) = handle
         .read(|document| {
             (
                 document.segment_generation(),
                 document.runtime_lock.current_compaction_id,
-                document.metadata.config.economy.position_revision(),
+                document.metadata.config.economy.anchor_revision(),
             )
         })
         .map_err(|error| format!("Failed to read committed V1 context epoch: {error}"))?;
@@ -637,7 +637,7 @@ pub(crate) async fn finish_webui_context_compaction_execution(
         generation,
         Some(compaction_receipt.value.value().to_string()),
     )?
-    .with_economy_revision(economy_position);
+    .with_economy_revision(economy_anchor_revision);
     super::vmm_projection::publish_vmm_compaction_epoch(state, agent_runtime, session_id, &context)
         .await
         .map_err(|error| {

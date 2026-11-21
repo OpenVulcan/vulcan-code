@@ -6,6 +6,16 @@ import { I18nProvider, readLocaleMessage } from "@/i18n";
 import { serviceClient } from "@/service/webui-service-runtime";
 import { RequestContextDialog, type RequestContextSnapshot } from "./request-context-dialog";
 
+import { presentRequestNode } from "./request-context-presentation";
+
+it("presents sent and locally projected handoffs with the same assistant authorship", () => {
+  const text = '<vulcan_turn_summary turn_id="7">read &lt;file&gt;</vulcan_turn_summary>';
+  for (const [role, kind] of [["assistant", "message"], ["model", null], [null, "assistant_handoff"]]) {
+    expect(presentRequestNode({ field: "input", index: 0, role, kind, text, content: text, truncated: false }))
+      .toMatchObject({ kind: "assistant", title: "economy.summary", body: "read <file>", envelope: { attributes: [["turn_id", "7"]] } });
+  }
+});
+
 vi.mock("@/service/webui-service-runtime", () => ({ serviceClient: { request: vi.fn() } }));
 
 /** Builds two distinct physical request snapshots for one conversation. */

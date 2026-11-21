@@ -91,6 +91,79 @@ fn economy_batch_windows_match_projection_after_every_turn() -> Result<(), Domai
     Ok(())
 }
 
+/// A pinned attachment survives both default evictions; every other retained turn stays in order.
+/// 首轮附件跨两次默认裁剪保留，其余保留回合的相对顺序不变。
+#[test]
+fn economy_pinned_first_turn_allows_complete_batches_to_retire() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.set_economy_mode(true, 0, T0)?;
+    let attachment = ResourceId::try_new(17)?;
+    let mut eviction_turns = Vec::new();
+    for n in 1..=61 {
+        let resources = if n == 1 { vec![attachment] } else { Vec::new() };
+        let turn = doc.submit_root_input_fixture(format!("q{n}"), resources, T0)?;
+        doc.prepare_economy_turn(EconomyWindow::default(), T0)?;
+        let before = doc.metadata.config.economy.anchor_revision();
+        finish(&mut doc, turn, None)?;
+        if before != doc.metadata.config.economy.anchor_revision() {
+            eviction_turns.push(n);
+        }
+    }
+    assert_eq!(eviction_turns, vec![40, 60]);
+    let prompts: Vec<_> = projected(&doc)?
+        .into_iter()
+        .filter_map(|item| match item {
+            ProjectedItem::UserInput { text, resource_ids } => Some((text, resource_ids)),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<_> = std::iter::once(("q1".to_owned(), vec![attachment]))
+        .chain((42..=61).map(|n| (format!("q{n}"), Vec::new())))
+        .collect();
+    assert_eq!(prompts, expected);
+    doc.metadata.config.economy.validate()?;
+    Ok(())
+}
+
+/// Even above the threshold, wait for a full batch of older eligible turns and keep the latest answer.
+/// 超出阈值后仍须等到凑齐整批合格旧回合，并始终保留最新答复。
+#[test]
+fn economy_pins_defer_partial_batch_and_keep_current_answer() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.set_economy_mode(true, 0, T0)?;
+    let window = EconomyWindow {
+        trigger_turns: 4,
+        batch_turns: 2,
+    };
+    for n in 1..=6 {
+        let resources = if n <= 3 {
+            vec![ResourceId::try_new(n)?]
+        } else {
+            vec![]
+        };
+        let turn = doc.submit_root_input_fixture(format!("q{n}"), resources, T0)?;
+        doc.prepare_economy_turn(window, T0)?;
+        finish(&mut doc, turn, None)?;
+        let state = &doc.metadata.config.economy;
+        assert_eq!(
+            state
+                .settled
+                .iter()
+                .filter(|r| r.retired_at.is_some())
+                .count(),
+            if n == 6 { 2 } else { 0 }
+        );
+        assert!(
+            state
+                .settled
+                .iter()
+                .any(|r| r.turn.turn_id == turn && r.retired_at.is_none())
+        );
+    }
+    doc.metadata.config.economy.validate()?;
+    Ok(())
+}
+
 /// Two intermediate compactions leave the preceding fifteen settled turns untouched at delivery.
 /// 交付时两次中间压缩均不改变先前十五个已结算回合。
 #[test]
@@ -103,6 +176,7 @@ fn economy_restores_fifteen_turn_prefix_after_two_compactions() -> Result<(), Do
         finish(&mut doc, turn, None)?;
     }
     let prefix = projected(&doc)?;
+    assert!(doc.metadata.config.economy.anchor_revision().is_none());
     let turn = doc.submit_root_input_fixture("long", Vec::new(), T0)?;
     doc.prepare_economy_turn(EconomyWindow::default(), T0)?;
     let tool_api = doc.start_api(
@@ -166,7 +240,7 @@ fn economy_restores_fifteen_turn_prefix_after_two_compactions() -> Result<(), Do
     assert!(original_bytes > published_bytes + 64000);
     assert!(items.starts_with(&prefix));
     assert!(
-        matches!(&items[prefix.len()..], [ProjectedItem::UserInput {text, ..}, ProjectedItem::SystemText {text: handoff, ..}, ProjectedItem::AssistantText {text: answer, ..}] if text == "long" && handoff.contains("tested &lt;path&gt;") && answer == "final")
+        matches!(&items[prefix.len()..], [ProjectedItem::UserInput {text, ..}, ProjectedItem::AssistantHandoff {text: handoff}, ProjectedItem::AssistantText {text: answer, ..}] if text == "long" && handoff.contains("tested &lt;path&gt;") && answer == "final")
     );
     let next = doc.submit_root_input_fixture("q17", Vec::new(), T0)?;
     doc.prepare_economy_turn(EconomyWindow::default(), T0)?;
@@ -218,13 +292,14 @@ fn economy_preserves_ask_and_missing_summary_without_freezing_the_window() -> Re
     let mut doc = new_document();
     doc.set_economy_mode(true, 0, T0)?;
     let window = EconomyWindow {
-        trigger_turns: 3,
+        trigger_turns: 4,
         batch_turns: 1,
     };
     for (tool_name, handoff) in [
         ("file_read", None),
         ("ask", Some("user chose the first option")),
         ("file_read", Some("verified")),
+        ("file_read", Some("rechecked")),
     ] {
         let turn = doc.submit_root_input_fixture(tool_name, Vec::new(), T0)?;
         doc.prepare_economy_turn(window, T0)?;
@@ -252,7 +327,18 @@ fn economy_preserves_ask_and_missing_summary_without_freezing_the_window() -> Re
             ),
         )?;
         complete_ok(&mut doc, api, None, T0)?;
+        let old_anchor = doc.metadata.config.economy.anchor_revision();
+        let old_budget = doc.metadata.config.economy.position_revision();
         finish(&mut doc, turn, handoff)?;
+        let economy = &doc.metadata.config.economy;
+        if handoff.is_some() {
+            assert_ne!(economy.position_revision(), old_budget);
+            match economy.settled.iter().any(|r| r.retired_at.is_some()) {
+                true => assert_ne!(economy.anchor_revision(), old_anchor),
+                false if old_anchor.is_some() => assert_eq!(economy.anchor_revision(), old_anchor),
+                false => assert!(economy.anchor_revision().is_some()),
+            }
+        }
         if handoff.is_none() {
             assert!(projected(&doc)?.iter().any(|item| matches!(item, ProjectedItem::ToolResult {tool_name, ..} if tool_name=="file_read")));
             assert_eq!(

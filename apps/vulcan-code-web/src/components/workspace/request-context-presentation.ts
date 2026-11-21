@@ -25,11 +25,11 @@ const INSTRUCTION_TAGS = {
   skills_instructions: "requestContext.promptSkills",
 } as const satisfies Record<string, TranslationKey>;
 
-/** Readable body and metadata from one explicitly tagged injection. */
-/** 从一个带有明确标签的注入节点取得的可读正文与元数据。 */
-interface ContextInjection {
-  /** Localized classification of this injection. */
-  /** 此注入的本地化分类。 */
+/** Readable body and metadata from one tagged context envelope. */
+/** 从一个带有明确标签的上下文信封取得的可读正文与元数据。 */
+interface ContextEnvelope {
+  /** Localized classification of this envelope. */
+  /** 此信封的本地化分类。 */
   title: TranslationKey;
   /** Wrapper and ordered attributes retained for diagnostics. */
   /** 保留用于诊断的信封标签及有序属性。 */
@@ -66,7 +66,7 @@ function decodeEnvelopeText(text: string): string {
 
 /** Parses a bounded envelope, including its metadata when the inspector clipped the end of the body. */
 /** 解析有界信封，即使检查器截短了正文尾部也保留可用元数据。 */
-function parseInjection(text: string, truncated: boolean): ContextInjection | undefined {
+function parseEnvelope(text: string, truncated: boolean): ContextEnvelope | undefined {
   // Host envelopes always begin with their tag and use double-quoted XML attributes.
   // 宿主信封总是从标签开始并使用双引号 XML 属性。
   const open = /^<([a-z_]+)((?: [a-z_]+="[^"<>]*")*)>/.exec(text);
@@ -101,20 +101,20 @@ function parseInjection(text: string, truncated: boolean): ContextInjection | un
   return { tag, title, attributes, body: dynamic || tag === "vulcan_context_agent_md" || tag === "vulcan_turn_summary" ? decodeEnvelopeText(inner) : inner };
 }
 
-/** Resolves a semantic title, preview body, and optional injection metadata for one request row. */
-/** 为一条请求行解析语义标题、预览正文及可选的注入元数据。 */
+/** Resolves a semantic title, preview body, and optional envelope metadata for one request row. */
+/** 为一条请求行解析语义标题、预览正文及可选的信封元数据。 */
 export function presentRequestNode(node: RequestContextNode): {
   title: TranslationKey;
   kind: "injection" | "user" | "assistant" | "tool" | "system" | "context";
   body: string | null;
-  injection?: ContextInjection;
+  envelope?: ContextEnvelope;
 } {
   // Rust decodes bounded text independently of the bounded raw JSON representation.
   // Rust 对有界正文独立解码，使其不受有界原始 JSON 表示的截断影响。
   const text = node.text ?? null;
   const user = node.role === "user" || node.kind === "user_input";
-  const injection = (user || node.kind === "system_text") && text ? parseInjection(text, node.truncated) : undefined;
-  if (injection) return { title: injection.title, kind: "injection", body: injection.body, injection };
+  const injection = (user || node.kind === "system_text") && text ? parseEnvelope(text, node.truncated) : undefined;
+  if (injection) return { title: injection.title, kind: "injection", body: injection.body, envelope: injection };
   if (node.toolParts?.length && !text?.trim()) {
     return {
       title: node.toolParts.every((part) => part.result) ? "conversation.block.toolResult" : "conversation.block.toolCall",
@@ -124,7 +124,11 @@ export function presentRequestNode(node: RequestContextNode): {
   }
   if (user) return { title: "conversation.export.user", kind: "user", body: text };
   if (node.kind === "reasoning" && node.reasoning) return { title: "conversation.block.thinking", kind: "assistant", body: null };
-  if (node.role === "assistant" || node.role === "model" || node.kind === "assistant_text") {
+  if (node.role === "assistant" || node.role === "model" || node.kind === "assistant_text" || node.kind === "assistant_handoff") {
+    // A settled handoff remains assistant-authored in both provider and simulated projections.
+    // 已结算交接摘要在供应商请求和模拟投影中均保持助手归属。
+    const handoff = text?.startsWith("<vulcan_turn_summary ") ? parseEnvelope(text, node.truncated) : undefined;
+    if (handoff?.tag === "vulcan_turn_summary") return { title: handoff.title, kind: "assistant", body: handoff.body, envelope: handoff };
     return { title: "requestContext.assistantResponse", kind: "assistant", body: text };
   }
   if (node.role === "tool" || node.kind === "tool_result" || node.kind === "function_call_output" || node.kind === "function_call") {
