@@ -6,6 +6,49 @@ use crate::remote_test_support::{HeldHttpServer, OBSERVE, host_lease};
 use futures::StreamExt;
 use std::fs::TryLockError;
 
+/// Checks that a small, valid loopback response is accepted or refused according to the worker's byte budget.
+/// 验证小型、有效的回环响应按工作器的字节预算正常接收或拒绝。
+#[tokio::test]
+async fn forwards_http_json_response_budget_to_reqwest() {
+    // The same finite ping result is used with both budgets.
+    // 两种预算均使用同一个有限长度的 ping 结果。
+    let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\nConnection: close\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}";
+    let (resources, _) = McpTransportResources::new(());
+    let client = AuthenticatedStreamableHttpClient::new(None, resources).expect("HTTP client");
+    for (budget, exceeds) in [(128, false), (16, true)] {
+        // Every POST targets its own fixture so both reach the real transport.
+        // 每次 POST 使用独立夹具，保证两次都进入实际传输。
+        let mut server = HeldHttpServer::start(Some(response)).await;
+        let message = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "ping"
+        }))
+        .expect("official ping request");
+        let mut limits = StreamableHttpResponseLimits::default();
+        limits.max_json_response_size = budget;
+        let result = tokio::time::timeout(
+            OBSERVE,
+            client.post_message_with_response_limits(
+                server.uri.clone().into(),
+                message,
+                None,
+                None,
+                HashMap::new(),
+                limits,
+            ),
+        )
+        .await
+        .expect("POST response deadline");
+        assert_eq!(server.request_line().await, "POST /mcp HTTP/1.1");
+        if exceeds {
+            assert!(
+                matches!(result, Err(StreamableHttpError::ResponseBodyTooLarge { max_size }) if max_size == budget)
+            );
+        } else {
+            assert!(matches!(result, Ok(StreamableHttpPostResponse::Json(..))));
+        }
+    }
+}
+
 /// Cancellation reaches a response body that has already returned its headers.
 /// 取消到达已经返回响应头的响应体。
 /// No inputs; a genuine pending SSE read ends, then actual stream/client disposal releases the OS lease.

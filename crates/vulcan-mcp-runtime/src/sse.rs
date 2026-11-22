@@ -250,10 +250,13 @@ impl SseTransport {
     /// 在旧式消息端点上执行 MCP initialize 握手。
     async fn initialize(&self) -> Result<ServerCapabilities, McpRuntimeError> {
         let request_id = self.next_request_id();
-        let initialize_request = InitializeRequest::new(InitializeRequestParams::new(
-            ClientCapabilities::default(),
-            Implementation::new(env!("CARGO_PKG_NAME"), vulcan_product_info::version()),
-        ));
+        let initialize_request = InitializeRequest::new(
+            InitializeRequestParams::new(
+                ClientCapabilities::default(),
+                Implementation::new(env!("CARGO_PKG_NAME"), vulcan_product_info::version()),
+            )
+            .with_protocol_version(crate::rmcp_support::MCP_INITIALIZE_PROTOCOL_VERSION),
+        );
         let response = self
             .send_request_and_wait(
                 request_id.clone(),

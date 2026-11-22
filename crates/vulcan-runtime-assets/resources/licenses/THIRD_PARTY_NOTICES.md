@@ -13341,7 +13341,7 @@ Used by:
 - portable-atomic 1.15.0 - https://github.com/taiki-e/portable-atomic
 - prettyplease 0.2.37 - https://github.com/dtolnay/prettyplease
 - proc-macro2 1.0.107 - https://github.com/dtolnay/proc-macro2
-- process-wrap 9.1.0 - https://github.com/watchexec/process-wrap
+- process-wrap 10.0.1 - https://github.com/watchexec/process-wrap
 - quote 1.0.47 - https://github.com/dtolnay/quote
 - rand 0.10.2 - https://github.com/rust-random/rand
 - rand 0.8.7 - https://github.com/rust-random/rand
@@ -13351,8 +13351,8 @@ Used by:
 - ref-cast-impl 1.0.26 - https://github.com/dtolnay/ref-cast
 - ref-cast 1.0.26 - https://github.com/dtolnay/ref-cast
 - rle-decode-fast 1.0.3 - https://github.com/WanzenBug/rle-decode-helper
-- rmcp-macros 3.1.2 - https://github.com/modelcontextprotocol/rust-sdk/
-- rmcp 3.1.2 - https://github.com/modelcontextprotocol/rust-sdk/
+- rmcp-macros 3.11.0 - https://github.com/modelcontextprotocol/rust-sdk/
+- rmcp 3.11.0 - https://github.com/modelcontextprotocol/rust-sdk/
 - rustc-hash 2.1.3 - https://github.com/rust-lang/rustc-hash
 - rustversion 1.0.23 - https://github.com/dtolnay/rustversion
 - ryu 1.0.23 - https://github.com/dtolnay/ryu

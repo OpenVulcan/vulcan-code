@@ -11,7 +11,7 @@ use rmcp::transport::{
     StreamableHttpClientTransport,
     streamable_http_client::{
         StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpClientWorker,
-        StreamableHttpError, StreamableHttpPostResponse,
+        StreamableHttpError, StreamableHttpPostResponse, StreamableHttpResponseLimits,
     },
 };
 use serde_json::Value;
@@ -129,6 +129,31 @@ impl StreamableHttpClient for AuthenticatedStreamableHttpClient {
         BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
     > {
+        self.get_stream_with_max_sse_event_size(
+            uri,
+            session_id,
+            last_event_id,
+            auth_header,
+            custom_headers,
+            StreamableHttpResponseLimits::default().max_sse_event_size,
+        )
+        .await
+    }
+
+    /// Passes the worker's event limit to the byte-level decoder while retaining the response lease.
+    /// 将工作器的事件上限传递给字节级解码器，同时保留响应租约。
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        session_id: Option<Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<http::HeaderName, http::HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<
+        BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
+        StreamableHttpError<Self::Error>,
+    > {
         // The upstream initialization await does not select worker cancellation on its own.
         // 上游初始化等待自身未选择工作任务取消。
         let stream = self
@@ -137,13 +162,14 @@ impl StreamableHttpClient for AuthenticatedStreamableHttpClient {
                 let auth_header = self.resolve_auth_header(auth_header).await?;
                 // The response stream can outlive this client, so it receives its own original lease reference.
                 // 响应流可以比此客户端存续更久，因此取得自身原租约引用。
-                <reqwest::Client as StreamableHttpClient>::get_stream(
+                <reqwest::Client as StreamableHttpClient>::get_stream_with_max_sse_event_size(
                     self.http_client.as_ref(),
                     uri,
                     session_id,
                     last_event_id,
                     auth_header,
                     custom_headers,
+                    max_sse_event_size,
                 )
                 .await
             })
@@ -182,6 +208,28 @@ impl StreamableHttpClient for AuthenticatedStreamableHttpClient {
         auth_header: Option<String>,
         custom_headers: HashMap<http::HeaderName, http::HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        self.post_message_with_response_limits(
+            uri,
+            message,
+            session_id,
+            auth_header,
+            custom_headers,
+            StreamableHttpResponseLimits::default(),
+        )
+        .await
+    }
+
+    /// Forwards the worker's response limits with the resolved authorization and returns the original response.
+    /// 将工作器的响应上限及解析后的鉴权传递给上游，并返回原始响应。
+    async fn post_message_with_response_limits(
+        &self,
+        uri: Arc<str>,
+        message: rmcp::model::ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<http::HeaderName, http::HeaderValue>,
+        limits: StreamableHttpResponseLimits,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         // The upstream initialization await does not select worker cancellation on its own.
         // 上游初始化等待自身未选择工作任务取消。
         let response = self
@@ -190,13 +238,14 @@ impl StreamableHttpClient for AuthenticatedStreamableHttpClient {
                 let auth_header = self.resolve_auth_header(auth_header).await?;
                 // Streaming POST responses become independent worker inputs after this request returns.
                 // 此请求返回后，流式 POST 响应成为独立工作任务输入。
-                <reqwest::Client as StreamableHttpClient>::post_message(
+                <reqwest::Client as StreamableHttpClient>::post_message_with_response_limits(
                     self.http_client.as_ref(),
                     uri,
                     message,
                     session_id,
                     auth_header,
                     custom_headers,
+                    limits,
                 )
                 .await
             })

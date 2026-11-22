@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use rmcp::ClientHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, JsonObject,
-    Prompt, ReadResourceRequestParams, ReadResourceResult, Resource, ServerCapabilities,
-    Tool as RmcpTool,
+    CallToolRequestParams, CallToolResult, ClientConfig, GetPromptRequestParams, GetPromptResult,
+    JsonObject, Prompt, ProtocolVersion, ReadResourceRequestParams, ReadResourceResult, Resource,
+    ServerCapabilities, Tool as RmcpTool,
 };
 use rmcp::service::{NotificationContext, Peer, RoleClient};
 use serde_json::{Map, Value};
@@ -15,6 +15,10 @@ use tokio::sync::broadcast;
 
 use crate::error::McpRuntimeError;
 use crate::transport::{McpToolSchema, McpTransportEvent};
+
+/// The MCP initialization revision shared across HTTP, legacy SSE and stdio.
+/// HTTP、旧式 SSE 和 stdio 共用的 MCP 初始化协议版本。
+pub(crate) const MCP_INITIALIZE_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::V_2025_11_25;
 
 /// Maximum decoded bytes retained for one MCP image content block.
 /// 单个 MCP 图片内容块允许保留的最大解码字节数。
@@ -38,6 +42,12 @@ impl EventingClientHandler {
 }
 
 impl ClientHandler for EventingClientHandler {
+    /// Advertises Vulcan's established initialize handshake even when the SDK changes its default.
+    /// SDK 默认值变化时仍返回 Vulcan 已有的 initialize 握手配置。
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::default().with_protocol_version(MCP_INITIALIZE_PROTOCOL_VERSION)
+    }
+
     /// Forward `tools/list_changed` notifications into the host runtime event stream.
     /// 将 `tools/list_changed` 通知转发到宿主运行时事件流。
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
@@ -460,6 +470,18 @@ pub(crate) fn project_rmcp_tool_result(
 
 #[cfg(test)]
 mod tests {
+    /// The SDK's default can move without changing what the eventing transports advertise.
+    /// SDK 默认版本可以演进，带事件的传输仍通告原有协议。
+    #[test]
+    fn eventing_client_preserves_initialize_protocol() {
+        // A local broadcast channel is enough to inspect the production handler's client configuration.
+        // 本地广播通道足以检查生产处理器的客户端配置。
+        let (sender, _) = tokio::sync::broadcast::channel(1);
+        let info = rmcp::ClientHandler::get_info(&super::EventingClientHandler::new(sender));
+        assert_eq!(info.protocol_version.as_str(), "2025-11-25");
+        assert!(info.protocol_version.has_initialize());
+    }
+
     use super::{
         MCP_IMAGE_MAX_BYTES, build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value,
         rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources,

@@ -2,7 +2,7 @@
   "schema_version": 2,
   "scope": "rust-desktop-dependencies",
   "source_file": "THIRD_PARTY_NOTICES.md",
-  "source_sha256": "8e5f789dd3118e2451409788916644b20cbefe9c2f05e965ffbf6d6abdf233f3",
+  "source_sha256": "0676da3c38f530ff3ed57eb4c67ab71b0de885e8027bfb36cd765689bae56039",
   "licenses": [
     {
       "id": "rust-license-1",
@@ -2854,7 +2854,7 @@
             },
             {
               "name": "process-wrap",
-              "version": "9.1.0",
+              "version": "10.0.1",
               "source": "https://github.com/watchexec/process-wrap"
             },
             {
@@ -2904,12 +2904,12 @@
             },
             {
               "name": "rmcp-macros",
-              "version": "3.1.2",
+              "version": "3.11.0",
               "source": "https://github.com/modelcontextprotocol/rust-sdk/"
             },
             {
               "name": "rmcp",
-              "version": "3.1.2",
+              "version": "3.11.0",
               "source": "https://github.com/modelcontextprotocol/rust-sdk/"
             },
             {

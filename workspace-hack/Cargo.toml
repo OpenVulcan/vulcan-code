@@ -79,6 +79,7 @@ tower = { version = "0.5", default-features = false, features = ["balance", "buf
 tracing = { version = "0.1", features = ["log"] }
 tungstenite = { version = "0.29", default-features = false, features = ["__rustls-tls", "handshake"] }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
+unicode-normalization = { version = "0.1" }
 ureq = { version = "3", default-features = false, features = ["platform-verifier", "rustls"] }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4", "v5"] }
