@@ -29,6 +29,9 @@ pub const MCP_CALL_TOOL_ID: &str = "mcp_call";
 /// Longest tool description line shown in a tool list, in Unicode scalar values.
 /// 工具列表中显示的工具描述行的最大长度，按 Unicode 标量值计。
 const TOOL_LIST_DESCRIPTION_MAX_CHARS: usize = 200;
+/// Maximum number of configured tool summaries per model-facing page.
+/// 面向模型的配置工具列表每页最多返回的摘要数。
+const CONFIGURED_TOOL_PAGE_SIZE: usize = 40;
 
 /// Session MCP access handed to one native tool call.
 /// 交给一次原生工具调用的会话 MCP 访问。
@@ -40,6 +43,9 @@ pub struct NativeSessionMcpAccess {
     /// Task runtime that knows which sessions are spawned agents; weak, because it owns the registry.
     /// 知道哪些会话是派生代理的任务运行时；使用弱引用，因为它持有注册表。
     task_runtime: Weak<TaskRuntime>,
+    /// Approved implicit bindings captured for this request's project and agent.
+    /// 为本次请求所属项目与代理捕获的获准隐式绑定。
+    configured_tools: Arc<[crate::mcp::McpRuntimeToolBinding]>,
 }
 
 impl fmt::Debug for NativeSessionMcpAccess {
@@ -59,7 +65,18 @@ impl NativeSessionMcpAccess {
         Self {
             registry,
             task_runtime,
+            configured_tools: Arc::from([]),
         }
+    }
+
+    /// Returns request-scoped MCP access with the configured bindings prepared for this project.
+    /// 返回带本项目已准备配置绑定的请求级 MCP 访问。
+    pub(crate) fn with_configured_tools(
+        mut self,
+        bindings: Vec<crate::mcp::McpRuntimeToolBinding>,
+    ) -> Self {
+        self.configured_tools = bindings.into();
+        self
     }
 
     /// The root session whose connections `session_id` uses, and whether `session_id` is a
@@ -117,17 +134,20 @@ pub(crate) fn build_mcp_tools_tool() -> Arc<NativeToolDefinition> {
     build_session_mcp_tool(
         MCP_TOOLS_TOOL_ID,
         String::from(
-            "Read the tools of one session MCP connection opened with `mcp_connect`. Without `tool`, lists each tool's name and summary; with `tool`, returns that tool's full description and input schema, which `mcp_call` arguments must match. `refresh` lists the tools again from the server.",
+            "With no arguments, discover the configured MCP servers available to this request by name and ID. Pass one of server_name or server_id to list that server's tools, or connection_id for a temporary connection. Set tool to read one tool's description and schema. For configured servers, query filters tools and offset requests the next page.",
         ),
         true,
         json!({
             "type": "object",
             "properties": {
                 "connection_id": { "type": "string", "description": "Connection returned by `mcp_connect`." },
+                "server_id": { "type": "string", "description": "Configured MCP server ID advertised for this project." },
+                "server_name": { "type": "string", "description": "Exact name of the configured MCP server to inspect." },
                 "tool": { "type": "string", "description": "Tool whose schema to read; omit to list every tool." },
+                "query": { "type": "string", "description": "Optional name or description search for configured MCP tools." },
+                "offset": { "type": "integer", "minimum": 0, "description": "Zero-based offset from next_offset for configured MCP tools." },
                 "refresh": { "type": "boolean", "description": "List the tools again from the server. Defaults to false." }
             },
-            "required": ["connection_id"],
             "additionalProperties": false
         }),
         |request| Box::pin(async move { execute_mcp_tools(request).await }),
@@ -140,17 +160,19 @@ pub(crate) fn build_mcp_call_tool() -> Arc<NativeToolDefinition> {
     build_session_mcp_tool(
         MCP_CALL_TOOL_ID,
         String::from(
-            "Call one tool of a session MCP connection opened with `mcp_connect`. `arguments` are checked against the tool's input schema (read it with `mcp_tools`) before the call reaches the server.",
+            "Call an exact MCP tool on a configured server (server_id) or temporary connection (connection_id). Read its schema with mcp_tools first; arguments must match the schema.",
         ),
         true,
         json!({
             "type": "object",
             "properties": {
                 "connection_id": { "type": "string", "description": "Connection returned by `mcp_connect`." },
+                "server_id": { "type": "string", "description": "Configured MCP server ID advertised for this project." },
                 "tool": { "type": "string", "description": "Exact tool name on that server." },
                 "arguments": { "type": "object", "description": "Tool arguments matching its input schema. Defaults to an empty object." }
             },
-            "required": ["connection_id", "tool"],
+            "required": ["tool"],
+            "oneOf": [{"required": ["connection_id"]}, {"required": ["server_id"]}],
             "additionalProperties": false
         }),
         |request| Box::pin(async move { execute_mcp_call(request).await }),
@@ -269,9 +291,23 @@ enum McpConnectTransport {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpToolsArgs {
-    connection_id: String,
+    /// Session-owned temporary connection ID.
+    /// 会话持有的临时连接 ID。
+    connection_id: Option<String>,
+    /// User-configured server ID.
+    /// 用户配置服务器 ID。
+    server_id: Option<String>,
+    /// Exact display name of a configured server.
+    /// 已配置服务器的精确显示名称。
+    server_name: Option<String>,
     tool: Option<String>,
     refresh: Option<bool>,
+    /// Optional case-insensitive configured tool search.
+    /// 可选的不区分大小写的配置工具搜索。
+    query: Option<String>,
+    /// Zero-based configured tool page offset.
+    /// 配置工具列表从零开始的分页偏移。
+    offset: Option<usize>,
 }
 
 /// Arguments accepted by `mcp_call`.
@@ -279,9 +315,29 @@ struct McpToolsArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpCallArgs {
-    connection_id: String,
+    /// Session-owned temporary connection ID.
+    /// 会话持有的临时连接 ID。
+    connection_id: Option<String>,
+    /// User-configured server ID.
+    /// 用户配置服务器 ID。
+    server_id: Option<String>,
     tool: String,
     arguments: Option<Value>,
+}
+
+/// Resolves the configured-server envelope and passes only the original MCP arguments onward.
+/// 解析已配置服务器调用封装，只向后传递原 MCP 参数。
+pub(crate) fn configured_mcp_call(arguments: &Value) -> Option<(String, String, Value)> {
+    let McpCallArgs {
+        connection_id: None,
+        server_id: Some(server_id),
+        tool,
+        arguments,
+    } = serde_json::from_value(arguments.clone()).ok()?
+    else {
+        return None;
+    };
+    Some((server_id, tool, arguments.unwrap_or_else(|| json!({}))))
 }
 
 /// Parses one tool's arguments.
@@ -546,18 +602,50 @@ async fn execute_mcp_tools(
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let args: McpToolsArgs = parse_args(MCP_TOOLS_TOOL_ID, &request)?;
     let (access, session_id) = session_of(MCP_TOOLS_TOOL_ID, &request)?;
+    // Only a single selector is accepted, keeping temporary links separate from configured servers.
+    // 仅接受单一选择器，使临时连接与已配置服务器保持独立。
+    let connection_id = match (
+        args.connection_id.as_deref(),
+        args.server_id.as_deref(),
+        args.server_name.as_deref(),
+    ) {
+        (None, Some(server), None) => return configured_tools_result(&access, server, &args),
+        (None, None, Some(name)) => {
+            let server = configured_server_id(&access, name)?;
+            return configured_tools_result(&access, server, &args);
+        }
+        (Some(connection), None, None) => connection,
+        (None, None, None)
+            if args.tool.is_none()
+                && args.query.is_none()
+                && args.offset.is_none()
+                && args.refresh.is_none() =>
+        {
+            return Ok(configured_servers_result(&access));
+        }
+        _ => {
+            return Err(NativeToolError::new(
+                "Omit arguments to discover servers, or specify one of server_name, server_id and connection_id.",
+            ));
+        }
+    };
+    if args.query.is_some() || args.offset.is_some() {
+        return Err(NativeToolError::new(
+            "query and offset require server_name or server_id.",
+        ));
+    }
     let (root, _) = access.scope(session_id)?;
     if let Some(tool) = args.tool {
         if args.refresh == Some(true) {
             access
                 .registry
-                .tools(root, &args.connection_id, true)
+                .tools(root, connection_id, true)
                 .await
                 .map_err(NativeToolError::new)?;
         }
         let (snapshot, schema) = access
             .registry
-            .tool(root, &args.connection_id, &tool)
+            .tool(root, connection_id, &tool)
             .await
             .map_err(NativeToolError::new)?;
         return Ok(session_mcp_result(
@@ -568,7 +656,7 @@ async fn execute_mcp_tools(
     }
     let (snapshot, tools) = access
         .registry
-        .tools(root, &args.connection_id, args.refresh.unwrap_or(false))
+        .tools(root, connection_id, args.refresh.unwrap_or(false))
         .await
         .map_err(NativeToolError::new)?;
     let mut lines = vec![format!(
@@ -615,6 +703,100 @@ async fn execute_mcp_tools(
     ))
 }
 
+/// Returns one name/ID pair per authorized live configured server, without listing its tools.
+/// 每个已获准的实时配置服务器仅返回一组名称和 ID，无需列出工具。
+fn configured_servers_result(access: &NativeSessionMcpAccess) -> VulcanToolInvocationResult {
+    let servers = access
+        .configured_tools
+        .iter()
+        .filter(|binding| binding.inspection_available())
+        .filter_map(|binding| Some((binding.server_id()?, binding.server_name()?)))
+        .collect::<BTreeMap<_, _>>();
+    VulcanToolInvocationResult::from_model_output(json!({
+        "servers": servers.into_iter().map(|(id, name)| json!({ "server_id": id, "server_name": name })).collect::<Vec<_>>(),
+    }))
+}
+
+/// Resolves an exact display name in the approved request catalog and rejects duplicate names.
+/// 在本次请求已获准的目录中解析精确显示名称，并拒绝同名歧义。
+fn configured_server_id<'a>(
+    access: &'a NativeSessionMcpAccess,
+    name: &str,
+) -> Result<&'a str, NativeToolError> {
+    let mut matches = access
+        .configured_tools
+        .iter()
+        .filter(|binding| binding.server_name() == Some(name) && binding.inspection_available())
+        .filter_map(crate::mcp::McpRuntimeToolBinding::server_id);
+    let id = matches.next().ok_or_else(|| {
+        NativeToolError::new("This MCP server is not available to the current request.")
+    })?;
+    if matches.any(|other| other != id) {
+        return Err(NativeToolError::new(
+            "More than one available MCP server has this name. Use server_id.",
+        ));
+    }
+    Ok(id)
+}
+
+/// Lists one page of approved tool summaries or reads one exact schema from the bound runtime.
+/// 列出一页获准工具摘要，或从绑定运行时读取单个工具的精确 Schema。
+fn configured_tools_result(
+    access: &NativeSessionMcpAccess,
+    server: &str,
+    args: &McpToolsArgs,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    if args.refresh == Some(true) {
+        return Err(NativeToolError::new(
+            "refresh applies only to temporary connections.",
+        ));
+    }
+    let mut tools = access
+        .configured_tools
+        .iter()
+        .filter(|binding| binding.server_id() == Some(server) && binding.inspection_available())
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        return Err(NativeToolError::new(
+            "This MCP server is not available to the current request.",
+        ));
+    }
+    if let Some(name) = &args.tool {
+        let schema = tools
+            .iter()
+            .find(|binding| binding.origin_tool_name() == Some(name))
+            .and_then(|binding| binding.inspection())
+            .ok_or_else(|| {
+                NativeToolError::new("This MCP tool is not available to the current request.")
+            })?;
+        return Ok(VulcanToolInvocationResult::from_model_output(json!({
+            "server_id": server, "tool": schema,
+        })));
+    }
+    if let Some(query) = &args.query {
+        let query = query.to_lowercase();
+        tools.retain(|binding| {
+            binding
+                .origin_tool_name()
+                .is_some_and(|name| name.to_lowercase().contains(&query))
+                || binding.description().to_lowercase().contains(&query)
+        });
+    }
+    tools.sort_by_key(|binding| binding.origin_tool_name());
+    let offset = args.offset.unwrap_or(0);
+    let next = offset.saturating_add(CONFIGURED_TOOL_PAGE_SIZE);
+    let page = tools.iter().skip(offset).take(CONFIGURED_TOOL_PAGE_SIZE)
+        .map(|binding| json!({
+            "name": binding.origin_tool_name(),
+            "description": binding.description().lines().map(str::trim).find(|line| !line.is_empty())
+                .unwrap_or_default().chars().take(TOOL_LIST_DESCRIPTION_MAX_CHARS).collect::<String>(),
+        })).collect::<Vec<_>>();
+    Ok(VulcanToolInvocationResult::from_model_output(json!({
+        "server_id": server, "tools": page, "total": tools.len(),
+        "next_offset": (next < tools.len()).then_some(next),
+    })))
+}
+
 /// Full description and schemas of one tool.
 /// 一个工具的完整描述与 Schema。
 fn tool_detail_text(snapshot: &SessionMcpConnectionSnapshot, schema: &McpToolSchema) -> String {
@@ -647,15 +829,23 @@ async fn execute_mcp_call(
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let args: McpCallArgs = parse_args(MCP_CALL_TOOL_ID, &request)?;
     let (access, session_id) = session_of(MCP_CALL_TOOL_ID, &request)?;
+    let arguments = args.arguments.unwrap_or_else(|| json!({}));
+    if args.server_id.is_some() {
+        return Err(NativeToolError::new(
+            "This configured MCP tool is not available to the current request.",
+        ));
+    }
+    let connection_id = args
+        .connection_id
+        .as_deref()
+        .filter(|_| args.server_id.is_none())
+        .ok_or_else(|| {
+            NativeToolError::new("Specify exactly one of server_id and connection_id.")
+        })?;
     let (root, _) = access.scope(session_id)?;
     let output = access
         .registry
-        .call(
-            root,
-            &args.connection_id,
-            &args.tool,
-            args.arguments.unwrap_or_else(|| json!({})),
-        )
+        .call(root, connection_id, &args.tool, arguments)
         .await
         .map_err(NativeToolError::new)?;
     Ok(VulcanToolInvocationResult::from_model_output(output))

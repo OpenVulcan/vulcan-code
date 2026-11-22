@@ -686,6 +686,10 @@ pub struct McpServerSummary {
     /// Whether the server is enabled.
     /// 该服务器是否启用。
     pub enabled: bool,
+    /// Model exposure and project scope for this server.
+    /// 此服务器面向模型的公开模式和项目范围。
+    #[serde(default)]
+    pub access: McpServerAccessEntry,
     /// Transport key such as `stdio`, `http`, or `sse`.
     /// 传输键，例如 `stdio`、`http` 或 `sse`。
     pub transport: String,

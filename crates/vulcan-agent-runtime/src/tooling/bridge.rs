@@ -182,6 +182,7 @@ pub fn build_vulcan_tools_manager(
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
+    implicit_mcp_tools: Vec<McpRuntimeToolBinding>,
     enabled_prompt_skill_names: Vec<String>,
     prepared_prompt_skills: Vec<vulcan_prompt_skills::PromptSkill>,
     prompt_skill_user_root: Option<PathBuf>,
@@ -228,7 +229,9 @@ pub fn build_vulcan_tools_manager(
     // Environment access is shared by every native tool; command tools inject its variables.
     // 环境变量访问由所有原生工具共享；命令类工具注入其变量。
     let environment_access = task_runtime.native_environment_access();
-    let session_mcp_access = task_runtime.native_session_mcp_access();
+    let session_mcp_access = task_runtime
+        .native_session_mcp_access()
+        .with_configured_tools(implicit_mcp_tools.clone());
     let configuration_host = task_runtime.configuration_host();
     let luaskills_debug_host = task_runtime.luaskills_debug_host();
     let feedback_host = task_runtime.feedback_host();
@@ -600,10 +603,16 @@ pub fn build_vulcan_tools_manager(
         });
     }
 
-    let mut candidate_mcp_tools = candidate_mcp_tools;
-    candidate_mcp_tools.sort_by(|left, right| left.id().cmp(right.id()));
+    // Both exposure modes use the original MCP definition for approval and hooks.
+    // 两种公开模式均使用原始 MCP 定义进行审批和 Hook 处理。
+    let mut candidate_mcp_tools = candidate_mcp_tools
+        .into_iter()
+        .map(|tool| (tool, false))
+        .chain(implicit_mcp_tools.into_iter().map(|tool| (tool, true)))
+        .collect::<Vec<_>>();
+    candidate_mcp_tools.sort_by(|(left, _), (right, _)| left.id().cmp(right.id()));
 
-    for tool in candidate_mcp_tools {
+    for (tool, implicit) in candidate_mcp_tools {
         let descriptor = mcp_tool_binding_to_vulcan(&tool);
         occupied_public_tool_ids.insert(descriptor.id.clone());
         let parameters_schema = tool.args_schema().clone();
@@ -617,6 +626,18 @@ pub fn build_vulcan_tools_manager(
             invoke: std::sync::Arc::new(move |args, invocation_context| {
                 let tool = tool.clone();
                 Box::pin(async move {
+                    if implicit {
+                        let schema = tool
+                            .inspection()
+                            .ok_or_else(|| String::from("This MCP tool is no longer available."))?;
+                        crate::mcp::session::validate_tool_arguments(
+                            tool.server_id()
+                                .expect("configured MCP binding has a server ID"),
+                            &schema.name,
+                            &schema.input_schema,
+                            &args,
+                        )?;
+                    }
                     // Owner-scoped MCP bindings must use the host-authenticated session context.
                     // 会话范围 MCP 绑定必须使用宿主认证的会话上下文。
                     let result = if tool.owner_session_id().is_some() {

@@ -85,7 +85,7 @@ export function SkillsArea(props: {
       ) : props.activeTab === "luaskills-debug" ? (
         <LuaSkillsDebugPanel />
       ) : props.activeTab === "mcp-servers" ? (
-        <McpSettingsArea actions={props.skillActions} servers={props.workbench.mcpServers ?? []} onOpenDiagnostics={props.onOpenDiagnostics} />
+        <McpSettingsArea actions={props.skillActions} servers={props.workbench.mcpServers ?? []} projects={props.workbench.projects} onOpenDiagnostics={props.onOpenDiagnostics} />
       ) : props.activeTab === "knowledge" ? (
         <KnowledgeBaseArea projects={props.workbench.projects} />
       ) : props.activeTab === "environment-variables" ? (

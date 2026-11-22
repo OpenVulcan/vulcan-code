@@ -330,6 +330,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
             tool_policies: Default::default(),
             configured_mcp_server_ids: Vec::new(),
             enabled_mcp_server_ids: Vec::new(),
+            configured_mcp_access: Default::default(),
         };
         let native_catalog = build_native_tool_catalog(
             &runtime_config,
@@ -379,6 +380,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
             None,
             None,
             vec![String::from(tool_id), String::from(tool_id)],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -462,6 +464,7 @@ fn feedback_tool_is_registered_only_with_a_host() {
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     let native_catalog = build_native_tool_catalog(
         &runtime_config,
@@ -488,6 +491,7 @@ fn feedback_tool_is_registered_only_with_a_host() {
             None,
             None,
             vec![String::from(crate::tooling::native::FEEDBACK_TOOL_ID)],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -526,6 +530,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     let global_vmm = VmmConfigLayer {
         enabled: Some(true),
@@ -569,6 +574,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         None,
         None,
         base_ids.clone(),
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -648,6 +654,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         Default::default(),
         Vec::new(),
         None,
@@ -688,6 +695,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         Default::default(),
         Vec::new(),
         None,
@@ -719,6 +727,7 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     let native_catalog = build_native_tool_catalog(
         &runtime_config,
@@ -743,6 +752,7 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
         None,
         None,
         None,
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -1006,6 +1016,7 @@ fn frozen_bridge_tools(
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     // native_catalog uses the constructor already exercised by the public-id tests.
     // native_catalog 使用公开标识测试已使用的构造器。
@@ -1032,6 +1043,7 @@ fn frozen_bridge_tools(
         None,
         None,
         None,
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -1150,6 +1162,7 @@ async fn project_shell_command_orders_allow_once_launch_with_directory_change() 
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     let catalog = build_native_tool_catalog(
         &config,
@@ -1175,6 +1188,7 @@ async fn project_shell_command_orders_allow_once_launch_with_directory_change() 
         None,
         None,
         vec!["shell_command".into()],
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),

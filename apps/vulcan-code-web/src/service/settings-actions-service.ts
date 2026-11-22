@@ -1159,6 +1159,12 @@ export async function saveMcpServerConfiguration(request: Record<string, unknown
   return serviceClient.request<WorkbenchSnapshot>("service_save_mcp_server_configuration", { request });
 }
 
+// setMcpServerEnabled returns the committed workbench after changing only the enable flag.
+// setMcpServerEnabled 仅切换启用标志，并返回已提交的工作台。
+export function setMcpServerEnabled(serverId: string, enabled: boolean): Promise<WorkbenchSnapshot> {
+  return serviceClient.request<WorkbenchSnapshot>("service_set_mcp_server_enabled", { serverId, enabled });
+}
+
 // removeMcpServerConfiguration removes one MCP server through the desktop service.
 // removeMcpServerConfiguration 通过桌面服务移除单个 MCP 服务器。
 export async function removeMcpServerConfiguration(serverId: string): Promise<WorkbenchSnapshot | null> {

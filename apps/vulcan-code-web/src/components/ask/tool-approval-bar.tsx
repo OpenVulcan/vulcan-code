@@ -81,6 +81,8 @@ const CONFIG_ACTION_KEYS: Record<string, TranslationKey> = {
 const CONFIG_FIELD_KEYS: Record<string, TranslationKey> = {
   name: "ask.approval.config.field.name",
   enabled: "ask.approval.config.field.enabled",
+  exposure: "settings.mcp.toolExposure",
+  usage_hint: "settings.mcp.usageHint",
   transport: "ask.approval.config.field.transport",
   command: "ask.approval.config.field.command",
   args: "ask.approval.config.field.args",

@@ -8,7 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/ta
 import { PageEmptyState, PageNotice } from "@/components/page"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { InlineStreamPlaceholder, StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
-import type { LogEntrySummary, McpServerSummary, RuntimeModuleSnapshot, StartupSnapshot } from "@/types"
+import type { LogEntrySummary, McpServerSummary, ProjectSummary, RuntimeModuleSnapshot, StartupSnapshot } from "@/types"
+import { Switch } from "@/ui-kit/primitives/switch"
 import { loadMcpRuntimeSnapshot, loadMcpServerCapabilities, type McpServerInspection, type McpCapabilities, type McpConnectionStatus, type McpToolInspection } from "@/service/mcp-settings-service"
 import { McpServerDialog, type McpSettingsActionProps } from "./mcp-server-dialog"
 import { McpSchemaDetail } from "./mcp-schema-detail"
@@ -32,6 +33,9 @@ export function McpSettingsArea(props: {
   // Existing settings callbacks and persisted user configurations.
   // 现有设置回调与持久化用户配置。
   actions: McpSettingsActionProps; servers: McpServerSummary[]
+  // Registered projects available to the server scope editor.
+  // 可用于服务器范围编辑器的已登记项目。
+  projects: readonly ProjectSummary[]
   // Legacy host props stay accepted while global diagnostics move to their own page.
   // 保留宿主旧属性接线，全局诊断移至独立页面。
   logs?: LogEntrySummary[]; modules?: RuntimeModuleSnapshot[]; startup?: StartupSnapshot
@@ -63,6 +67,9 @@ export function McpSettingsArea(props: {
   const [editing, setEditing] = React.useState<McpServerSummary | null>(null)
   const [creating, setCreating] = React.useState(false)
   const [removing, setRemoving] = React.useState(false)
+  // Keep the switch disabled while the service publishes the updated runtime.
+  // 服务发布更新后的运行时时禁用开关。
+  const [toggling, setToggling] = React.useState(false)
   // removalInFlight prevents duplicate removal requests before React commits the disabled state.
   // removalInFlight 在 React 提交禁用状态前阻止重复删除请求。
   const removalInFlight = React.useRef(false)
@@ -132,8 +139,17 @@ export function McpSettingsArea(props: {
         <header className="mcp-detail-head">
           <div className="mcp-detail-title"><h3>{selected.name}</h3><span className="mcp-status" data-status={error ? "unknown" : selected.runtime?.state.status ?? "unknown"}>{selected.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[selected.runtime.state.status]}` : t("settings.mcp.noConnectionStatusYet")}</span><small>{selected.id}</small></div>
           {selected.config && <div className="mcp-detail-actions">
-            <Button size="sm" variant="outline" onClick={() => setEditing(selected.config ?? null)}><Pencil size={14} aria-hidden="true" />{t("settings.mcp.edit")}</Button>
-            <Button size="sm" variant="outline" disabled={removing} onClick={() => setConfirmDelete(value => !value)}><Trash2 size={14} aria-hidden="true" />{t("settings.mcp.delete")}</Button>
+            <label className="vk-check-label">
+              <Switch aria-label={t("settings.mcp.enabled")} checked={selected.config.enabled} disabled={toggling || removing} onCheckedChange={async enabled => {
+                setToggling(true); setActionError("")
+                try { await props.actions.onSetMcpServerEnabled(selected.id, enabled); setRefreshKey(key => key + 1) }
+                catch (failure) { setActionError(String(failure)) }
+                finally { setToggling(false) }
+              }} />
+              {t("settings.mcp.enabled")}
+            </label>
+            <Button size="sm" variant="outline" disabled={toggling || removing} onClick={() => setEditing(selected.config ?? null)}><Pencil size={14} aria-hidden="true" />{t("settings.mcp.edit")}</Button>
+            <Button size="sm" variant="outline" disabled={toggling || removing} onClick={() => setConfirmDelete(value => !value)}><Trash2 size={14} aria-hidden="true" />{t("settings.mcp.delete")}</Button>
           </div>}
         </header>
         {confirmDelete && selected.config && <PageNotice tone="warning" title={t("settings.mcp.removeThisServerConfiguration")} actions={<><Button size="sm" variant="destructive" disabled={removing} onClick={async () => {
@@ -176,7 +192,7 @@ export function McpSettingsArea(props: {
       </> : loaded ? <div className="mcp-detail-placeholder"><PageEmptyState size="panel" icon={<Server />} title={t("settings.mcp.selectAnMcpServer")} /></div> : <StreamPlaceholder fill label={t("settings.mcp.loading")} />}
     </section>
     </div>}
-    <McpServerDialog actions={props.actions} open={creating || editing !== null} server={editing} onOpenChange={open => { if (!open) { setCreating(false); setEditing(null); setRefreshKey(key => key + 1) } }} />
+    <McpServerDialog actions={props.actions} projects={props.projects} open={creating || editing !== null} server={editing} onOpenChange={open => { if (!open) { setCreating(false); setEditing(null); setRefreshKey(key => key + 1) } }} />
   </div>
 }
 

@@ -35,15 +35,24 @@ describe("MCP save draft lifecycle", () => {
     document.body.append(container)
     // render keeps the same component instance while changing its open lifetime.
     // render 在改变打开生命周期时保持同一个组件实例。
-    const render = async (open: boolean, editing: McpServerSummary | null) => act(async () => root.render(<McpServerDialog open={open} server={editing} onOpenChange={onOpenChange} actions={{ onSaveMcpServer: save, onRemoveMcpServer: vi.fn() }} />))
+    const render = async (open: boolean, editing: McpServerSummary | null) => act(async () => root.render(<McpServerDialog open={open} server={editing} projects={[]} onOpenChange={onOpenChange} actions={{ onSaveMcpServer: save, onRemoveMcpServer: vi.fn() }} />))
     try {
       await render(true, server)
+      // An empty implicit hint is valid. Its current editor value is sent when supplied.
+      // 隐式说明可以留空；填写后将编辑框中的当前值随配置提交。
+      const hint = container.querySelector<HTMLTextAreaElement>("textarea[aria-describedby]")!
+      expect(hint.value).toBe("")
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(hint, "Use for fixture docs.")
+        hint.dispatchEvent(new Event("input", { bubbles: true }))
+      })
       await act(async () => {
         const button = Array.from(container.querySelectorAll("button")).find(value => value.textContent === "保存")
         button?.click(); button?.click()
       })
       expect(save).toHaveBeenCalledOnce()
       expect(save.mock.calls[0]?.[0]).toMatchObject({ args: [" a b ", ""] })
+      expect(save.mock.calls[0]?.[0].access.usageHint).toBe("Use for fixture docs.")
       await act(async () => rejectSave(new Error("Synthetic save failure")))
       expect(onOpenChange).not.toHaveBeenCalled()
       expect(container.querySelector('[role="alert"]')?.textContent).toContain("Synthetic save failure")
@@ -67,7 +76,7 @@ describe("MCP save draft lifecycle", () => {
       for (const oauthEnabled of [true, false]) {
         const server = { ...createMcpDraft(null), id: "remote", name: "Remote", transport: "http", url: "https://mcp.example.test/mcp",
           oauthEnabled, oauthClientId: "client", oauthScopes: ["read"], oauthRedirectUri: "https://app.example.test/cb" } as McpServerSummary
-        await act(async () => root.render(<McpServerDialog key={String(oauthEnabled)} open server={server} onOpenChange={vi.fn()} actions={{ onSaveMcpServer: save, onRemoveMcpServer: vi.fn() }} />))
+        await act(async () => root.render(<McpServerDialog key={String(oauthEnabled)} open server={server} projects={[]} onOpenChange={vi.fn()} actions={{ onSaveMcpServer: save, onRemoveMcpServer: vi.fn() }} />))
         await act(async () => { Array.from(container.querySelectorAll("button")).find(value => value.textContent === "保存")?.click() })
       }
       expect(save.mock.calls[0]?.[0]).toMatchObject({ oauthEnabled: true, oauthClientId: "client", oauthScopes: ["read"], oauthRedirectUri: "https://app.example.test/cb" })

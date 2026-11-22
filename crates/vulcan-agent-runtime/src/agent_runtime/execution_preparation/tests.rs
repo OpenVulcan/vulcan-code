@@ -484,6 +484,8 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
         luaskills_tools: Vec::new(),
         luaskills_dispatch_tools: vec![test_luaskills_entry("vulcan-codekit", "rg")],
         mcp_tools: Vec::new(),
+        implicit_mcp_tools: Vec::new(),
+        referenced_mcp_servers: Default::default(),
         selectors,
         native_tool_warnings: Vec::new(),
     };
@@ -1442,13 +1444,28 @@ fn test_runtime_foundation_with_extensions(
     luaskills: Option<crate::luaskills_runtime::LuaSkillsRuntimeHandle>,
     skills: Option<Arc<vulcan_prompt_skills::PromptSkillCatalog>>,
 ) -> RuntimeFoundation {
+    test_runtime_foundation_with_mcp(
+        config,
+        plugins,
+        luaskills,
+        skills,
+        configured_mcp_runtime_access(config),
+    )
+}
+
+/// Prepares the same offline model fixture with an explicitly supplied live MCP runtime.
+/// 使用显式提供的实时 MCP 运行时准备同一离线模型夹具。
+fn test_runtime_foundation_with_mcp(
+    config: &ProviderConfigurationFile,
+    plugins: Option<Arc<VulcanPluginCatalogSnapshot>>,
+    luaskills: Option<crate::luaskills_runtime::LuaSkillsRuntimeHandle>,
+    skills: Option<Arc<vulcan_prompt_skills::PromptSkillCatalog>>,
+    mcp: crate::mcp::McpRuntimeAccess,
+) -> RuntimeFoundation {
     // Build the transport snapshot with the same producer used by normal agent requests.
     // 使用正常代理请求采用的同一生产者构建传输快照。
     let generation = Arc::new(crate::agent_runtime::ExtensionGeneration::new(
-        1,
-        plugins,
-        configured_mcp_runtime_access(config),
-        skills,
+        1, plugins, mcp, skills,
     ));
     // Keep the model fixture independent of any running host or network client.
     // 使模型夹具独立于正在运行的宿主或网络客户端。
@@ -1538,6 +1555,8 @@ fn test_exposure_with_selectors(
         luaskills_tools: Vec::new(),
         luaskills_dispatch_tools: Vec::new(),
         mcp_tools: Vec::new(),
+        implicit_mcp_tools: Vec::new(),
+        referenced_mcp_servers: Default::default(),
         selectors,
         native_tool_warnings: Vec::new(),
     }
@@ -1956,4 +1975,267 @@ fn session_mcp_connection_uses_core_skill_and_original_plan_policy() {
                 .body
                 .contains("The user referenced these enabled skills: session-mcp."))
     );
+}
+
+/// Exercises model projection and live discovery, schema validation, invocation and revocation.
+/// 验证模型投影及实时发现、Schema 校验、调用和撤销。
+#[tokio::test]
+async fn configured_mcp_respects_project_scope_and_implicit_exposure() {
+    use super::PreparedExecution;
+    use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
+    use crate::mcp::{
+        bootstrap_mcp_runtime_access, replace_user_mcp_runtime_partition,
+        runtime_mcp_server_configs,
+    };
+    use vulcan_core::{tool::VulcanToolExecutor, types::ToolInvocationRequest};
+    use vulcan_session_core::v1::{
+        document::PreparedToolReceipt,
+        ids::{ApiCallId, RequestStreamId, Seq, ToolCallId, TurnId},
+    };
+    use vulcan_tools_manager::VulcanToolSourceKind;
+
+    // Exercise the existing stdio fixture through the production connector.
+    // 通过生产连接器运行已有的 stdio 夹具。
+    let mut config = test_provider_config();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/owner-mcp.mjs");
+    let server = serde_json::from_value(json!({
+        "name": "Fixture MCP", "transport": "stdio", "command": "node", "args": [fixture],
+        "access": { "exposure": "implicit", "projects": { "mode": "selected", "projectIds": ["project-a"] }, "usageHint": "Use for fixture documentation." },
+    })).unwrap();
+    config.mcp.servers.insert("fixture".into(), server);
+    // Bootstrap discovers the tool schema through a real MCP tools/list exchange.
+    // 启动阶段通过真实 MCP tools/list 交换发现工具 Schema。
+    let mcp = bootstrap_mcp_runtime_access(runtime_mcp_server_configs(&config).unwrap())
+        .await
+        .unwrap();
+    // User MCP starts asynchronously. Wait for its actual catalog before preparing the model request.
+    // 用户 MCP 异步启动，在准备模型请求前等待真实目录就绪。
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !mcp.server_inspections().iter().any(|server| {
+            server.state.id == "fixture" && server.tools.iter().any(|tool| tool.name == "read_page")
+        }) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("fixture must publish its MCP catalog");
+    let foundation = test_runtime_foundation_with_mcp(&config, None, None, None, mcp.clone());
+    let mut request = test_execution_preparation_request();
+    request.project_id = Some("project-a".into());
+    let allowed =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    // Clearing the hint removes the ordinary prompt entry but preserves on-demand discovery.
+    // 清空使用说明后普通提示词不列出此服务器，按需发现仍可使用。
+    let mut unhinted_config = config.clone();
+    unhinted_config
+        .mcp
+        .servers
+        .get_mut("fixture")
+        .unwrap()
+        .access
+        .usage_hint = None;
+    let unhinted =
+        test_runtime_foundation_with_mcp(&unhinted_config, None, None, None, mcp.clone());
+    let ordinary =
+        prepare_execution_with_tool_snapshot(&unhinted, None, &unhinted_config, &request).unwrap();
+    request.prompt = "@Fixture MCP，查文档。".into();
+    let mentioned =
+        prepare_execution_with_tool_snapshot(&unhinted, None, &unhinted_config, &request).unwrap();
+    request.project_id = Some("project-b".into());
+    let denied =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    for (round, advertised) in [
+        (&allowed, true),
+        (&ordinary, false),
+        (&mentioned, true),
+        (&denied, false),
+    ] {
+        assert_eq!(
+            round
+                .preparation
+                .additional_developer_segments
+                .iter()
+                .any(|segment| segment.body.contains("fixture")
+                    && segment.body.contains("server_id")),
+            advertised
+        );
+        let provider = prepare_host_tool_runtime_context(
+            round.tool_snapshot.tools_manager.clone(),
+            &round.tool_snapshot.resolved_tool_definitions,
+            request.session_id,
+            &round.preparation.execution_mode,
+            foundation.task_runtime(),
+        );
+        assert!(
+            provider
+                .provider_tool_definitions
+                .iter()
+                .all(|tool| !tool.name.contains("read_page"))
+        );
+    }
+    assert!(
+        allowed
+            .preparation
+            .additional_developer_segments
+            .iter()
+            .any(|segment| segment.body.contains("Use for fixture documentation."))
+    );
+    assert!(
+        mentioned
+            .preparation
+            .additional_developer_segments
+            .iter()
+            .any(|segment| segment.body.contains("\"mentioned_by_user\":true"))
+    );
+
+    // Execute synthetic provider calls through the production bridge and durable receipts.
+    // 通过生产桥接层与持久回执执行模拟供应商调用。
+    let call = |round: &PreparedExecution, id: &str, args| {
+        let runtime = prepare_host_tool_runtime_context(
+            round.tool_snapshot.tools_manager.clone(),
+            &round.tool_snapshot.resolved_tool_definitions,
+            request.session_id,
+            &round.preparation.execution_mode,
+            foundation.task_runtime(),
+        );
+        let bridge = runtime.runtime_bridge;
+        let invocation = ToolInvocationRequest {
+            request_stream_id: "fixture-stream".into(),
+            tool_call_id: "fixture-call".into(),
+            tool_name: id.to_owned(),
+            arguments: args,
+            argument_parse_error: None,
+            raw_arguments: Default::default(),
+            user_request: Default::default(),
+        };
+        bridge
+            .install_prepared_invocation_identities(
+                std::slice::from_ref(&invocation),
+                vec![PreparedToolReceipt {
+                    turn_id: TurnId::try_new(1).unwrap(),
+                    request_stream_id: RequestStreamId::try_new("fixture-stream").unwrap(),
+                    api_call_id: ApiCallId::try_new(1).unwrap(),
+                    tool_call_id: ToolCallId::try_new(1).unwrap(),
+                    tool_seq: Seq::try_new(1).unwrap(),
+                }],
+            )
+            .unwrap();
+        async move {
+            let result = bridge.execute_tool(&invocation).await.unwrap();
+            if result.is_error {
+                Err(result.model_output)
+            } else {
+                Ok(result.model_output)
+            }
+        }
+    };
+    // Only an explicit discovery call lists an undescribed server by name and ID.
+    // 未填写说明的服务器只在主动发现调用中返回名称与 ID。
+    let roster: serde_json::Value =
+        serde_json::from_str(&call(&ordinary, "mcp_tools", json!({})).await.unwrap()).unwrap();
+    assert_eq!(
+        roster,
+        json!({"servers":[{"server_id":"fixture","server_name":"Fixture MCP"}]})
+    );
+    let denied_roster: serde_json::Value =
+        serde_json::from_str(&call(&denied, "mcp_tools", json!({})).await.unwrap()).unwrap();
+    assert_eq!(denied_roster, json!({"servers":[]}));
+    let listing: serde_json::Value = serde_json::from_str(
+        &call(
+            &mentioned,
+            "mcp_tools",
+            json!({"server_name":"Fixture MCP"}),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(listing["server_id"], "fixture");
+    assert_eq!(listing.pointer("/tools/0/name"), Some(&json!("read_page")));
+    assert!(listing.pointer("/tools/0/inputSchema").is_none());
+    let schema: serde_json::Value = serde_json::from_str(
+        &call(
+            &allowed,
+            "mcp_tools",
+            json!({"server_name":"Fixture MCP","tool":"read_page"}),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        schema.pointer("/tool/inputSchema/properties/url/type"),
+        Some(&json!("string"))
+    );
+    let valid = json!({"server_id":"fixture","tool":"read_page","arguments":{"url":"https://example.test","owner_session_id":"fixture"}});
+    assert!(
+        call(&denied, "mcp_tools", json!({"server_name":"Fixture MCP"}))
+            .await
+            .is_err()
+    );
+    assert!(call(&denied, "mcp_call", valid.clone()).await.is_err());
+    assert!(
+        call(
+            &allowed,
+            "mcp_call",
+            json!({"server_id":"fixture","tool":"read_page","arguments":{}})
+        )
+        .await
+        .is_err()
+    );
+    let action = allowed
+        .tool_snapshot
+        .tools_manager
+        .configured_mcp_action("fixture", "read_page")
+        .unwrap();
+    assert_eq!(
+        action.descriptor.origin().source_kind(),
+        VulcanToolSourceKind::Mcp
+    );
+    assert_eq!(action.descriptor.origin().namespace(), "fixture");
+    let output = call(&allowed, "mcp_call", valid.clone()).await.unwrap();
+    assert!(output.contains("https://example.test"));
+
+    // The same connector can provide a direct function when configured explicitly for all projects.
+    // 同一连接器在配置为全部项目显式模式时可提供直接函数。
+    let entry = config.mcp.servers.get_mut("fixture").unwrap();
+    entry.access.exposure = crate::provider_config::PersistedMcpToolExposure::Explicit;
+    entry.access.projects = crate::provider_config::McpProjectScope::All;
+    let explicit = test_runtime_foundation_with_mcp(&config, None, None, None, mcp.clone());
+    let exposed = prepare_execution_with_tool_snapshot(&explicit, None, &config, &request).unwrap();
+    assert!(
+        !exposed
+            .preparation
+            .additional_developer_segments
+            .iter()
+            .any(|segment| segment.body.contains("Use for fixture documentation."))
+    );
+    assert!(
+        exposed
+            .tool_snapshot
+            .resolved_tool_definitions
+            .iter()
+            .any(|tool| {
+                let origin = tool.descriptor.origin();
+                origin.source_kind() == VulcanToolSourceKind::Mcp
+                    && origin.original_name() == "read_page"
+            })
+    );
+
+    // Disabling the server must stop even calls prepared before configuration changed.
+    // 停用服务器时，连配置变更前准备的调用也必须被拒绝。
+    config.mcp.servers.get_mut("fixture").unwrap().enabled = false;
+    let next =
+        replace_user_mcp_runtime_partition(&mcp, runtime_mcp_server_configs(&config).unwrap())
+            .await
+            .unwrap();
+    next.revoke_prior_user_servers(&["fixture".to_owned()]);
+    assert!(call(&allowed, "mcp_call", valid).await.is_err());
+    assert!(
+        call(&allowed, "mcp_tools", json!({"server_id":"fixture"}))
+            .await
+            .is_err()
+    );
+    next.shutdown_user_partition();
+    mcp.shutdown_user_partition();
 }

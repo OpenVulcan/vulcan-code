@@ -469,6 +469,7 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         tool_exposure.luaskills_tools.clone(),
         implicit_luaskills.clone(),
         tool_exposure.mcp_tools.clone(),
+        tool_exposure.implicit_mcp_tools.clone(),
         enabled_prompt_skill_names,
         prepared_prompt_skills,
         prompt_skill_user_root.clone(),
@@ -563,6 +564,38 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         resolved_tools.descriptors.clear();
         resolved_tools.definitions.clear();
     }
+    // Bind the original actions behind the MCP gateway, then omit their provider declarations.
+    // 将原始动作绑定到 MCP 入口后，从供应商工具声明移除。
+    let implicit_mcp_ids = tool_exposure
+        .implicit_mcp_tools
+        .iter()
+        .map(crate::mcp::McpRuntimeToolBinding::id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let configured_mcp_route_visible = [
+        crate::tooling::native::MCP_TOOLS_TOOL_ID,
+        crate::tooling::native::MCP_CALL_TOOL_ID,
+    ]
+    .into_iter()
+    .all(|id| {
+        resolved_tools.definitions.iter().any(|tool| {
+            tool.descriptor.id == id && tool.descriptor.source == VulcanToolSourceKind::Native
+        })
+    });
+    let mut configured_mcp_actions = Vec::new();
+    resolved_tools.definitions.retain(|definition| {
+        if definition.descriptor.source == VulcanToolSourceKind::Mcp
+            && implicit_mcp_ids.contains(definition.descriptor.id.as_str())
+        {
+            if configured_mcp_route_visible {
+                configured_mcp_actions.push(definition.clone());
+            }
+            return false;
+        }
+        true
+    });
+    resolved_tools.descriptors.retain(|tool| {
+        tool.source != VulcanToolSourceKind::Mcp || !implicit_mcp_ids.contains(tool.id.as_str())
+    });
     // Only tools surviving the same filters as the direct route may become skill actions.
     // 只有通过直接入口原有筛选的工具才能成为技能动作。
     let mut skill_actions = Vec::new();
@@ -671,6 +704,35 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
             "Current skill action routing",
         ));
     }
+    // Advertise server IDs only when both discovery and invocation are available.
+    // 仅在发现和调用均可用时公布服务器 ID。
+    let configured_mcp_servers = configured_mcp_actions
+        .iter()
+        .map(|tool| tool.descriptor.origin().namespace())
+        .collect::<std::collections::BTreeSet<_>>();
+    // Only described or explicitly mentioned servers belong in the proactive prompt.
+    // 只有提供使用说明或被明确引用的服务器进入主动提示。
+    let servers = configured_mcp_servers
+        .into_iter()
+        .filter_map(|id| {
+            let server = config.mcp.servers.get(id)?;
+            let usage_hint = server.access.usage_hint();
+            let mentioned = tool_exposure.referenced_mcp_servers.contains(id);
+            (usage_hint.is_some() || mentioned).then(|| serde_json::json!({
+            "id": id, "name": server.name, "usage_hint": usage_hint, "mentioned_by_user": mentioned,
+        }))
+        })
+        .collect::<Vec<_>>();
+    if !servers.is_empty() {
+        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
+            "Configured MCP servers",
+            format!(
+                "MCP servers available on demand in this project: {}. For servers marked mentioned_by_user, inspect their tools for this task. Otherwise use usage_hint to decide relevance. Use `mcp_tools` with the exact `server_name` to list only that server's tools, then add `tool` to read one schema. For duplicate names, use `server_id`. Call the tool with `mcp_call` using the returned `server_id` and exact `tool` name.",
+                serde_json::Value::Array(servers),
+            ),
+            "Configured MCP discovery",
+        ));
+    }
     // Reference hints only name actions and skills actually available in this turn.
     // 引用指引只列出本回合实际可用的动作与技能。
     if prompt_skill_tool_available
@@ -687,6 +749,7 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         );
     }
     tools_manager.set_skill_actions(skill_actions);
+    tools_manager.set_configured_mcp_actions(configured_mcp_actions);
     if let Some(segment) = build_skill_developer_segment(request.prompt_purpose, &prompt_skills) {
         additional_developer_segments.push(AdditionalPromptSegment::locked(
             "Prompt Skill Injection",

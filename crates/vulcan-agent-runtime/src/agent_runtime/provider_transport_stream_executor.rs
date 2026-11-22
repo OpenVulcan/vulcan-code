@@ -93,6 +93,10 @@ impl StreamingRuntimeToolExecutor {
                         .runtime_bridge
                         .resolve_skill_action(request)
                         .is_some_and(|(_, action)| action.descriptor.id == *tool_id)
+                    || self
+                        .runtime_bridge
+                        .resolve_configured_mcp_action(request)
+                        .is_some_and(|(_, action)| action.descriptor.id == *tool_id)
             });
         should_reject.then(|| reason.clone())
     }

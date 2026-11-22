@@ -643,7 +643,7 @@ pub(super) fn prepare_task_runtime_execution(
                         prepared
                             .tool_snapshot
                             .tools_manager
-                            .skill_action_descriptors(),
+                            .indirect_action_descriptors(),
                     ),
                     prepared
                         .preparation

@@ -499,7 +499,12 @@ impl SessionMcpRegistry {
     ) -> Result<Value, String> {
         let connection = self.find(root, connection_id)?;
         let schema = connection.tool(tool).await?;
-        validate_tool_arguments(&connection.name, &schema, &arguments)?;
+        validate_tool_arguments(
+            &connection.name,
+            &schema.name,
+            &schema.args_schema,
+            &arguments,
+        )?;
         connection
             .transport
             .call_tool_with_audience(tool, arguments, McpToolResultAudience::Conversation)
@@ -562,27 +567,23 @@ fn missing_connection(connection_id: &str) -> String {
 
 /// Checks call arguments against one tool's input schema.
 /// 按一个工具的输入 Schema 检查调用参数。
-fn validate_tool_arguments(
+pub(crate) fn validate_tool_arguments(
     server_name: &str,
-    schema: &McpToolSchema,
+    tool_name: &str,
+    args_schema: &Value,
     arguments: &Value,
 ) -> Result<(), String> {
     if !arguments.is_object() {
         return Err(format!(
-            "Arguments for MCP tool `{}` must be a JSON object.",
-            schema.name
+            "Arguments for MCP tool `{tool_name}` must be a JSON object."
         ));
     }
-    let validator = jsonschema::draft202012::new(&schema.args_schema).map_err(|_| {
-        format!(
-            "MCP tool `{server_name}/{}` has an input schema that cannot be compiled.",
-            schema.name
-        )
+    let validator = jsonschema::draft202012::new(args_schema).map_err(|_| {
+        format!("MCP tool `{server_name}/{tool_name}` has an input schema that cannot be compiled.")
     })?;
     validator.validate(arguments).map_err(|error| {
         format!(
-            "Arguments for MCP tool `{}` do not match its input schema: {error}. Read the schema with `mcp_tools` and `tool`.",
-            schema.name
+            "Arguments for MCP tool `{tool_name}` do not match its input schema: {error}. Read the schema with `mcp_tools` and `tool`."
         )
     })
 }

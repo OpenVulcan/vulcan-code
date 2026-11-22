@@ -15,13 +15,18 @@ import {
 import { Input } from "@/ui-kit/primitives/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Switch } from "@/ui-kit/primitives/switch"
-import type { McpServerSummary } from "@/types"
+import { Textarea } from "@/ui-kit/primitives/textarea"
+import type { McpServerSummary, ProjectSummary } from "@/types"
+import { Checkbox } from "@/ui-kit/primitives/checkbox"
 import { useI18n } from "@/i18n"
 import "@/ui-kit/styles/features/settings-forms.css"
 
 // McpServerSaveRequest describes one MCP server configuration save request.
 // McpServerSaveRequest 描述单次 MCP 服务器配置保存请求。
 export interface McpServerSaveRequest {
+  // Access settings saved together with the server configuration.
+  // 随服务器配置一起保存的访问设置。
+  access: McpServerSummary["access"]
   // Existing server id when editing, or null when creating a new server.
   // 编辑现有服务器时为服务器标识，新建服务器时为空。
   serverId: string | null
@@ -81,6 +86,9 @@ export interface McpServerSaveRequest {
 // McpSettingsActionProps narrows settings actions to the MCP server operations used here.
 // McpSettingsActionProps 将设置动作收窄为此处使用的 MCP 服务器操作。
 export interface McpSettingsActionProps {
+  // Enables or disables a server without rewriting any other settings.
+  // 启用或停用服务器，无需重写其他设置。
+  onSetMcpServerEnabled: (serverId: string, enabled: boolean) => Promise<void>
   // Saves one MCP server configuration.
   // 保存单个 MCP 服务器配置。
   onSaveMcpServer: (request: McpServerSaveRequest) => Promise<void>
@@ -92,9 +100,12 @@ export interface McpSettingsActionProps {
 // McpServerDialog owns a draft for one open lifetime and retains it after service failures.
 // McpServerDialog 在单次打开期间拥有草稿，并在服务失败后保留它。
 export function McpServerDialog(props: {
-  actions: McpSettingsActionProps; open: boolean; onOpenChange: (open: boolean) => void; server: McpServerSummary | null
+  actions: Omit<McpSettingsActionProps, "onSetMcpServerEnabled">; open: boolean; onOpenChange: (open: boolean) => void; server: McpServerSummary | null; projects: readonly ProjectSummary[]
 }) {
   const { t } = useI18n();
+  // Connect the usage hint to its help text for keyboard and screen reader users.
+  // 为键盘及屏幕阅读器用户关联使用说明与帮助文本。
+  const usageHintHelpId = React.useId()
   // text follows the shared application locale.
   // text 遵循共享应用语言。
 
@@ -112,6 +123,9 @@ export function McpServerDialog(props: {
   // change updates exactly one declared request field.
   // change 仅更新一个已声明的请求字段。
   const change = <K extends keyof McpServerSaveRequest>(key: K, value: McpServerSaveRequest[K]) => setDraft(current => ({ ...current, [key]: value }))
+  // Keep selected project IDs exact so duplicate project names cannot select the wrong project.
+  // 保留精确的项目 ID，避免同名项目被误选。
+  const selectedProjects = draft.access.projects.mode === "selected" ? draft.access.projects.projectIds : []
   // save validates before dispatch and prevents duplicate submissions.
   // save 在派发前校验，并阻止重复提交。
   const save = async () => {
@@ -138,8 +152,35 @@ export function McpServerDialog(props: {
           <div className="vk-field"><span>{t("settings.mcp.transport")}</span><Select value={draft.transport} disabled={busy} onValueChange={value => change("transport", value)}>
             <SelectTrigger aria-label={t("settings.mcp.transport")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="stdio">{t("settings.mcp.stdio")}</SelectItem><SelectItem value="http">Streamable HTTP</SelectItem><SelectItem value="sse">SSE</SelectItem></SelectContent>
           </Select></div>
-          <label className="vk-check-label"><Switch checked={draft.enabled} disabled={busy} onCheckedChange={value => change("enabled", value)} />{t("settings.mcp.enabled")}</label>
+          <label className="vk-check-label"><Switch aria-label={t("settings.mcp.enabled")} checked={draft.enabled} disabled={busy} onCheckedChange={value => change("enabled", value)} />{t("settings.mcp.enabled")}</label>
         </div>
+        <div className="mcp-identity-row">
+          <div className="vk-field"><span>{t("settings.mcp.toolExposure")}</span><Select disabled={busy} value={draft.access.exposure} onValueChange={value => {
+            if (value === "implicit" || value === "explicit") change("access", { ...draft.access, exposure: value })
+          }}>
+            <SelectTrigger aria-label={t("settings.mcp.toolExposure")}><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="implicit">{t("settings.mcp.implicitExposure")}</SelectItem><SelectItem value="explicit">{t("settings.mcp.explicitExposure")}</SelectItem></SelectContent>
+          </Select></div>
+          <div className="vk-field"><span>{t("settings.mcp.projectScope")}</span><Select disabled={busy} value={draft.access.projects.mode} onValueChange={value => {
+            change("access", { ...draft.access, projects: value === "selected" ? { mode: "selected", projectIds: selectedProjects } : { mode: "all" } })
+          }}>
+            <SelectTrigger aria-label={t("settings.mcp.projectScope")}><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="all">{t("mcpService.field.scopeAll")}</SelectItem><SelectItem value="selected">{t("mcpService.field.scopeSelected")}</SelectItem></SelectContent>
+          </Select></div>
+        </div>
+        {draft.access.exposure === "implicit" && <label className="vk-field">
+          <span>{t("settings.mcp.usageHint")}</span>
+          <Textarea aria-describedby={usageHintHelpId} rows={3} value={draft.access.usageHint ?? ""} onChange={event => change("access", { ...draft.access, usageHint: event.target.value })} />
+          <small id={usageHintHelpId} className="vk-form-note">{t("settings.mcp.usageHintHelp")}</small>
+        </label>}
+        {draft.access.projects.mode === "selected" && <div className="mcp-form-section">
+          {props.projects.length === 0 ? <p className="vk-form-note">{t("mcpService.field.noProjects")}</p> : props.projects.map(project => <label className="vk-check-label" key={project.id} title={project.path}>
+            <Checkbox checked={selectedProjects.includes(project.id)} disabled={busy} onCheckedChange={checked => {
+              change("access", { ...draft.access, projects: { mode: "selected", projectIds: checked === true ? [...selectedProjects, project.id] : selectedProjects.filter(id => id !== project.id) } })
+            }} />
+            <span>{project.name} · {project.path}</span>
+          </label>)}
+        </div>}
         {draft.transport === "stdio" ? <>
           <label className="vk-field"><span>{t("settings.mcp.executable")}</span><Input placeholder="node" value={draft.command} onChange={e => change("command", e.target.value)} /></label>
           <p className="vk-form-note">{t("settings.mcp.enterOnlyTheProgram")}</p>

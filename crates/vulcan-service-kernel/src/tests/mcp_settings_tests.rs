@@ -38,6 +38,50 @@ fn remote_request_without_oauth_fields(oauth_enabled: Option<bool>) -> McpServer
     serde_json::from_value(value).expect("decode synthetic request")
 }
 
+/// Checks legacy defaults and exact persisted scope round-tripping for settings saves.
+/// 验证设置保存的旧配置默认值及精确项目范围的持久化往返。
+#[test]
+fn configured_mcp_access_round_trips_without_widening_scope() {
+    use vulcan_provider_config::config::{
+        McpProjectScope, PersistedMcpServerAccess, PersistedMcpToolExposure,
+    };
+    // Legacy settings payloads do not contain access options.
+    // 旧设置请求不包含访问选项。
+    let (_, default_server) =
+        mcp_server_entry_from_request(remote_request_without_oauth_fields(None)).unwrap();
+    assert_eq!(
+        default_server.access.exposure,
+        PersistedMcpToolExposure::Implicit
+    );
+    assert_eq!(default_server.access.projects, McpProjectScope::All);
+
+    // Deserialization of a selected scope with no IDs must never result in global access.
+    // 指定项目范围反序列化后没有 ID 时，绝不能得到全局访问。
+    let invalid = PersistedMcpServerAccess {
+        usage_hint: None,
+        exposure: PersistedMcpToolExposure::Explicit,
+        projects: McpProjectScope::Selected {
+            project_ids: vec![],
+        },
+    };
+    assert!(!invalid.allows_project(Some("project-a")));
+    let scope = PersistedMcpServerAccess {
+        usage_hint: Some("Query internal docs.".into()),
+        exposure: PersistedMcpToolExposure::Explicit,
+        projects: McpProjectScope::Selected {
+            project_ids: vec!["project-a".into()],
+        },
+    };
+    let mut entry = default_server;
+    entry.access = scope.clone();
+    let decoded: PersistedMcpServerEntry =
+        serde_json::from_value(serde_json::to_value(entry).unwrap()).unwrap();
+    assert_eq!(decoded.access, scope);
+    assert!(decoded.access.allows_project(Some("project-a")));
+    assert!(!decoded.access.allows_project(None));
+    assert!(!decoded.access.allows_project(Some("project-b")));
+}
+
 /// Verifies dynamic-registration OAuth persists an empty OAuth block only when explicitly enabled.
 /// 验证动态注册 OAuth 仅在显式启用时持久化空 OAuth 配置块。
 #[test]
@@ -73,6 +117,7 @@ fn test_stdio_mcp_server_entry(name: &str, command: &str) -> PersistedMcpServerE
     PersistedMcpServerEntry {
         name: name.to_string(),
         enabled: true,
+        access: Default::default(),
         transport: PersistedMcpTransportKind::Stdio,
         command: command.to_string(),
         args: Vec::new(),

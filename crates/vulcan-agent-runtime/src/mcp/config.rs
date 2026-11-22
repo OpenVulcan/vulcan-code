@@ -810,6 +810,7 @@ mod tests {
                     PersistedMcpServerEntry {
                         name: String::from("Missing URL"),
                         enabled: true,
+                        access: Default::default(),
                         transport: PersistedMcpTransportKind::Http,
                         command: String::new(),
                         args: Vec::new(),

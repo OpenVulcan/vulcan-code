@@ -34,6 +34,12 @@ pub(crate) struct ExecutionToolExposureSelection {
     /// MCP tool bindings visible to the current request.
     /// 当前请求可见的 MCP 工具绑定集合。
     pub mcp_tools: Vec<McpRuntimeToolBinding>,
+    /// Project- and policy-allowed MCP tools discoverable without provider function schemas.
+    /// 符合项目范围和策略、可在不发送供应商函数 Schema 时发现的 MCP 工具。
+    pub implicit_mcp_tools: Vec<McpRuntimeToolBinding>,
+    /// Implicit MCP server IDs explicitly referenced in the current user input.
+    /// 当前用户输入明确引用的隐式 MCP 服务器 ID。
+    pub referenced_mcp_servers: BTreeSet<String>,
     /// Normalized selector state used for final public tool filtering.
     /// 用于最终公开工具过滤的规范化选择器状态。
     pub(crate) selectors: ToolExposureSelectorState,
@@ -75,15 +81,110 @@ pub(crate) fn resolve_execution_tool_exposure(
         mcp_bindings
             .retain(|tool| tool.server_id() != Some(crate::tooling::native::BROWSER_MCP_ORIGIN));
     }
-    let mcp_tools = filter_mcp_tool_bindings(mcp_bindings, &selectors);
+    // Apply the same project and tool policy before splitting discovery from direct exposure.
+    // 先应用同一项目范围和工具策略，再区分按需发现与直接公开。
+    let mut implicit_mcp_tools = Vec::new();
+    let mut mcp_tools = Vec::new();
+    for binding in filter_mcp_tool_bindings(mcp_bindings, &selectors) {
+        if binding.partition_key() != "user" {
+            mcp_tools.push(binding);
+            continue;
+        }
+        let Some(access) = binding
+            .server_id()
+            .and_then(|id| foundation.configured_mcp_access(id))
+            .filter(|access| access.allows_project(request.project_id.as_deref()))
+        else {
+            continue;
+        };
+        match access.exposure {
+            crate::provider_config::PersistedMcpToolExposure::Implicit => {
+                // Restored children can use only MCP sources captured in their durable admission.
+                // 恢复后的子代理只能使用其持久准入记录中捕获的 MCP 来源。
+                if !request.tool_request_hidden_tool_ids.iter().any(|hidden| hidden == binding.id())
+                    && request.captured_child_tool_admission.as_ref().is_none_or(|admitted| {
+                        admitted.values().any(|origin| {
+                            origin.source_kind == vulcan_session_core::v1::child_execution::ChildToolSourceKind::Mcp
+                                && Some(origin.namespace.as_str()) == binding.server_id()
+                                && Some(origin.original_name.as_str()) == binding.origin_tool_name()
+                        })
+                    })
+                {
+                    implicit_mcp_tools.push(binding);
+                }
+            }
+            crate::provider_config::PersistedMcpToolExposure::Explicit => mcp_tools.push(binding),
+        }
+    }
+    // Resolve mentions only against project- and policy-approved servers.
+    // 仅对符合项目范围与工具策略的服务器解析引用。
+    let servers = implicit_mcp_tools
+        .iter()
+        .filter_map(|tool| Some((tool.server_id()?, tool.server_name()?)))
+        .collect::<BTreeMap<_, _>>();
+    let referenced_mcp_servers = referenced_mcp_servers(&request.prompt, &servers);
     ExecutionToolExposureSelection {
         native_tool_ids,
         luaskills_tools,
         luaskills_dispatch_tools,
         mcp_tools,
+        implicit_mcp_tools,
+        referenced_mcp_servers,
         selectors,
         native_tool_warnings,
     }
+}
+
+/// Returns exact, unambiguous MCP names or stable IDs mentioned after a standalone `@`.
+/// 返回在独立 `@` 后出现、精确且无歧义的 MCP 名称或稳定 ID。
+fn referenced_mcp_servers(prompt: &str, servers: &BTreeMap<&str, &str>) -> BTreeSet<String> {
+    // Match the longest complete registered name or ID, so spaces and shared prefixes work.
+    // 匹配最长的完整已登记名称或 ID，支持包含空格和共用前缀的名称。
+    let mut referenced = BTreeSet::new();
+    for (index, _) in prompt.match_indices('@') {
+        if !prompt[..index].chars().next_back().is_none_or(|ch| {
+            ch.is_whitespace() || matches!(ch, '(' | '[' | '（' | '【' | ',' | '，' | '、')
+        }) {
+            continue;
+        }
+        let rest = &prompt[index + 1..];
+        let matches = servers
+            .iter()
+            .filter_map(|(&id, &name)| {
+                [id, name]
+                    .into_iter()
+                    .filter(|label| !label.is_empty())
+                    .filter(|label| rest.strip_prefix(label).is_some_and(mcp_mention_ends_here))
+                    .map(str::len)
+                    .max()
+                    .map(|length| (id, length))
+            })
+            .collect::<Vec<_>>();
+        let Some(longest) = matches.iter().map(|(_, length)| *length).max() else {
+            continue;
+        };
+        let mut exact = matches.into_iter().filter(|(_, length)| *length == longest);
+        if let Some((id, _)) = exact.next()
+            && exact.next().is_none()
+        {
+            referenced.insert(id.to_owned());
+        }
+    }
+    referenced
+}
+
+/// Distinguishes a complete mention from a longer identifier or a file extension.
+/// 区分完整引用、较长标识符或文件扩展名。
+fn mcp_mention_ends_here(tail: &str) -> bool {
+    tail.chars().next().is_none_or(|ch| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                ')' | ']' | '）' | '】' | ',' | '!' | '?' | '，' | '。' | '！' | '？' | '、' | '：'
+            )
+    }) || tail
+        .strip_prefix('.')
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
 }
 
 /// Removes direct browser management tools when the host did not inject an enabled browser runtime.

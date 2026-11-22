@@ -258,3 +258,33 @@ pub struct McpServiceIssuedToken {
     /// Bearer 令牌；服务只保留其摘要。
     pub token: String,
 }
+/// Model-facing visibility and project scope for a configured MCP server.
+/// 已配置 MCP 服务器面向模型的公开模式和项目范围。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerAccessEntry {
+    /// Whether to include the server's tool schemas in each request.
+    /// 是否在每次请求中包含服务器的工具 Schema。
+    pub exposure: McpToolExposureEntry,
+    /// Projects that may use this server.
+    /// 可以使用此服务器的项目。
+    pub projects: McpProjectScopeEntry,
+    /// User-authored guidance on when to use this server.
+    /// 用户填写的服务器使用时机说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_hint: Option<String>,
+}
+
+/// Wire representation of model-facing MCP tool exposure.
+/// 面向模型的 MCP 工具公开模式的线协议表示。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpToolExposureEntry {
+    /// Discover on demand.
+    /// 按需发现。
+    #[default]
+    Implicit,
+    /// Include complete tool definitions in the request.
+    /// 在请求中包含完整工具定义。
+    Explicit,
+}

@@ -34,13 +34,18 @@ describe("MCP runtime inspection boundary", () => {
     const root = createRoot(container)
     const config = { ...createMcpDraft(null), id: "fixture", name: "Fixture" } as McpServerSummary
     const diagnostics = vi.fn()
+    // The direct switch must only send the stable ID and desired enabled state.
+    // 详情页开关只发送稳定 ID 和目标启用状态。
+    const setEnabled = vi.fn(async () => undefined)
     document.body.append(container)
     // click selects a visible action by its exact display text.
     // click 按精确展示文案选择可见动作。
     const click = async (text: string) => act(async () => { Array.from(container.querySelectorAll("button")).find(button => button.textContent === text)?.click() })
     try {
-      await act(async () => root.render(<McpSettingsArea servers={[config]} actions={{ onSaveMcpServer: vi.fn(), onRemoveMcpServer: vi.fn() }} logs={[{ id: "global", source: "mcp", message: "GLOBAL_SECRET_LOG", level: "info" } as never]} modules={[]} startup={{ steps: [] } as unknown as StartupSnapshot} onOpenDiagnostics={diagnostics} />))
+      await act(async () => root.render(<McpSettingsArea servers={[config]} projects={[]} actions={{ onSaveMcpServer: vi.fn(), onRemoveMcpServer: vi.fn(), onSetMcpServerEnabled: setEnabled }} logs={[{ id: "global", source: "mcp", message: "GLOBAL_SECRET_LOG", level: "info" } as never]} modules={[]} startup={{ steps: [] } as unknown as StartupSnapshot} onOpenDiagnostics={diagnostics} />))
       expect(container.textContent).toContain("已连接")
+      await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"]')!.click())
+      expect(setEnabled).toHaveBeenCalledExactlyOnceWith("fixture", false)
       expect(service.capabilities).not.toHaveBeenCalled()
       await click("工具")
       expect(container.querySelector(".mcp-schema")).toBeNull()

@@ -7,6 +7,18 @@ import { readLocaleMessage, type Translate } from "@/i18n"
 const zh: Translate = key => readLocaleMessage("zh-CN", key)
 
 describe("MCP exact configuration editing", () => {
+  it("defaults to implicit exposure and requires project IDs for a selected scope", () => {
+    // The draft uses the same access object sent by the settings dialog.
+    // 草稿使用与设置弹窗发送的相同访问对象。
+    const draft = createMcpDraft(null)
+    Object.assign(draft, { name: "fixture", command: "node" })
+    expect(draft.access).toEqual({ exposure: "implicit", projects: { mode: "all" } })
+    draft.access = { exposure: "explicit", projects: { mode: "selected", projectIds: [] } }
+    expect(validateMcpDraft(draft, zh)).not.toBeNull()
+    draft.access.projects = { mode: "selected", projectIds: ["project-uuid"] }
+    expect(validateMcpDraft(draft, zh)).toBeNull()
+  })
+
   it("preserves argument boundaries, whitespace and empty arguments", () => {
     // draft is synthetic and never passed to a real service.
     // draft 是合成数据，不会传给真实服务。

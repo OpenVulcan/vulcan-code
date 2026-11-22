@@ -131,6 +131,7 @@ import {
   saveProviderRequestTraceSettings,
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
+  setMcpServerEnabled,
   savePromptAnswerMode,
   saveSessionTitleGeneration,
   saveToolChainSettings,
@@ -846,6 +847,7 @@ export function WorkbenchLayout(props: {
   const luaSkillActions = React.useMemo<SkillActionProps>(() => ({
     ...luaSkillCatalogActions,
     onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
+    onSetMcpServerEnabled: (serverId, enabled) => applySkillWorkbenchAction(() => setMcpServerEnabled(serverId, enabled)),
     onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
   }), [applySkillWorkbenchAction, luaSkillCatalogActions]);
   // handleWorkbenchProjectMenuAction owns the UI-only terminal entry before delegating persisted actions.

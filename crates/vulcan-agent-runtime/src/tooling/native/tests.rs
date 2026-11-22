@@ -127,6 +127,7 @@ fn native_catalog_registers_browser_and_file_tools() {
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     let catalog = build_native_tool_catalog(
         &config,

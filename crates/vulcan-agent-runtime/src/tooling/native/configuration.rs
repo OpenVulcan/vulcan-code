@@ -8,6 +8,7 @@
 //! 保存变更时按名称从 Vulcan 环境变量读取。
 
 use super::*;
+use crate::provider_config::PersistedMcpToolExposure;
 use vulcan_provider_adapters::{CustomProviderAuthentication, CustomProviderProtocol};
 
 /// Stable identifier of the tool that manages configured MCP servers.
@@ -79,9 +80,15 @@ pub enum McpConfigRequest {
         /// Display name; required when creating.
         /// 显示名称；创建时必填。
         name: Option<String>,
-        /// Whether every session loads the server; a new server stays disabled when absent.
-        /// 是否所有会话都加载该服务器；新服务器缺省时保持停用。
+        /// Whether the server is enabled; a new server stays disabled when absent.
+        /// 服务器是否启用；新服务器缺省时保持停用。
         enabled: Option<bool>,
+        /// Tool exposure requested by the user; new servers default to implicit.
+        /// 用户要求的工具公开模式；新服务器默认隐式。
+        exposure: Option<PersistedMcpToolExposure>,
+        /// Optional guidance used for discovery; an empty string clears it.
+        /// 可选的发现说明；空字符串清除说明。
+        usage_hint: Option<String>,
         /// `stdio`, `http` or `sse`; required when creating.
         /// `stdio`、`http` 或 `sse`；创建时必填。
         transport: Option<String>,
@@ -215,11 +222,11 @@ pub(crate) fn build_mcp_config_tool() -> Arc<NativeToolDefinition> {
     build_configuration_tool(
         MCP_CONFIG_TOOL_ID,
         String::from(
-            "Manage the user's configured MCP servers, which load in every session of every project. Use it when the user asks to add, change, enable or remove a server; for a one-off use, open a temporary connection with `mcp_connect` instead.\n\
+            "Manage the user's configured MCP servers. Use it when the user asks to add, change, enable or remove a server; for a one-off use, open a temporary connection with `mcp_connect` instead.\n\
 - `list`: the configured servers and their state, without secrets.\n\
-- `save`: create a server (`name`, `transport`, and `command`/`args`/`cwd`/`env_passthrough` for stdio or `url`/`headers_from_env` for http/sse), or update the one named by `server_id`; omitted fields keep their value. A new server stays disabled unless `enabled` is true.\n\
+- `save`: create a server (`name`, `transport`, and `command`/`args`/`cwd`/`env_passthrough` for stdio or `url`/`headers_from_env` for http/sse), or update the one named by `server_id`; omitted fields keep their value. A new server defaults to implicit exposure and stays disabled unless `enabled` is true. Set `exposure` to `explicit` when requested. For implicit servers, write a brief `usage_hint` describing when to use the server if its purpose is known. Pass an empty string to clear the hint.\n\
 - `remove`: delete the server `server_id`.\n\
-The user sees every change and approves it unless the session has full access. Secrets never go in the arguments: name environment variables with `env_passthrough` or `headers_from_env`, and ask the user for missing ones with `env` action `request` (scope `global`, since configured servers only see global variables). Tokens, literal headers and OAuth settings are kept as the user set them and can only be changed in the settings page. Tools of a newly enabled server appear from the next turn.",
+The user sees every change and approves it unless the session has full access. Secrets never go in the arguments: name environment variables with `env_passthrough` or `headers_from_env`, and ask the user for missing ones with `env` action `request` (scope `global`, since configured servers only see global variables). Tokens, literal headers and OAuth settings are kept as the user set them and can only be changed in the settings page. Use `mcp_tools` to discover enabled implicit servers in the current project.",
         ),
         mcp_config_args_schema(),
     )
@@ -276,7 +283,9 @@ fn mcp_config_args_schema() -> Value {
             },
             "server_id": { "type": "string", "description": "save: server to update (omit to create); remove: server to delete." },
             "name": { "type": "string", "description": "save: display name; required when creating." },
-            "enabled": { "type": "boolean", "description": "save: whether every session loads the server." },
+            "enabled": { "type": "boolean", "description": "save: enable the server for its configured scope." },
+            "exposure": { "type": "string", "enum": ["implicit", "explicit"], "description": "save: tool visibility. New servers default to implicit; updates preserve the existing mode when omitted." },
+            "usage_hint": { "type": "string", "description": "save: short explanation of when to use an implicit server. Omit to preserve the current hint; empty clears it." },
             "transport": {
                 "type": "string",
                 "enum": ["stdio", "http", "sse"],

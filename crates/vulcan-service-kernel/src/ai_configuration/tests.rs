@@ -12,6 +12,7 @@ fn configuration_with_remote_server() -> ProviderConfigurationFile {
         PersistedMcpServerEntry {
             name: String::from("Docs"),
             enabled: true,
+            access: Default::default(),
             transport: PersistedMcpTransportKind::Http,
             command: String::new(),
             args: Vec::new(),
@@ -72,6 +73,8 @@ fn new_servers_stay_disabled_unless_enabled() {
     .expect("a complete stdio server should plan");
     assert_eq!(plan.server_id, "local-files");
     assert!(!plan.after.enabled);
+    assert_eq!(plan.after.access.exposure.label(), "implicit");
+    assert!(plan.after.access.usage_hint().is_none());
     let preview = plan.preview();
     assert_eq!(preview.action, "create");
     assert!(preview.notices.is_empty());
@@ -86,6 +89,76 @@ fn new_servers_stay_disabled_unless_enabled() {
     )
     .expect("an enabled stdio server should plan");
     assert_eq!(enabled.preview().notices, ["activates_for_all_sessions"]);
+}
+
+/// Exercises both AI exposure modes and optional guidance through the configuration planner.
+/// 通过配置规划验证 AI 的两种公开模式及可选使用说明。
+#[test]
+fn ai_can_create_and_change_mcp_exposure_and_guidance() {
+    // A create may explicitly request either mode and can supply guidance for later implicit use.
+    // 创建可以要求任意公开模式，并可为后续隐式使用提供说明。
+    let mut configuration = ProviderConfigurationFile::default();
+    let created = plan_mcp_save(
+        &configuration,
+        &save(json!({
+            "action": "save", "name": "Fixture", "transport": "stdio", "command": "fixture",
+            "exposure": "explicit", "usage_hint": " Search versioned documentation. ",
+        })),
+    )
+    .unwrap();
+    assert_eq!(created.after.access.exposure.label(), "explicit");
+    assert_eq!(
+        created.after.access.usage_hint(),
+        Some("Search versioned documentation.")
+    );
+    assert!(changed_fields(&created).contains(&"usage_hint".to_owned()));
+    configuration
+        .mcp
+        .servers
+        .insert(created.server_id.clone(), created.after);
+
+    // Switching mode preserves omitted guidance and does not change the project scope.
+    // 切换模式保留省略的说明，并且不改动项目范围。
+    let switched = plan_mcp_save(
+        &configuration,
+        &save(json!({
+            "action": "save", "server_id": "fixture", "exposure": "implicit",
+        })),
+    )
+    .unwrap();
+    assert_eq!(switched.after.access.exposure.label(), "implicit");
+    assert_eq!(
+        switched.after.access.usage_hint(),
+        Some("Search versioned documentation.")
+    );
+    assert_eq!(changed_fields(&switched), ["exposure"]);
+    configuration
+        .mcp
+        .servers
+        .insert(switched.server_id.clone(), switched.after);
+    let cleared = plan_mcp_save(
+        &configuration,
+        &save(json!({
+            "action": "save", "server_id": "fixture", "usage_hint": "  ",
+        })),
+    )
+    .unwrap();
+    assert!(cleared.after.access.usage_hint().is_none());
+    assert_eq!(cleared.after.access.exposure.label(), "implicit");
+    assert_eq!(changed_fields(&cleared), ["usage_hint"]);
+    configuration
+        .mcp
+        .servers
+        .insert(cleared.server_id.clone(), cleared.after);
+    let made_explicit = plan_mcp_save(
+        &configuration,
+        &save(json!({
+            "action": "save", "server_id": "fixture", "exposure": "explicit",
+        })),
+    )
+    .unwrap();
+    assert_eq!(made_explicit.after.access.exposure.label(), "explicit");
+    assert_eq!(changed_fields(&made_explicit), ["exposure"]);
 }
 
 /// Updates keep omitted fields and hidden values, and list only the fields that change.

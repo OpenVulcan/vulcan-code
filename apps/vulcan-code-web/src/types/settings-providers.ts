@@ -245,9 +245,26 @@ export interface KeyValueSummary {
   value: string;
 }
 
+// McpServerAccess specifies model exposure and project scope for one saved server.
+// McpServerAccess 指定单个已保存服务器的模型公开模式和项目范围。
+export interface McpServerAccess {
+  // Whether the model discovers tools or receives their schemas directly.
+  // 模型按需发现工具，或直接接收工具 Schema。
+  exposure: "implicit" | "explicit";
+  // Project IDs derive from the workbench's registered projects.
+  // 项目标识来自工作台的已登记项目。
+  projects: import("./mcp-service").McpProjectScopeEntry;
+  // Optional guidance surfaced only when the server uses implicit exposure.
+  // 可选的使用说明，仅在服务器使用隐式模式时提供给模型。
+  usageHint?: string;
+}
+
 // McpServerSummary describes one persisted MCP server.
 // McpServerSummary 描述单个持久化 MCP 服务器。
 export interface McpServerSummary {
+  // Model exposure and project scope from the saved server.
+  // 已保存服务器的模型公开模式与项目范围。
+  access: McpServerAccess;
   // Stable server identifier.
   // 稳定服务器标识。
   id: string;

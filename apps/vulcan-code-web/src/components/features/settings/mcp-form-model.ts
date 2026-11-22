@@ -7,6 +7,13 @@ import { formatMessage, type Translate } from "@/i18n"
 export function createMcpDraft(server: McpServerSummary | null): McpServerSaveRequest {
   return {
     serverId: server?.id ?? null, name: server?.name ?? "", enabled: server?.enabled ?? true,
+    access: {
+      exposure: server?.access.exposure ?? "implicit",
+      usageHint: server?.access.usageHint,
+      projects: server?.access.projects.mode === "selected"
+        ? { mode: "selected", projectIds: [...server.access.projects.projectIds] }
+        : { mode: "all" },
+    },
     transport: server?.transport ?? "stdio", command: server?.command ?? "", args: [...(server?.args ?? [])],
     url: server?.url ?? "", bearerToken: server?.bearerToken ?? "", headers: (server?.headers ?? []).map(row => ({ ...row })),
     headersFromEnv: (server?.headersFromEnv ?? []).map(row => ({ ...row })), oauthEnabled: server?.oauthEnabled ?? false, oauthClientId: server?.oauthClientId ?? "",
@@ -40,6 +47,7 @@ export function validateMcpPairs(rows: Array<{ key: string; value: string }>, la
 // validateMcpDraft 仅校验所选传输类型，不拆分参数字符串。
 export function validateMcpDraft(draft: McpServerSaveRequest, t: Translate): string | null {
   if (!draft.name.trim()) return t("settings.mcp.nameIsRequired")
+  if (draft.access.projects.mode === "selected" && draft.access.projects.projectIds.length === 0) return t("mcpService.field.projectsRequired")
   if (!["stdio", "http", "sse"].includes(draft.transport)) return t("settings.mcp.invalidTransport")
   if (draft.transport === "stdio") {
     if (!draft.command.trim()) return t("settings.mcp.executableIsRequired")

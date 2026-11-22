@@ -42,6 +42,9 @@ pub(super) struct McpServerSaveRequest {
     /// Whether the server should be registered by the runtime.
     /// 该服务器是否应由运行时注册。
     enabled: bool,
+    /// Model exposure and project scope, or absent when the client does not edit them.
+    /// 模型公开模式与项目范围，客户端未编辑时缺省。
+    access: Option<vulcan_provider_config::config::PersistedMcpServerAccess>,
     /// Transport key such as `stdio`, `http`, or `sse`.
     /// 传输键，例如 `stdio`、`http` 或 `sse`。
     transport: String,
@@ -116,11 +119,17 @@ pub(super) async fn service_save_mcp_server_configuration(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .is_none();
-    let (server_id, entry) = mcp_server_entry_from_request(request)?;
+    let access_sent = request.access.is_some();
+    let (server_id, mut entry) = mcp_server_entry_from_request(request)?;
     commit_mcp_configuration_change(
         &app,
         &state,
         |configuration| {
+            // An older settings client cannot widen a saved project restriction by omitting it.
+            // 旧版设置客户端省略项目限制时，不得扩大已保存的使用范围。
+            if !access_sent && let Some(saved) = configuration.mcp.servers.get(&server_id) {
+                entry.access = saved.access.clone();
+            }
             apply_mcp_server_entry_to_configuration(
                 configuration,
                 server_id,
@@ -129,6 +138,31 @@ pub(super) async fn service_save_mcp_server_configuration(
             )
         },
         "Failed to save the MCP server",
+    )
+    .await
+}
+
+/// Updates only the enabled state of the selected server, preserving its credentials and settings.
+/// 仅更新所选服务器的启用状态，保留其凭据与配置。
+pub(super) async fn service_set_mcp_server_enabled(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    server_id: String,
+    enabled: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    commit_mcp_configuration_change(
+        &app,
+        &state,
+        |configuration| {
+            let server = configuration
+                .mcp
+                .servers
+                .get_mut(&server_id)
+                .ok_or_else(|| String::from("MCP server not found."))?;
+            server.enabled = enabled;
+            Ok(())
+        },
+        "Failed to update the MCP server",
     )
     .await
 }
@@ -353,6 +387,21 @@ pub(super) fn mcp_server_entry_from_request(
         .unwrap_or_else(|| stable_identifier_from_label(name));
     let transport = parse_mcp_transport(&request.transport)?;
     let oauth = mcp_oauth_config_from_request(&request);
+    // A selected scope never falls back to global, even if every selected project is removed.
+    // 指定项目范围永不回退为全局，即使所选项目均已移除。
+    let mut access = request.access.unwrap_or_default();
+    access.usage_hint = access.usage_hint().map(str::to_owned);
+    if let vulcan_provider_config::config::McpProjectScope::Selected { project_ids } =
+        &access.projects
+        && (project_ids.is_empty()
+            || project_ids
+                .iter()
+                .any(|id| id.is_empty() || id.trim() != id))
+    {
+        return Err(String::from(
+            "Select at least one valid project for this MCP server.",
+        ));
+    }
     match transport {
         PersistedMcpTransportKind::Stdio => {
             let command = request.command.trim();
@@ -364,6 +413,7 @@ pub(super) fn mcp_server_entry_from_request(
                 PersistedMcpServerEntry {
                     name: name.to_string(),
                     enabled: request.enabled,
+                    access,
                     transport,
                     command: command.to_string(),
                     // Preserve exact argv boundaries, including intentional whitespace and empty arguments.
@@ -407,6 +457,7 @@ pub(super) fn mcp_server_entry_from_request(
                 PersistedMcpServerEntry {
                     name: name.to_string(),
                     enabled: request.enabled,
+                    access,
                     transport,
                     command: String::new(),
                     args: Vec::new(),

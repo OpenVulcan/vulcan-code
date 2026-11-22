@@ -3,7 +3,8 @@
 
 use crate::agent_profile::{AgentProfileCatalog, UserAgentProfile, is_reserved_agent_identifier};
 use crate::provider_config::{
-    PersistedSkillEntry, PersistedSkillKind, PersistedToolPolicyEntry, ProviderConfigurationFile,
+    PersistedMcpServerAccess, PersistedSkillEntry, PersistedSkillKind, PersistedToolPolicyEntry,
+    ProviderConfigurationFile,
 };
 use crate::runtime_assets;
 use std::collections::BTreeMap;
@@ -313,6 +314,9 @@ pub struct AgentRuntimeConfig {
     /// Enabled MCP server identifiers.
     /// 已启用的 MCP 服务器标识集合。
     pub enabled_mcp_server_ids: Vec<String>,
+    /// Access policy from each enabled user-configured server, keyed by stable server ID.
+    /// 按稳定服务器 ID 保存每个启用的用户配置服务器的访问策略。
+    pub configured_mcp_access: BTreeMap<String, PersistedMcpServerAccess>,
 }
 
 impl AgentRuntimeConfig {
@@ -377,6 +381,13 @@ impl AgentRuntimeConfig {
             tool_policies,
             configured_mcp_server_ids,
             enabled_mcp_server_ids,
+            configured_mcp_access: config
+                .mcp
+                .servers
+                .iter()
+                .filter(|(_, server)| server.enabled)
+                .map(|(id, server)| (id.clone(), server.access.clone()))
+                .collect(),
         }
     }
 }

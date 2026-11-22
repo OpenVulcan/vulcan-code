@@ -248,6 +248,8 @@ fn mcp_entry_fields(entry: &PersistedMcpServerEntry) -> FieldValues {
     vec![
         ("name", Some(entry.name.clone())),
         ("enabled", Some(entry.enabled.to_string())),
+        ("exposure", Some(entry.access.exposure.label().to_owned())),
+        ("usage_hint", entry.access.usage_hint().map(str::to_owned)),
         (
             "transport",
             Some(transport_label(&entry.transport).to_string()),
@@ -351,6 +353,8 @@ fn plan_mcp_save(
         server_id,
         name,
         enabled,
+        exposure,
+        usage_hint,
         transport,
         command,
         args,
@@ -416,6 +420,18 @@ fn plan_mcp_save(
     let enabled = enabled
         .or_else(|| before.as_ref().map(|entry| entry.enabled))
         .unwrap_or(false);
+    // Transport changes preserve access policy. Only explicit save fields update exposure or guidance.
+    // 传输变化保留访问策略，仅显式保存字段更新公开模式或说明。
+    let mut access = before
+        .as_ref()
+        .map(|entry| entry.access.clone())
+        .unwrap_or_default();
+    if let Some(exposure) = exposure {
+        access.exposure = *exposure;
+    }
+    if let Some(hint) = usage_hint {
+        access.usage_hint = trim_to_option(hint);
+    }
     let names = |values: &[String]| -> Vec<String> {
         values
             .iter()
@@ -436,6 +452,7 @@ fn plan_mcp_save(
         PersistedMcpServerEntry {
             name,
             enabled,
+            access,
             transport,
             command,
             // Arguments keep their exact boundaries, like the settings page keeps them.
@@ -495,6 +512,7 @@ fn plan_mcp_save(
         PersistedMcpServerEntry {
             name,
             enabled,
+            access,
             transport,
             command: String::new(),
             args: Vec::new(),
@@ -575,6 +593,8 @@ fn list_mcp_servers(state: &SharedServiceBridgeState) -> Result<ConfigurationOut
                 "serverId": server_id,
                 "name": entry.name,
                 "enabled": entry.enabled,
+                "exposure": entry.access.exposure.label(),
+                "usageHint": entry.access.usage_hint(),
                 "transport": transport_label(&entry.transport),
                 "command": (!entry.command.is_empty()).then_some(&entry.command),
                 "args": entry.args,

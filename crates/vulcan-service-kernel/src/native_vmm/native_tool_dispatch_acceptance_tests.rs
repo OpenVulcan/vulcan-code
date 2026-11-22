@@ -63,6 +63,7 @@ fn manager(
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         None,
         project_policy,
         VmmConfigLayer::default(),
@@ -133,6 +134,7 @@ pub(super) async fn verify(
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     // global freezes actual native ownership and the same project as the extracted source records.
     // global 冻结实际原生归属，以及与提炼来源记录相同的项目。

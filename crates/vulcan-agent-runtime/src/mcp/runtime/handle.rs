@@ -188,6 +188,7 @@ fn prepare_mcp_runtime(
             }
         }),
         transports: RwLock::new(BTreeMap::new()),
+        revoked_servers: RwLock::new(Default::default()),
         launch_inputs: RwLock::new(BTreeMap::new()),
         cleanup_observations: RwLock::new(BTreeMap::new()),
         resource_releases: RwLock::new(BTreeMap::new()),
@@ -353,6 +354,9 @@ struct McpRuntimeInner {
     /// Same-instance business admission is independent from irreversible shutdown and lease revocation.
     /// 同实例业务入场独立于不可逆关闭及租约撤销。
     business_gate: RwLock<McpBusinessGate>,
+    /// Server IDs whose historical bindings were withdrawn by a user access update.
+    /// 因用户修改访问设置而撤销历史绑定的服务器 ID。
+    revoked_servers: RwLock<std::collections::BTreeSet<String>>,
     /// Explicit admission intent fixes whether this exact instance may restart.
     /// 显式入场用途固定此精确实例是否允许重启。
     purpose: McpRuntimePurpose,
@@ -725,6 +729,12 @@ impl McpRuntimeHandle {
         if *business != McpBusinessGate::Open {
             return None;
         }
+        // Hold revocation admission through the clone of the actual transport.
+        // 保持撤销准入锁，直到克隆实际传输。
+        let revoked = self.inner.revoked_servers.read().ok()?;
+        if revoked.contains(server_id) {
+            return None;
+        }
         // Keep transport registration locked until this call retains its actual resource.
         // 保持传输登记锁，直至此调用保留其实际资源。
         let transports = self
@@ -736,6 +746,60 @@ impl McpRuntimeHandle {
             return None;
         }
         transports.get(server_id).cloned()
+    }
+
+    /// Permanently withdraws these servers from this historical runtime's business admission.
+    /// 永久撤销这些服务器在当前历史运行时中的业务准入。
+    pub(super) fn revoke_servers(&self, server_ids: &[String]) {
+        self.inner
+            .revoked_servers
+            .write()
+            .expect("MCP server revocation lock poisoned")
+            .extend(server_ids.iter().cloned());
+    }
+
+    /// Reports whether a historical server binding has been withdrawn.
+    /// 返回历史服务器绑定是否已被撤销。
+    pub(super) fn server_revoked(&self, server_id: &str) -> bool {
+        self.inner
+            .revoked_servers
+            .read()
+            .map_or(true, |revoked| revoked.contains(server_id))
+    }
+
+    /// Returns current metadata from one approved binding, or none when its transport is unavailable.
+    /// 返回已授权绑定的实时元数据，传输不可用时返回空值。
+    pub(super) fn inspect_bound_tool(
+        &self,
+        server_id: &str,
+        tool_id: &str,
+    ) -> Option<McpRuntimeToolInspection> {
+        self.transport_for_server(server_id)?;
+        self.inner
+            .snapshot
+            .read()
+            .ok()?
+            .servers
+            .get(server_id)?
+            .visible_tool_descriptors()
+            .iter()
+            .find(|tool| tool.qualified_name() == tool_id)
+            .map(McpRuntimeToolDescriptor::inspection)
+    }
+
+    /// Reports whether this server has an admitted live transport.
+    /// 返回此服务器是否拥有允许调用的实时传输。
+    pub(super) fn server_available(&self, server_id: &str) -> bool {
+        self.transport_for_server(server_id).is_some()
+    }
+
+    /// Borrows the display name for the exact server in this runtime generation.
+    /// 从当前运行时代次借用精确服务器的显示名称。
+    pub(super) fn server_name(&self, server_id: &str) -> Option<&str> {
+        self.inner
+            .registry
+            .server_by_id(server_id)
+            .map(|server| server.name.as_str())
     }
 
     /// Resolves one configured server entry by identifier from the immutable registry snapshot.
@@ -3708,6 +3772,7 @@ mod optional_capability_tests {
             launch_source: crate::mcp::registry::McpPluginLaunchSource::Unproven,
             purpose: McpRuntimePurpose::Managed,
             business_gate: RwLock::new(McpBusinessGate::Open),
+            revoked_servers: RwLock::new(Default::default()),
             transports: RwLock::new(BTreeMap::new()),
             launch_inputs: RwLock::new(BTreeMap::new()),
             cleanup_observations: RwLock::new(BTreeMap::new()),

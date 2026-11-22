@@ -683,6 +683,27 @@ pub(crate) fn mcp_servers(
         .servers
         .iter()
         .map(|(server_id, entry)| McpServerSummary {
+            access: vulcan_service_api::McpServerAccessEntry {
+                usage_hint: entry.access.usage_hint().map(str::to_owned),
+                exposure: match entry.access.exposure {
+                    vulcan_provider_config::config::PersistedMcpToolExposure::Implicit => {
+                        vulcan_service_api::McpToolExposureEntry::Implicit
+                    }
+                    vulcan_provider_config::config::PersistedMcpToolExposure::Explicit => {
+                        vulcan_service_api::McpToolExposureEntry::Explicit
+                    }
+                },
+                projects: match &entry.access.projects {
+                    vulcan_provider_config::config::McpProjectScope::All => {
+                        vulcan_service_api::McpProjectScopeEntry::All
+                    }
+                    vulcan_provider_config::config::McpProjectScope::Selected { project_ids } => {
+                        vulcan_service_api::McpProjectScopeEntry::Selected {
+                            project_ids: project_ids.clone(),
+                        }
+                    }
+                },
+            },
             id: server_id.clone(),
             name: entry.name.clone(),
             enabled: entry.enabled,

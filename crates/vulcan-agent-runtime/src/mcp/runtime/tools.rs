@@ -1020,6 +1020,13 @@ impl McpRuntimeAccess {
                 continue;
             }
             for mut view in lease.runtime.available_tool_views_filtered(allowlist) {
+                if view
+                    .origin_tool_id()
+                    .split_once('/')
+                    .is_some_and(|(id, _)| lease.runtime.server_revoked(id))
+                {
+                    continue;
+                }
                 let public_name =
                     allocate_unique_public_tool_name(view.id(), &mut occupied_public_names);
                 view.id = public_name.clone();
@@ -2278,6 +2285,24 @@ impl McpRuntimeAccess {
         Ok(())
     }
 
+    /// Revokes changed server IDs on all prior user runtimes while keeping this published one available.
+    /// 在所有旧用户运行时撤销已变更的服务器 ID，同时保留当前发布的运行时可用。
+    pub fn revoke_prior_user_servers(&self, server_ids: &[String]) {
+        if server_ids.is_empty() {
+            return;
+        }
+        let current = self.live_partitions.get("user");
+        let admission = self
+            .blocked_owner_plugins
+            .lock()
+            .expect("User MCP admission is poisoned");
+        for runtime in &admission.user_instances {
+            if current.is_none_or(|lease| !runtime.same_instance(&lease.runtime)) {
+                runtime.revoke_servers(server_ids);
+            }
+        }
+    }
+
     /// Requests only the stable user-configured runtime partition to stop.
     /// 仅请求稳定的用户配置运行时分区停止。
     pub fn shutdown_user_partition(&self) {
@@ -2684,6 +2709,12 @@ impl McpRuntimeToolBinding {
             .filter(|server_id| !server_id.is_empty())
     }
 
+    /// Returns the display name associated with the bound server ID.
+    /// 返回绑定服务器 ID 对应的显示名称。
+    pub(crate) fn server_name(&self) -> Option<&str> {
+        self.runtime.runtime.server_name(self.server_id()?)
+    }
+
     /// Returns the source MCP tool name parsed from the original tool id.
     /// 返回从原始工具标识解析出的来源 MCP 工具名称。
     pub fn origin_tool_name(&self) -> Option<&str> {
@@ -2692,6 +2723,26 @@ impl McpRuntimeToolBinding {
             .split_once('/')
             .map(|(_, tool_name)| tool_name)
             .filter(|tool_name| !tool_name.is_empty())
+    }
+
+    /// Reads the exact bound tool without allowing a newer transport or a revoked server to replace it.
+    /// 读取精确绑定的工具，禁止较新运行时或已撤销服务器替换它。
+    pub(crate) fn inspection(&self) -> Option<McpRuntimeToolInspection> {
+        if self.runtime.is_revoked() {
+            return None;
+        }
+        self.runtime
+            .runtime
+            .inspect_bound_tool(self.server_id()?, self.origin_tool_id())
+    }
+
+    /// Reports whether the bound server still admits calls from this generation.
+    /// 返回绑定服务器是否仍允许此代次发起调用。
+    pub(crate) fn inspection_available(&self) -> bool {
+        !self.runtime.is_revoked()
+            && self
+                .server_id()
+                .is_some_and(|id| self.runtime.runtime.server_available(id))
     }
 
     /// Invokes an owner-scoped binding through the current exact owner lease.

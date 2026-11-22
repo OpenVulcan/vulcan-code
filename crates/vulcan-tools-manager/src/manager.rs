@@ -17,6 +17,9 @@ pub struct VulcanToolsManager {
     /// Policy-filtered plugin targets indexed by prompt skill and action.
     /// 按提示词技能与动作索引、已通过策略筛选的插件目标。
     skill_actions: std::collections::BTreeMap<(String, String), ResolvedToolDefinition>,
+    /// Policy-filtered MCP targets keyed by configured server ID and original tool name.
+    /// 按已配置服务器 ID 和原工具名索引、经过策略筛选的 MCP 目标。
+    configured_mcp_actions: std::collections::BTreeMap<(String, String), ResolvedToolDefinition>,
     /// Host capture of the current browser selection for one trusted session.
     /// 宿主为可信会话捕获当前浏览器选择的回调。
     browser_target: Option<Arc<BrowserTargetCapture>>,
@@ -34,6 +37,7 @@ impl VulcanToolsManager {
             candidates: normalize_candidate_public_tool_names(candidates),
             workspace_root: None,
             skill_actions: Default::default(),
+            configured_mcp_actions: Default::default(),
             browser_target: None,
         }
     }
@@ -84,6 +88,35 @@ impl VulcanToolsManager {
             .map(|((_, action), definition)| (action.as_str(), definition))
     }
 
+    /// Stores approved MCP actions without exposing their schemas as Provider functions.
+    /// 保存已获准的 MCP 动作，其 Schema 不作为供应商函数公开。
+    pub fn set_configured_mcp_actions(&mut self, actions: Vec<ResolvedToolDefinition>) {
+        self.configured_mcp_actions = actions
+            .into_iter()
+            .map(|definition| {
+                let origin = definition.descriptor.origin();
+                (
+                    (
+                        origin.namespace().to_owned(),
+                        origin.original_name().to_owned(),
+                    ),
+                    definition,
+                )
+            })
+            .collect();
+    }
+
+    /// Resolves the exact action admitted for the configured MCP server.
+    /// 解析已配置 MCP 服务器的精确获准动作。
+    pub fn configured_mcp_action(
+        &self,
+        server_id: &str,
+        tool: &str,
+    ) -> Option<&ResolvedToolDefinition> {
+        self.configured_mcp_actions
+            .get(&(server_id.to_owned(), tool.to_owned()))
+    }
+
     /// Installs the host callback for browser selection capture and returns the manager.
     /// 安装浏览器选择捕获的宿主回调并返回管理器。
     pub fn with_browser_target(
@@ -105,9 +138,10 @@ impl VulcanToolsManager {
 
     /// Returns all admitted action descriptors for durable child tool admission.
     /// 返回所有已获准的动作描述，用于固化子代理工具准入。
-    pub fn skill_action_descriptors(&self) -> impl Iterator<Item = &VulcanToolDescriptor> {
+    pub fn indirect_action_descriptors(&self) -> impl Iterator<Item = &VulcanToolDescriptor> {
         self.skill_actions
             .values()
+            .chain(self.configured_mcp_actions.values())
             .map(|definition| &definition.descriptor)
     }
 

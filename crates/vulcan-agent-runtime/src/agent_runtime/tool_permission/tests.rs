@@ -229,6 +229,7 @@ fn native_catalog_has_explicit_permission_classifications() {
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        configured_mcp_access: Default::default(),
     };
     // The non-optional registrations require no plugin or live LuaSkills host.
     // 非可选注册项无需插件或正在运行的 LuaSkills 宿主。

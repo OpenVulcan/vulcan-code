@@ -41,7 +41,9 @@
 1. **`mcp_config`。** `list` 返回已配置服务器及其实时状态与工具数；`save` 不带 `server_id` 时创建（`name`、
    `transport` 必填，标识由名称派生，重名拒绝），带 `server_id` 时更新，省略的字段保持原值；`remove` 移除。
    新服务器缺省为停用，只有显式 `enabled: true` 才启用。在 stdio 与 http/sse 之间切换时清空另一族字段并提示
-   `drops_secret_fields`。已启用服务器的工具从下一轮起进入会话（工具清单按执行快照）。
+   `drops_secret_fields`。新服务器默认隐式，用户可以要求 AI 用 `exposure` 直接创建或切换为显式。
+   AI 知道用途时填写简短 `usage_hint`，省略保留原值，空字符串清除说明。AI 更新保留已保存的项目范围。
+   已启用服务器从后续请求按项目范围和公开模式生效，见 [已配置服务器的隐式调用](session-mcp.md#已配置服务器的隐式调用)。
 2. **`provider_config`。** `list` 返回接受 API Key 的供应商（含服务入口与凭据档）和全部连接（启用、待验证、默认）。
    仅限既有账号的供应商在本地保存了该供应商的连接时才列出。
    `add_connection` 为内置供应商添加 API Key 连接，入口或凭据档只有一个时可省略；`add_custom_provider` 添加兼容
@@ -58,7 +60,7 @@
 
 - 种类：`mcp_server`、`provider_connection`、`custom_provider`、`provider`
 - 动作：`create`、`update`、`remove`、`enable`、`disable`、`set_default`
-- 字段：`name`、`enabled`、`transport`、`command`、`args`、`cwd`、`env_passthrough`、`url`、`headers_from_env`、
+- 字段：`name`、`enabled`、`exposure`、`usage_hint`、`transport`、`command`、`args`、`cwd`、`env_passthrough`、`url`、`headers_from_env`、
   `provider`、`service_entry`、`credential_profile`、`api_key_env`、`base_url`、`protocols`、`model_discovery_protocol`、`authentication`、
   `default_connection`
 - 提示：`activates_for_all_sessions`、`deactivates_for_all_sessions`、`removes_for_all_sessions`、

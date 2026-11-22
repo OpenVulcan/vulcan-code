@@ -136,6 +136,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_run_git_commit_action",
     "service_run_git_pull_action",
     "service_save_mcp_server_configuration",
+    "service_set_mcp_server_enabled",
     "service_mcp_runtime_snapshot",
     "service_mcp_server_capabilities",
     "service_remove_mcp_server_configuration",
@@ -924,6 +925,15 @@ pub(super) async fn dispatch(
                 app,
                 state,
                 rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_set_mcp_server_enabled" => rpc_json_result(
+            service_set_mcp_server_enabled(
+                app,
+                state,
+                rpc_required_param(params, "serverId")?,
+                rpc_required_param(params, "enabled")?,
             )
             .await,
         ),

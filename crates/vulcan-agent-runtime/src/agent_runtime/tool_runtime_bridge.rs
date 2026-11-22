@@ -7,8 +7,8 @@ use crate::agent_runtime::tool_permission::{
 };
 use crate::model::SessionId;
 use crate::tooling::native::{
-    BROWSER_MCP_ORIGIN, BROWSER_PAGE_TARGET, TOOL_CALL_TOOL_ID, ToolCallArguments,
-    parse_prompt_skill_detail_tool_arguments,
+    BROWSER_MCP_ORIGIN, BROWSER_PAGE_TARGET, MCP_CALL_TOOL_ID, TOOL_CALL_TOOL_ID,
+    ToolCallArguments, configured_mcp_call, parse_prompt_skill_detail_tool_arguments,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -485,6 +485,12 @@ impl VulcanManagedToolRuntimeBridge {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<PreparedInvocationBinding, String> {
+        if let Some((_, action)) = self.resolve_configured_mcp_action(request) {
+            return Ok(PreparedInvocationBinding {
+                fingerprint: resolved_tool_binding_fingerprint(action)?,
+                browser_target: None,
+            });
+        }
         if let Some((_, action)) = self.resolve_skill_action(request) {
             // A recovered or delayed invocation must keep the browser selected at preparation.
             // 恢复或延后的调用必须保留准备时选中的浏览器。
@@ -538,6 +544,28 @@ impl VulcanManagedToolRuntimeBridge {
             .get(&stream)
             .map(|(_, binding)| binding.fingerprint.clone())
             .ok_or_else(|| String::from("Tool request has no prepared binding."))
+    }
+
+    /// Resolves a configured MCP call to its original target and inner arguments.
+    /// 将已配置 MCP 调用解析为原始目标及其内部参数。
+    pub(crate) fn resolve_configured_mcp_action(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Option<(Value, &ResolvedToolDefinition)> {
+        if request.tool_name != MCP_CALL_TOOL_ID
+            || request.argument_parse_error.is_some()
+            || !self
+                .definitions_by_id
+                .get(MCP_CALL_TOOL_ID)
+                .is_some_and(|definition| {
+                    definition.descriptor.source == VulcanToolSourceKind::Native
+                })
+        {
+            return None;
+        }
+        let (server, tool, arguments) = configured_mcp_call(&request.arguments)?;
+        let action = self.manager.configured_mcp_action(&server, &tool)?;
+        Some((arguments, action))
     }
 
     /// Resolves a valid dispatcher envelope to its frozen tool binding.
@@ -1575,6 +1603,20 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
                     self.invoke_skill_action(request, context),
                 )
                 .await
+        } else if let Some((arguments, action)) = self.resolve_configured_mcp_action(request) {
+            // Preserve the exact source descriptor through the ordinary permission and hook pipeline.
+            // 通过原有权限和 Hook 管线保留精确的来源描述符。
+            let raw_arguments = arguments.to_string();
+            self.invoke_definition(
+                action,
+                arguments,
+                PermissionTexts {
+                    raw_arguments: Some(&raw_arguments),
+                    user_request: request.user_request.text(),
+                },
+                context,
+            )
+            .await
         } else {
             self.invoke_definition(
                 definition,

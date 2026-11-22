@@ -261,6 +261,7 @@ mod tests {
         snapshot.status = McpRuntimeServerStatus::Connected;
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         let inner = Arc::new(McpRuntimeInner {
+            revoked_servers: RwLock::new(Default::default()),
             instance_id: uuid::Uuid::new_v4(),
             registry: McpServerRegistry::new(vec![server.clone()]),
             // Synthetic connection state cannot certify an actual full plugin source.

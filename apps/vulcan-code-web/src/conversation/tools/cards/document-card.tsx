@@ -155,13 +155,13 @@ const DOCUMENT_TOOLS: Readonly<Record<string, DocumentToolSpec>> = {
   mcp_tools: {
     family: "read",
     icon: Cable,
-    target: (input) => [field("connection_id")(input), field("tool")(input)].filter(Boolean).join(" · "),
+    target: (input) => [firstOf("server_name", "server_id", "connection_id")(input), field("tool")(input)].filter(Boolean).join(" · "),
     verb: "toolCard.doc.mcpTools",
   },
   mcp_call: {
     family: "run",
     icon: Cable,
-    target: (input) => [field("connection_id")(input), field("tool")(input)].filter(Boolean).join(" · "),
+    target: (input) => [firstOf("server_id", "connection_id")(input), field("tool")(input)].filter(Boolean).join(" · "),
     verb: "toolCard.doc.mcpCall",
   },
   mcp_config: {

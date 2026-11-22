@@ -752,6 +752,23 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change_with_persistence
         // retiredMcpRuntime keeps the replaced user partition addressable only for existing generation owners during drain.
         // retiredMcpRuntime 仅在排空期间为既有代次持有者保留被替换用户分区的可寻址性。
         let retired_mcp_runtime = expected.mcp_runtime();
+        // Changes to access must also stop new calls from already prepared turns.
+        // 访问变更还须拦截已准备回合发起的新调用。
+        let revoked_servers = agent_runtime
+            .provider_configuration
+            .mcp
+            .servers
+            .iter()
+            .filter(|(id, prior)| {
+                prior.enabled
+                    && provider_configuration
+                        .mcp
+                        .servers
+                        .get(*id)
+                        .is_none_or(|next| !next.enabled || next.access != prior.access)
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
         // nextGeneration preserves the exact plugin catalog while atomically publishing the new user MCP partition.
         // nextGeneration 保留精确插件目录，同时原子发布新的用户 MCP 分区。
         let next_generation =
@@ -760,7 +777,11 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change_with_persistence
             &mut agent_runtime.extension_generation,
             &expected,
             next_generation,
-            |_| {},
+            |published| {
+                published
+                    .mcp_runtime()
+                    .revoke_prior_user_servers(&revoked_servers)
+            },
         )?;
         agent_runtime.provider_configuration = provider_configuration.clone();
         retired_mcp_runtime

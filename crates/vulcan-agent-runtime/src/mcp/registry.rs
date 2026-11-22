@@ -218,6 +218,7 @@ mod tests {
                     PersistedMcpServerEntry {
                         name: String::from("Configured Server"),
                         enabled: true,
+                        access: Default::default(),
                         transport: PersistedMcpTransportKind::Stdio,
                         command: String::from("configured-mcp"),
                         args: vec![String::from("--stdio")],

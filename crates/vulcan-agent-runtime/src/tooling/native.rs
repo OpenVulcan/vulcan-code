@@ -287,7 +287,8 @@ pub use session_mcp::{
     MCP_CALL_TOOL_ID, MCP_CONNECT_TOOL_ID, MCP_TOOLS_TOOL_ID, NativeSessionMcpAccess,
 };
 pub(crate) use session_mcp::{
-    build_mcp_call_tool, build_mcp_connect_tool, build_mcp_tools_tool, session_mcp_command_line,
+    build_mcp_call_tool, build_mcp_connect_tool, build_mcp_tools_tool, configured_mcp_call,
+    session_mcp_command_line,
 };
 pub(crate) use shell_command::*;
 pub use shell_command_live::{

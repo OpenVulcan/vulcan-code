@@ -518,6 +518,76 @@ pub struct PersistedMcpOAuthConfig {
     pub redirect_uri: Option<String>,
 }
 
+/// Controls whether a configured server's schemas are sent with every model request.
+/// 控制已配置服务器的 Schema 是否随每次模型请求一起发送。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PersistedMcpToolExposure {
+    /// Advertise the server and let the model discover tools and inspect schemas on demand.
+    /// 公布服务器，由模型按需发现工具和查看 Schema。
+    #[default]
+    Implicit,
+    /// Include each allowed tool directly in the provider request.
+    /// 将每个获准工具直接纳入供应商请求。
+    Explicit,
+}
+
+impl PersistedMcpToolExposure {
+    /// Returns the stable model-facing label of the exposure mode.
+    /// 返回公开模式面向模型的稳定标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Implicit => "implicit",
+            Self::Explicit => "explicit",
+        }
+    }
+}
+
+/// Model access settings for one user-configured MCP server.
+/// 单个用户配置 MCP 服务器的模型访问设置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersistedMcpServerAccess {
+    /// Model-facing tool exposure mode.
+    /// 面向模型的工具公开模式。
+    pub exposure: PersistedMcpToolExposure,
+    /// Exact projects in which this server is available.
+    /// 允许使用此服务器的精确项目范围。
+    pub projects: super::McpProjectScope,
+    /// User-authored description of when the model should discover this server's tools.
+    /// 用户填写的说明，告知模型何时查找此服务器的工具。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_hint: Option<String>,
+}
+
+impl PersistedMcpServerAccess {
+    /// Returns the usage hint as model guidance, omitting whitespace-only legacy values.
+    /// 返回面向模型的使用说明，忽略仅含空白的历史值。
+    pub fn usage_hint(&self) -> Option<&str> {
+        self.usage_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+    }
+
+    /// Keeps default exposure and scope out of persisted configuration until a user changes them.
+    /// 用户更改公开模式或项目范围之前，使默认值保持在内存中。
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Returns whether the trusted project ID belongs to this server's configured scope.
+    /// 返回可信项目 ID 是否属于此服务器配置的范围。
+    pub fn allows_project(&self, project_id: Option<&str>) -> bool {
+        match &self.projects {
+            super::McpProjectScope::All => true,
+            super::McpProjectScope::Selected { project_ids } => {
+                project_id.is_some_and(|id| project_ids.iter().any(|candidate| candidate == id))
+            }
+        }
+    }
+}
+
 /// One persisted MCP server entry stored in the shared configuration file.
 /// 存储在共享配置文件中的单个持久化 MCP 服务器条目。
 #[derive(Clone, Serialize, Deserialize)]
@@ -530,6 +600,10 @@ pub struct PersistedMcpServerEntry {
     /// 该服务器是否对运行时注册启用。
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Project scope and model tool exposure, defaulting to all projects and implicit discovery.
+    /// 项目范围与模型工具公开模式，默认全部项目及按需发现。
+    #[serde(default, skip_serializing_if = "PersistedMcpServerAccess::is_default")]
+    pub access: PersistedMcpServerAccess,
     /// Transport family used to start the server.
     /// 用于启动该服务器的传输类型。
     pub transport: PersistedMcpTransportKind,
@@ -593,6 +667,7 @@ impl fmt::Debug for PersistedMcpServerEntry {
             .debug_struct("PersistedMcpServerEntry")
             .field("name", &self.name)
             .field("enabled", &self.enabled)
+            .field("access", &self.access)
             .field("transport", &self.transport)
             .field("command", &self.command)
             .field("argument_count", &self.args.len())
@@ -769,6 +844,23 @@ impl Default for PersistedPromptConfiguration {
             output_style: PersistedPromptOutputStyleSelection::Balanced,
             answer_mode: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod mcp_access_tests {
+    use super::*;
+
+    /// Reads defaults from a legacy server without persisting an unsolicited access override.
+    /// 从旧服务器读取默认值，并确保不会保存未经用户选择的访问覆盖。
+    #[test]
+    fn configured_mcp_legacy_defaults_remain_in_memory() {
+        let entry: PersistedMcpServerEntry = serde_json::from_value(serde_json::json!({
+            "name": "Fixture", "transport": "stdio", "command": "node",
+        }))
+        .unwrap();
+        assert_eq!(entry.access, PersistedMcpServerAccess::default());
+        assert!(serde_json::to_value(entry).unwrap().get("access").is_none());
     }
 }
 

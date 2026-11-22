@@ -694,6 +694,15 @@ impl RuntimeFoundation {
             .collect()
     }
 
+    /// Returns the published user MCP policy for a stable server ID.
+    /// 按稳定服务器 ID 返回已发布的用户 MCP 策略。
+    pub(crate) fn configured_mcp_access(
+        &self,
+        server_id: &str,
+    ) -> Option<&crate::provider_config::PersistedMcpServerAccess> {
+        self.config.configured_mcp_access.get(server_id)
+    }
+
     /// Resolves the MCP runtime tools currently visible to one agent.
     /// 解析当前对某个代理可见的 MCP 运行时工具集合。
     pub fn resolved_mcp_tools_for_agent(&self, agent_id: &str) -> Vec<McpRuntimeToolBinding> {
