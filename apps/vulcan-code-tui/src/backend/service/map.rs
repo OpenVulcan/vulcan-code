@@ -748,6 +748,11 @@ fn display_note_message(note: &core::DisplayNoteEvent) -> String {
         core::DisplayNoticeKind::MemoryUnlocked => {
             crate::tr!("conversation.dedicatedNotice.unlocked")
         }
+        core::DisplayNoticeKind::MemoryExpired => format!(
+            "{}\n{}",
+            crate::tr!("conversation.contextInjection.category.memoryExpiration"),
+            note.redacted_detail.as_deref().unwrap_or_default()
+        ),
         _ => note
             .redacted_detail
             .clone()

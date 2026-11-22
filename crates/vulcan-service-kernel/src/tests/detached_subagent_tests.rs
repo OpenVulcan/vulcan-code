@@ -336,7 +336,7 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
         &state,
         &agent_runtime,
         report,
-        true,
+        Some(vulcan_session_core::v1::ids::Seq::try_new(1).unwrap()),
     ) {
         Ok(_) => panic!("poisoned hook runtime must reject terminal report commit"),
         Err(error) => error,
@@ -491,7 +491,7 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
         &state,
         &agent_runtime,
         report.clone(),
-        false,
+        None,
     )
     .expect("an unfinished logical Turn remains available for continuation");
     assert!(unfinished.completion_request.is_none());
@@ -512,7 +512,7 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
         &state,
         &agent_runtime,
         report,
-        true,
+        Some(vulcan_session_core::v1::ids::Seq::try_new(1).unwrap()),
     )
     .expect("stopped VMM service must not reject the ordinary terminal commit");
     assert!(outcome.completion_request.is_some());

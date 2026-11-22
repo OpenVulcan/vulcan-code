@@ -83,10 +83,6 @@ type ToolCallBody = Extract<ConversationEventBody, { kind: "tool_call" }>;
 // SystemContextBody 收窄一条规范 V1 系统提示词注入事件。
 type SystemContextBody = Extract<ConversationEventBody, { kind: "system_context" }>;
 
-// ContextExpirationCategory describes a persistent snapshot invalidation with or without a known memory source.
-// ContextExpirationCategory 区分记忆来源已确认和未确认的持久快照失效。
-type ContextExpirationCategory = "memoryExpiration" | "injection";
-
 // UserInputBody narrows one canonical V1 user input event.
 // UserInputBody 收窄一条规范 V1 用户输入事件。
 type UserInputBody = Extract<ConversationEventBody, { kind: "user_input" }>;
@@ -153,9 +149,6 @@ interface CachedEventMessagesV1 {
   // Canonical API purpose can arrive when an older page is prepended.
   // 前置更早分页时可能补齐规范 API 用途。
   compaction: boolean;
-  // Loading the original injection can identify a previously generic expiration as a memory expiration.
-  // 加载原注入事件后，可以把之前的通用失效提示识别为记忆失效提示。
-  contextExpiration: ContextExpirationCategory | null;
   // Root input of the event Turn when projected.
   // 投影时该事件所属 Turn 的根输入。
   rootInputSeq: number | undefined;
@@ -224,12 +217,14 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // Turns whose memory recall already has its own card do not repeat the injected memory text.
     // 已有记忆召回卡的回合不再重复显示注入的记忆正文。
     const memoryRecallTurns = new Set<number>();
-    // Index VMM baseline events by their canonical sequence so invalidations can resolve their exact source.
-    // 按规范序号索引 VMM 基线事件，使失效记录能定位其精确来源。
+    // Identify legacy VMM snapshot removal markers so they do not produce a duplicate timeline card.
+    // 识别旧版 VMM 快照移除标记，避免它们生成多余的时间线卡片。
     const memoryBaselineSeqs = new Set<number>();
     for (const summary of events) {
       if (summary.event.kind === "memory_recall" && summary.turn_id !== null) memoryRecallTurns.add(summary.turn_id);
-      if (summary.event.kind === "system_context" && isVmmMemoryBaseline(summary.event)) memoryBaselineSeqs.add(summary.seq);
+      if (summary.event.kind === "system_context" && isVmmMemoryBaseline(summary.event)) {
+        memoryBaselineSeqs.add(summary.seq);
+      }
       if (summary.event.kind === "tool_call") claimCollaborationReceipt(summary.event, claimed);
       if (summary.event.kind === "collaboration" && summary.event.after_state.kind === "task_result_projection"
         && summary.event.after_state.projection.disclosure === "authorization_revoked") {
@@ -273,7 +268,8 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       // Filter before consulting the event cache so pagination and live question arrival remain reversible.
       // 读取事件缓存前过滤，使分页及实时问题到达后的显示切换保持可逆。
       if (summary.event.kind === "tool_call" && questionCardReplacesToolReceipt(summary.event, visibleQuestionIds)) continue;
-      if (summary.event.kind === "system_context" && contextInjectionIsHidden(summary, summary.event, memoryRecallTurns)) continue;
+      if (summary.event.kind === "system_context"
+        && contextInjectionIsHidden(summary, summary.event, memoryRecallTurns, memoryBaselineSeqs)) continue;
       if (summary.event.kind === "collaboration") {
         const state = summary.event.after_state;
         if (sendingCardShowsCollaboration(state, claimed)) continue;
@@ -302,10 +298,6 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         continue;
       }
       const apiStats = eventApiStatsDependency(summary.event, apiStatsByCall);
-      // Resolve the category from the referenced source whenever it is present in the current window.
-      // 当被引用的来源已加载到当前窗口时，按来源解析失效类别。
-      const contextExpiration = summary.event.kind === "system_context"
-        ? contextExpirationCategory(summary.event, memoryBaselineSeqs) : null;
       const cached = cache.get(summary);
       if (
         cached
@@ -313,16 +305,15 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         && cached.rootInputText === rootInput?.text
         && cached.apiStats === apiStats
         && cached.compaction === compaction
-        && cached.contextExpiration === contextExpiration
         && sameRetryFailurePages(cached.retryFailures, retryFailures)
       ) {
         messages.push(...cached.messages);
         continue;
       }
       const projected = retryFailures === undefined ? conversationMessagesForV1Event(
-        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined, undefined, contextExpiration,
+        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined, undefined,
       ) : [retryFailureMessage(conversationMessageBase(sessionId, summary, rootInput), retryFailures)];
-      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, contextExpiration, retryFailures, messages: projected });
+      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, retryFailures, messages: projected });
       messages.push(...projected);
     }
 
@@ -502,9 +493,8 @@ function conversationMessagesForV1Event(
   // Applied file changes of the Turn, read only by its statistics row.
   // 该 Turn 的已应用文件变更，仅由其统计行读取。
   turnChanges: TurnChangeSummaryV1 | undefined,
-  // Display category of a snapshot invalidation, resolved from the loaded source event when available.
-  // 快照失效的展示类别，来源事件已加载时按其解析。
-  contextExpiration: ContextExpirationCategory | null = null,
+  // Snapshot invalidation and its actual VMM source if present in the loaded window.
+  // 快照失效记录，以及已加载窗口中的实际 VMM 来源（若存在）。
 ): ConversationMessage[] {
   const base = conversationMessageBase(sessionId, summary, rootInput);
   if (compaction) {
@@ -593,7 +583,7 @@ function conversationMessagesForV1Event(
     case "memory_recall":
       return [memoryRecallMessage(base, summary, summary.event, rootInput, t)];
     case "system_context":
-      return [contextInjectionMessage(base, summary, summary.event, rootInput, contextExpiration, t)];
+      return [contextInjectionMessage(base, summary, summary.event, rootInput, t)];
     case "request_config_changed": {
       // changeKind is derived from exact persisted fields, never from a display label.
       // changeKind 从精确持久化字段派生，绝不依赖展示文案。
@@ -948,6 +938,14 @@ function displayNoteMessage(
   apiStatsByCall: ReadonlyMap<number, ApiStatsBody>,
   t: Translation,
 ): ConversationMessage {
+  if (event.notice_kind === "memory_expired") {
+    return contextInjectionNotice({ ...base, metadata: presentationMetadata(summary, rootInput) }, [{
+      context_key: "vmm.memory_expired",
+      category: "memoryExpiration",
+      operation: "expire",
+      content: event.redacted_detail ?? "",
+    }], t);
+  }
   // Match terminal facts by API identity and the Core-owned end reason.
   // 按 API 标识和 Core 持有的结束原因匹配终态事实。
   const apiStats = event.api_call_id === undefined ? undefined : apiStatsByCall.get(event.api_call_id);
@@ -1129,32 +1127,45 @@ function contextInjectionIsHidden(
   summary: ConversationEventSummary,
   event: SystemContextBody,
   memoryRecallTurns: ReadonlySet<number>,
+  memoryBaselineSeqs: ReadonlySet<number>,
 ): boolean {
   if (event.operation === "remove" && event.scope === "turn") return true;
+  // Removing an old baseline is part of context maintenance, including re-anchoring and revocation.
+  // 移除旧基线属于上下文维护，包括重新锚定和撤销。
+  const sourceSeq = invalidatedContextSourceSeq(summary, event);
+  if (sourceSeq !== null && memoryBaselineSeqs.has(sourceSeq)) return true;
   return event.context_key === "injection.transient"
     && summary.turn_id !== null
     && memoryRecallTurns.has(summary.turn_id);
 }
 
-// isVmmMemoryBaseline recognizes the exact baseline envelope emitted into the persistent injection snapshot.
-// isVmmMemoryBaseline 识别写入持久注入快照的规范 VMM 基线信封。
+// The opening and closing lines delimit the memory items in a persisted VMM baseline.
+// 起止行限定持久化 VMM 基线中的记忆条目范围。
+const VMM_BASELINE_OPEN = "<VMM_MEMORY_BASELINE>\n";
+const VMM_BASELINE_CLOSE = "\n</VMM_MEMORY_BASELINE>";
+
+// Returns whether the event is a persistent VMM baseline with the producer's exact envelope.
+// 判断事件是否为采用生产端规范信封的持久 VMM 基线。
 function isVmmMemoryBaseline(event: SystemContextBody): boolean {
   return event.context_key === "injection.persistent" && event.operation === "upsert" && event.scope === "session"
-    && event.content.startsWith("<VMM_MEMORY_BASELINE>\n") && event.content.endsWith("\n</VMM_MEMORY_BASELINE>");
+    && event.content.startsWith(VMM_BASELINE_OPEN) && event.content.endsWith(VMM_BASELINE_CLOSE);
 }
 
-// contextExpirationCategory maps a persistent cleanup marker to the category proved by its source sequence.
-// contextExpirationCategory 根据持久上下文清理标记引用的来源序号确定展示类别。
-function contextExpirationCategory(
+// Returns the invalidated past context sequence in this session, or null for an ordinary context change.
+// 返回本会话中失效的旧上下文序号，普通上下文变更返回 null。
+function invalidatedContextSourceSeq(
+  summary: ConversationEventSummary,
   event: SystemContextBody,
-  memoryBaselineSeqs: ReadonlySet<number>,
-): ContextExpirationCategory | null {
+): number | null {
   if (event.operation !== "remove" || event.scope !== "session" || event.context_key !== "injection.persistent") return null;
-  // The source can be on a page that has yet to load, so an unresolved marker stays in added context.
-  // 来源可能在尚未加载的页面上，因此未解析的标记仍归为附加上下文。
+  // Core writes the source sequence alone, so the exact baseline may be on an older page.
+  // Core 只记录来源序号，因此对应的基线可能位于更早的分页。
   const marker = /^expired_source_seq=([1-9][0-9]*)$/u.exec(event.content);
   if (!marker) return null;
-  return memoryBaselineSeqs.has(Number(marker[1])) ? "memoryExpiration" : "injection";
+  // Only an earlier sequence in this session can own the invalidated snapshot.
+  // 失效快照只能由同一会话中更早的序号持有。
+  const sourceSeq = Number(marker[1]);
+  return Number.isSafeInteger(sourceSeq) && sourceSeq < summary.seq ? sourceSeq : null;
 }
 
 // Renders the exact paths from the directory producer's first JSON line, keeping platform path separators.
@@ -1185,17 +1196,24 @@ function contextInjectionMessage(
   summary: ConversationEventSummary,
   event: SystemContextBody,
   rootInput: V1RootInputPresentationMetadata | undefined,
-  expiration: ContextExpirationCategory | null,
   t: Translation,
 ): ConversationMessage {
   // Keep the directory notice within the common transcript card, with readable filesystem paths.
   // 目录变更沿用共用会话卡片，并显示可读的文件系统路径。
-  const category = expiration ?? contextInjectionCategory(event.context_key);
+  // Context invalidation has its generic status line. Only a typed note carries expired memories.
+  // 上下文失效沿用通用状态行，实际过期的记忆仅来自专用通知。
+  const expiration = invalidatedContextSourceSeq(summary, event) !== null;
+  // The context key identifies the existing injection category.
+  // 上下文键标识既有的注入分类。
+  const category = contextInjectionCategory(event.context_key);
+  // Suppress the internal source marker and format directory changes for display.
+  // 隐去内部来源标记，并格式化目录变更以供展示。
+  const content = expiration ? "" : category === "projectDirectory" ? projectDirectoryNoticeContent(event.content, t) : event.content;
   return contextInjectionNotice({ ...base, metadata: presentationMetadata(summary, rootInput) }, [{
     context_key: event.context_key,
     category,
     operation: expiration ? "expire" : event.operation,
-    content: expiration ? "" : category === "projectDirectory" ? projectDirectoryNoticeContent(event.content, t) : event.content,
+    content,
   }], t);
 }
 
@@ -1220,7 +1238,7 @@ function contextInjectionNotice(
     role: "system",
     recordKind: "display-note",
     title: categories.length === 1 && categories[0] === "memoryExpiration"
-      ? t("conversation.contextInjection.memoryExpirationTitle")
+      ? contextInjectionCategoryLabel("memoryExpiration", t)
       : t("conversation.contextInjection.title").replace(
         "{category}", categories.map((category) => contextInjectionCategoryLabel(category, t)).join("/"),
       ),
@@ -1255,7 +1273,10 @@ function mergeConsecutiveContextInjections(
     run = [];
   };
   for (const message of messages) {
-    if (readContextInjectionEntries(message.metadata)) {
+    // Keep memory expirations distinct so adjacent prompt changes cannot hide their title or detail.
+    // 记忆过期单独展示，避免相邻提示词变更掩盖标题或详情。
+    const entries = readContextInjectionEntries(message.metadata);
+    if (entries && !entries.some((entry) => entry.category === "memoryExpiration")) {
       run.push(message);
       continue;
     }

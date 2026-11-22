@@ -1590,7 +1590,6 @@ pub(super) async fn prepare_webui_pending_prompt(
         &entry_agent_runtime,
         workspace_snapshot,
         precheck_start,
-        entry.source,
     )
     .await?;
     if started {

@@ -1462,11 +1462,7 @@ impl VmmSessionMemoryState {
         self.active_turn_id = None;
         // newly_expired_lease_count reports only the exact boundary crossed by this unique terminal turn.
         // newly_expired_lease_count 仅统计本次唯一终态回合跨越的精确到期边界。
-        let newly_expired_lease_count = self
-            .active_leases
-            .values()
-            .filter(|lease| lease.expires_after_turn_sequence == self.completed_turn_sequence)
-            .count();
+        let newly_expired_lease_count = self.memories_expired_at_turn(turn_id).count();
         if !self
             .active_leases
             .values()
@@ -1482,6 +1478,22 @@ impl VmmSessionMemoryState {
             changed: true,
             ..VmmLeaseTransitionReport::default()
         })
+    }
+
+    /// Returns the resident memories whose TTL the given terminal turn exhausted.
+    /// 返回指定终态回合使 TTL 耗尽的驻留记忆。
+    /// `turn_id` identifies the most recent consumed logical turn. The iterator is empty for other turns.
+    /// `turn_id` 标识最近一次消耗 TTL 的逻辑回合，其余回合返回空迭代器。
+    pub fn memories_expired_at_turn(&self, turn_id: &str) -> impl Iterator<Item = &ContextItem> {
+        // A baseline transfer preserves the lease, while a revocation removes it outright.
+        // 基线转移保留租约，主动撤销则直接移除租约。
+        let owns_terminal = self.last_consumed_turn_id.as_deref() == Some(turn_id);
+        self.active_leases
+            .values()
+            .filter(move |lease| {
+                owns_terminal && lease.expires_after_turn_sequence == self.completed_turn_sequence
+            })
+            .map(|lease| &lease.item)
     }
 
     /// Revokes one exact resident lease after an explicit session-scoped user action.
@@ -3288,6 +3300,60 @@ mod tests {
             .expect("explicit revocation anchor should exist");
         assert_eq!(revocation.kind, VmmPromptAnchorKind::Revocation);
         assert!(!revocation.prefix.contains("suppressed-body"));
+    }
+
+    /// Verifies that a transferred lease keeps its TTL and only terminal expiration exposes memory details.
+    /// 验证转移租约保留 TTL，只有终态过期才提供记忆详情。
+    #[test]
+    fn terminal_expiry_excludes_memory_transfer_and_revocation() {
+        let mut state = VmmSessionMemoryState::default();
+        let expiring = memory_item(137, "recalled memory", 0.8);
+        let revoked = memory_item(138, "revoked memory", 0.8);
+        state
+            .apply_recall_batch(
+                "session-a",
+                "user-1",
+                &recall_batch(1, vec![expiring.clone(), revoked]),
+                "1",
+            )
+            .unwrap();
+        let transfer = state.begin_cache_epoch("compaction-1", None, "2").unwrap();
+        assert_eq!(transfer.expired_lease_count, 0);
+        assert!(state.pending_active_baseline_prefix().is_some());
+        state.bind_pending_state_to_user("user-2", "3").unwrap();
+        assert!(
+            state
+                .cache_epoch
+                .anchors
+                .iter()
+                .any(|anchor| anchor.kind == VmmPromptAnchorKind::Baseline)
+        );
+        assert!(state.memories_expired_at_turn("turn-1").next().is_none());
+        assert_eq!(
+            state
+                .revoke_lease("memory:138", "4")
+                .unwrap()
+                .revoked_lease_count,
+            1
+        );
+        state.register_active_turn("turn-1", "5").unwrap();
+        let terminal = state.consume_turn("turn-1", "6").unwrap();
+        assert_eq!(terminal.expired_lease_count, 1);
+        assert_eq!(
+            state
+                .memories_expired_at_turn("turn-1")
+                .map(|item| (item.memory_id, item.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(expiring.memory_id, expiring.text.as_str())]
+        );
+        assert!(
+            state
+                .memories_expired_at_turn("other-turn")
+                .next()
+                .is_none()
+        );
+        assert!(!state.consume_turn("turn-1", "7").unwrap().changed);
+        assert_eq!(state.memories_expired_at_turn("turn-1").count(), 1);
     }
 
     /// Verifies repeated terminal reports with the same id consume TTL exactly once.

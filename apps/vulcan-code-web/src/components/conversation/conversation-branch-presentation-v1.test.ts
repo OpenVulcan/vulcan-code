@@ -277,15 +277,21 @@ describe("V1 branch request configuration presentation", () => {
     expect(notice?.body).toContain("conversation.contextInjection.expire");
     expect(notice?.body).not.toContain(cleanup.event.content);
   });
-  // Prepending the exact VMM source updates the category of an expiration that was already displayed.
-  // 前置精确的 VMM 来源后，更新已经显示的失效提示类别。
-  it("titles a VMM baseline expiration using the referenced history event", () => {
+  // A baseline transfer is quiet and the terminal notice carries its own exact memory details.
+  // 基线转移不弹出提示，终态通知随身携带确切记忆详情。
+  it("shows only the Core-authored memory expiration after a VMM baseline transfer", () => {
     // The source uses the runtime's reserved baseline envelope.
     // 来源使用运行时的保留基线信封。
     const baseline = {
       seq: 12, turn_id: null, created_at_ms: 12, updated_at_ms: 12, event_revision: 1, visibility: "provider",
       event: { kind: "system_context", context_key: "injection.persistent", operation: "upsert", scope: "session",
-        content: "<VMM_MEMORY_BASELINE>\nFixture retained memory.\n</VMM_MEMORY_BASELINE>" },
+        content: [
+          "<VMM_MEMORY_BASELINE>",
+          "Active VMM memories retained across context compaction.",
+          "[TURN_ID:5|MEMORY_ID:137|SOURCE:0.999|TIME:2026-05-02 14:20:00]Fixture recalled memory.",
+          "[NOTURN|SOURCE:0.875]Fixture recalled memory without an ID.",
+          "</VMM_MEMORY_BASELINE>",
+        ].join("\n") },
     } satisfies ConversationEventSummary;
     // A new root message separates the original injection from the later cleanup notice.
     // 一条新的根消息把原注入与之后的清理提示分隔开。
@@ -300,20 +306,41 @@ describe("V1 branch request configuration presentation", () => {
       ...baseline, seq: 51,
       event: { ...baseline.event, operation: "remove", content: `expired_source_seq=${baseline.seq}` },
     } satisfies ConversationEventSummary;
-    // Reuse the same projector to exercise the cache invalidation after a history prepend.
-    // 复用同一个投影器，验证前置历史后缓存随分类更新。
+    // The replacement reuses the same memories under a new context anchor.
+    // 替换后的基线把同一批记忆重绑到新的上下文锚点。
+    const replacement = {
+      ...baseline, seq: 52,
+    };
+    // This turn exhausted only one lease; the other remembered item must not appear in the notice.
+    // 本轮只耗尽了一条租约，另一条记忆不能出现在通知中。
+    const expired = {
+      ...baseline, seq: 54, visibility: "ui_only",
+      event: { kind: "display_note", notice_kind: "memory_expired", severity: "info",
+        reason_code: "vmm_memory_ttl_expired:53", redacted_detail: "#137\nFixture recalled memory." },
+    } satisfies ConversationEventSummary;
+    // Reuse the live projector and compare it with a fresh one created from a reloaded history page.
+    // 复用实时投影器，并与重载历史分页后新建的投影器比较。
     const project = createConversationBranchPresentationProjectorV1();
-    // Supply one translator identity across both windows so changing the source drives reprojection.
-    // 两个窗口共用同一个翻译函数，使重投影由来源变化触发。
-    const translate = (key: string) => key;
-    // Find the expiry row by its projected operation. Return its rendered block for assertions.
-    // 按投影后的操作查找失效行，返回渲染块供断言。
-    const expirationBlock = (events: ConversationEventSummary[]) => project("session-context", events, EMPTY_RESOURCES, translate)
+    const translate = (key: keyof typeof zhCNTranslations) => zhCNTranslations[key];
+    // Find the single card or cards carrying the dedicated memory expiration category.
+    // 查找带有专用记忆过期分类的卡片。
+    const memoryExpirationBlocks = (projector: typeof project, events: ConversationEventSummary[]) => projector("session-context", events, EMPTY_RESOURCES, translate)
       .renderItems.flatMap((item) => item.blocks)
-      .find((block) => readContextInjectionEntries(block.rawMetadata)?.some((entry) => entry.operation === "expire"));
-    expect(readContextInjectionEntries(expirationBlock([userInput, cleanup])?.rawMetadata))
-      .toMatchObject([{ category: "injection" }]);
-    expect(expirationBlock([baseline, userInput, cleanup])?.title).toBe("conversation.contextInjection.memoryExpirationTitle");
+      .filter((block) => readContextInjectionEntries(block.rawMetadata)?.some((entry) => entry.category === "memoryExpiration"));
+    expect(memoryExpirationBlocks(project, [userInput, cleanup, replacement])).toHaveLength(0);
+    const transferred = project("session-context", [baseline, userInput, cleanup, replacement], EMPTY_RESOURCES, translate);
+    expect(transferred.messages.some((message) => readContextInjectionEntries(message.metadata)?.some((entry) => entry.operation === "expire"))).toBe(false);
+    const live = memoryExpirationBlocks(project, [baseline, userInput, cleanup, replacement, expired]);
+    expect(live).toHaveLength(1);
+    expect(live[0]?.title).toBe(translate("conversation.contextInjection.category.memoryExpiration"));
+    expect(readContextInjectionEntries(live[0]?.rawMetadata)).toMatchObject([{
+      category: "memoryExpiration", operation: "expire",
+      content: expired.event.redacted_detail,
+    }]);
+    const reloaded = memoryExpirationBlocks(createConversationBranchPresentationProjectorV1(), [expired]);
+    expect(reloaded).toHaveLength(1);
+    expect(reloaded[0]?.title).toBe(live[0]?.title);
+    expect(reloaded[0]?.body).toBe(live[0]?.body);
   });
   // A host wake after background shell jobs finished shows as its own category; its turn-end expiry stays hidden.
   // 后台 shell 任务结束后的宿主唤醒显示为独立类别；其回合结束失效保持隐藏。

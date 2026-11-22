@@ -309,7 +309,9 @@ pub(super) async fn handle_finished_stream_event(
         task_state,
         agent_runtime,
         report,
-        logical_turn_completed,
+        turn_completion_receipt
+            .as_ref()
+            .map(|receipt| receipt.value.completed_turn_final_seq),
     ) {
         Ok(apply) => Some(apply),
         Err(error) => {

@@ -13,8 +13,8 @@ use vulcan_session_core::v1::ids::{PendingInputId, Seq, TurnId};
 
 /// Publishes only the admitted target slice and starts its normal asynchronous profile preparation.
 /// 只发布已准入目标切片，并启动其正常异步画像准备。
-/// `workspace`, `start` and `source` belong to the registered preparation; failures settle that exact owner.
-/// `workspace`、`start` 与 `source` 属于已登记准备；失败时结算该精确所有者。
+/// `workspace` and `start` belong to the registered preparation. Failures settle that exact owner.
+/// `workspace` 与 `start` 属于已登记准备。失败时结算该精确所有者。
 pub(super) async fn finish_target_prompt_preparation(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -22,7 +22,6 @@ pub(super) async fn finish_target_prompt_preparation(
     agent_runtime: &AgentRuntimeBridge,
     workspace: WorkspaceSnapshot,
     start: SharedPromptTurnStart,
-    source: PendingSessionPromptSource,
 ) -> Result<bool, String> {
     // Capture the registered owner before any detached projection or preparation can run.
     // 在任何分离投影或准备运行前捕获已登记所有者。
@@ -34,23 +33,14 @@ pub(super) async fn finish_target_prompt_preparation(
         return Ok(false);
     };
     let dispatch = (|| {
-        // Derive prechecks from the real source inside the registered owner's failure boundary.
-        // 在已登记所有者的失败边界内，按真实来源推导预检。
-        let precheck_plan = if source.runs_user_prompt_precheck() {
-            webui_shared_prompt_precheck_plan(
-                agent_runtime,
-                &workspace,
-                session_id,
-                &workspace_path_for_session(&workspace, session_id),
-                start.vmm_precheck_ready,
-            )?
-        } else {
-            SharedPromptPrecheckPlan {
-                has_precheck_hooks: false,
-                should_skip_precheck: true,
-                progress_labels: Vec::new(),
-            }
-        };
+        // Check the queued turn's own source and text after its preparation owner is registered.
+        // 完成准备所有者登记后，检查待派发回合自身的来源和文本。
+        let precheck_plan = webui_shared_prompt_precheck_plan(
+            agent_runtime,
+            &workspace,
+            &start,
+            &workspace_path_for_session(&workspace, session_id),
+        )?;
 
         if start.vmm_runtime_ready {
             refresh_exact_vmm_hook_session_projection(

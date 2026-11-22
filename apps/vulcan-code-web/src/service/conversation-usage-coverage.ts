@@ -82,6 +82,17 @@ function emptyCoverage(expectedApiCallCount: number): UsageCoverage {
   };
 }
 
+/** Returns the reported uncached input, or derives it from the same scope's full input and cache reads.
+ * 返回已报告的无缓存输入，或使用同一范围的完整输入与缓存读取推导。
+ * `usage` belongs to one request or one exact bucket. Missing or inconsistent counts give no derived value.
+ * `usage` 来自单次请求或精确统计桶。计数缺失或不一致时不推导。 */
+function uncachedInputForDisplay(usage: AggregatedUsage): number | undefined {
+  // Canonical full input already includes cache writes, so subtract only reads.
+  // 规范完整输入已包含缓存写入，因此只减缓存读取。
+  const { input_tokens: input, cache_read_tokens: cached, uncached_input_tokens: uncached } = usage;
+  return uncached ?? (isCount(input) && isCount(cached) && cached <= input ? input - cached : undefined);
+}
+
 /** Adds one normalized API or fully-known child aggregate with its physical request weight.
  * 按物理请求权重追加一笔规范 API 或完整已知的子代理聚合。
  * `coverage` is the mutable view accumulator; `usage` contains canonical optional counts; `requestCount` is its request weight.
@@ -91,17 +102,20 @@ function emptyCoverage(expectedApiCallCount: number): UsageCoverage {
  * Updates only the accumulator and returns no value.
  * 仅更新累加器，无返回值。 */
 function addUsage(coverage: UsageCoverage, usage: AggregatedUsage, requestCount: number): void {
+  // Keep the same exact request's uncached count in both its display sum and its cache cohort.
+  // 展示累计与缓存样本组共用同一请求的精确无缓存计数。
+  const uncached = uncachedInputForDisplay(usage);
   for (const field of USAGE_DIMENSIONS) {
     // Preserve the distinction between an explicit zero and an absent dimension.
     // 保留明确零值与缺失维度的区别。
-    const tokens = usage[field];
+    const tokens = field === "uncached_input_tokens" ? uncached : usage[field];
     if (tokens === undefined) continue;
     coverage.dimensions[field].knownTokens += tokens;
     coverage.dimensions[field].reportedApiCallCount += requestCount;
   }
-  if (usage.cache_read_tokens !== undefined && usage.uncached_input_tokens !== undefined) {
+  if (usage.cache_read_tokens !== undefined && uncached !== undefined) {
     coverage.cacheRatio.cachedTokens += usage.cache_read_tokens;
-    coverage.cacheRatio.uncachedTokens += usage.uncached_input_tokens;
+    coverage.cacheRatio.uncachedTokens += uncached;
     coverage.cacheRatio.reportedApiCallCount += requestCount;
   }
 }
@@ -113,15 +127,21 @@ function addUsage(coverage: UsageCoverage, usage: AggregatedUsage, requestCount:
  * This also supports historical windows containing only terminal statistics, without inventing missing API samples.
  * 同样支持仅含终态统计的历史窗口，不编造缺失 API 样本。 */
 function finalizeCoverage(coverage: UsageCoverage, bucket: StatBucket): UsageCoverage {
+  // Both counts come from this exact bucket, even when its constituent events are outside the window.
+  // 两项计数均来自同一个精确统计桶，即使其明细事件不在已加载窗口内。
+  const uncached = uncachedInputForDisplay(bucket.usage);
   for (const field of USAGE_DIMENSIONS) {
-    if (bucket.usage[field] !== undefined) {
-      coverage.dimensions[field] = { knownTokens: bucket.usage[field], reportedApiCallCount: bucket.api_call_count };
+    // Prefer exact same-scope evidence over any partial sum from the loaded window.
+    // 同一范围的精确证据优先于已加载窗口中的部分累计。
+    const tokens = field === "uncached_input_tokens" ? uncached : bucket.usage[field];
+    if (tokens !== undefined) {
+      coverage.dimensions[field] = { knownTokens: tokens, reportedApiCallCount: bucket.api_call_count };
     }
   }
-  if (bucket.usage.cache_read_tokens !== undefined && bucket.usage.uncached_input_tokens !== undefined) {
+  if (bucket.usage.cache_read_tokens !== undefined && uncached !== undefined) {
     coverage.cacheRatio = {
       cachedTokens: bucket.usage.cache_read_tokens,
-      uncachedTokens: bucket.usage.uncached_input_tokens,
+      uncachedTokens: uncached,
       reportedApiCallCount: bucket.api_call_count,
     };
   }

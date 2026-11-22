@@ -1303,6 +1303,9 @@ pub enum DisplayNoticeKind {
     /// Context compaction completed.
     /// 上下文压缩完成。
     CompactionCompleted,
+    /// Recalled VMM memory reached its terminal turn TTL.
+    /// 已召回的 VMM 记忆在终态回合耗尽 TTL。
+    MemoryExpired,
     /// Goal state changed (continuing, blocked, budget exhausted, complete).
     /// Goal 状态变化(继续、阻塞、预算耗尽、完成)。
     GoalStatus,

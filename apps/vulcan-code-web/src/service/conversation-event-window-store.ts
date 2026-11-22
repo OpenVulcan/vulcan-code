@@ -1140,7 +1140,8 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
         | "interrupted"
         | "stopped"
         | "memory_locked"
-        | "memory_unlocked";
+        | "memory_unlocked"
+        | "memory_expired";
       severity: "info" | "warning" | "error";
       reason_code: string;
       redacted_detail?: string;

@@ -80,9 +80,17 @@ export function TurnStatsTooltipCard(props: {
   // A null percentage means no complete pair with a positive input denominator is available.
   // 百分比为 null 表示没有分母为正的完整输入配对。
   const cacheHitPercent = cacheRatio.percent;
-  // Keep the original short label without exposing internal coverage metadata.
-  // 保持原有简短标签，不展示内部覆盖元数据。
+  // The localized label identifies the ratio in the card and its progress bar.
+  // 本地化标签在卡片及其进度条中标识命中率。
   const cacheLabel = t("conversation.turnStats.cacheHitRate");
+  // Only a ratio computed from a subset needs a visible sample count.
+  // 只有根据部分请求计算的命中率才需要显示样本数。
+  const cacheSample = cacheHitPercent !== null && cacheRatio.partial && aggregate.coverage !== null
+    ? formatMessage(t("conversation.turnStats.cacheHitRateSample"), {
+      count: formatTurnStatsNumber(aggregate.coverage.cacheRatio.reportedApiCallCount, props.locale),
+      total: formatTurnStatsNumber(aggregate.coverage.expectedApiCallCount, props.locale),
+    })
+    : null;
   // Only the new paired timing contract can establish speed; historical turn-duration estimates are ignored.
   // 仅新的配对计时契约能够证明速度；忽略历史整轮耗时估算。
   const outputDurationMs = numericMetadata(stats.output_duration_ms);
@@ -114,7 +122,7 @@ export function TurnStatsTooltipCard(props: {
           <strong title={cacheHitPercent == null ? t("conversation.turnStats.cacheHitRateNeeds") : undefined}>{cacheHitPercent == null ? "-" : `${cacheHitPercent.toFixed(1)}%`}</strong>
         </div>
         <div
-          aria-label={cacheLabel}
+          aria-label={cacheSample === null ? cacheLabel : `${cacheLabel} (${cacheSample})`}
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={cacheHitPercent ?? undefined}
@@ -123,6 +131,7 @@ export function TurnStatsTooltipCard(props: {
         >
           <span style={{ width: `${cacheHitPercent ?? 0}%` }} />
         </div>
+        {cacheSample ? <p className="vk-stats-note">{cacheSample}</p> : null}
       </div>
       {subagent ? (
         <section className="vk-stats-section" data-turn-stats-subagent>

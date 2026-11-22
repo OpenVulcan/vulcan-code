@@ -11,6 +11,7 @@ use vulcan_agent_runtime::{
 use vulcan_service_api::{
     ConversationRunOutcome, ConversationSummaryChangedDelta, ServiceEventEmitter,
 };
+use vulcan_session_core::v1::{DisplayNoticeKind, EventBody, NoticeSeverity, ids::Seq};
 use vulcan_workbench_model::{SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState};
 
 use super::{
@@ -28,8 +29,14 @@ use super::{
     workbench_surface_matches_conversation, workspace_session_summary_for_session,
     workspace_snapshot_contains_regular_session,
 };
-use crate::vmm_session_controller::open_registered_session_vmm_controller;
 use crate::{HostRuntimeHandle, webui_vmm_runtime_readiness};
+use crate::{
+    session_goal_lifecycle::registered_session_v1_handle_from_state,
+    session_runtime_registry_v1::{
+        SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
+    },
+    vmm_session_controller::open_registered_session_vmm_controller,
+};
 use vulcan_workspace_store::workspace_store::set_session_unread_v1;
 
 /// Mirrors the in-memory unread flag of one main session into its durable session index row.
@@ -511,8 +518,8 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
 /// `agent_runtime` 提供会话 hook 与 VMM 同步状态。
 /// `report` is the terminal execution report produced by the agent runtime.
 /// `report` 是 Agent 运行时产出的终态执行报告。
-/// `durable_turn_completed` comes from the exact V1 Turn-completion receipt and authorizes Hook completion.
-/// `durable_turn_completed` 来自精确 V1 回合完成回执，并授权 Hook 完成。
+/// `completed_turn_final_seq` identifies the durable V1 terminal receipt and authorizes Hook completion.
+/// `completed_turn_final_seq` 标识持久 V1 终态回执，并授权 Hook 完成。
 ///
 /// # Returns
 /// 返回值
@@ -523,8 +530,11 @@ pub(super) fn apply_execution_report_to_memory(
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     report: ExecutionRunReport,
-    durable_turn_completed: bool,
+    completed_turn_final_seq: Option<Seq>,
 ) -> Result<TerminalReportMemoryApply, String> {
+    // The sequence identifies the durable terminal turn for notice deduplication.
+    // 用持久终态回合序号为通知去重。
+    let durable_turn_completed = completed_turn_final_seq.is_some();
     let session_id = report.session_id;
     webui_trace(
         "execution_report_apply_enter",
@@ -600,6 +610,9 @@ pub(super) fn apply_execution_report_to_memory(
     // Measures in-memory workspace mutation for the terminal execution report.
     // 衡量终态执行报告写入内存工作区的耗时。
     let workspace_apply_started_at = current_unix_millis_value();
+    // Capture the exact TTL transition before later compaction can prune resident leases.
+    // 在后续压缩清除驻留租约前取得本轮确切的 TTL 变化。
+    let mut expired_memories = Vec::new();
     webui_trace(
         "execution_report_workspace_apply_start",
         format!("session={session_id}"),
@@ -718,12 +731,24 @@ pub(super) fn apply_execution_report_to_memory(
                     // command_id makes a terminal retry side-effect free after a durable controller commit.
                     // command_id 使控制器持久提交后的终态重试不产生副作用。
                     let command_id = format!("terminal_turn:{turn_id}");
-                    let _ = vmm_controller.execute_command(&command_id, &now, |candidate| {
-                        if candidate.last_consumed_turn_id.as_deref() != Some(turn_id) {
-                            candidate.consume_turn(turn_id, &now)?;
-                        }
-                        Ok(())
-                    })?;
+                    // Read the committed state so only durable expiration transitions can produce a notice.
+                    // 读取已提交的状态，确保只有持久化后的过期变化能生成通知。
+                    let commit =
+                        vmm_controller.execute_command(&command_id, &now, |candidate| {
+                            if candidate.last_consumed_turn_id.as_deref() != Some(turn_id) {
+                                candidate.consume_turn(turn_id, &now)?;
+                            }
+                            Ok(())
+                        })?;
+                    expired_memories.extend(commit.state.memories_expired_at_turn(turn_id).map(
+                        |item| {
+                            if item.memory_id == 0 {
+                                item.text.clone()
+                            } else {
+                                format!("#{}\n{}", item.memory_id, item.text)
+                            }
+                        },
+                    ));
                     Ok(())
                 },
             )?;
@@ -809,6 +834,19 @@ pub(super) fn apply_execution_report_to_memory(
         workspace_apply_started_at,
         format!("session={session_id}"),
     );
+    if let Some(final_seq) = completed_turn_final_seq
+        && !expired_memories.is_empty()
+        && let Err(error) = persist_memory_expiration_notice(
+            state,
+            session_id,
+            final_seq,
+            expired_memories.join("\n\n"),
+        )
+    {
+        tracing::warn!(
+            "[webui-service] failed to persist VMM memory expiration for session {session_id}: {error}"
+        );
+    }
     webui_trace(
         "execution_report_terminal_deltas_start",
         format!("session={session_id}"),
@@ -860,6 +898,53 @@ pub(super) fn apply_execution_report_to_memory(
         // 只有已索引主会话拥有持久未读行；子任务会话没有。
         persists_unread: is_main_session,
     })
+}
+
+/// Persists one UI-only VMM expiration notice for a durable terminal turn.
+/// 为已持久化的终态回合写入一条仅供界面展示的 VMM 过期通知。
+/// `state` locates the handle for `session_id`, `final_seq` identifies the terminal receipt,
+/// and `detail` contains only the memories that reached their TTL. Returns after durable flush.
+/// `state` 定位 `session_id` 对应的句柄，`final_seq` 标识终态回执，
+/// `detail` 仅包含 TTL 耗尽的记忆。返回时通知已持久化。
+fn persist_memory_expiration_notice(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    final_seq: Seq,
+    detail: String,
+) -> Result<(), String> {
+    // The terminal receipt gives replays the same notice identity.
+    // 终态回执让重放得到相同的通知标识。
+    let reason_code = format!("vmm_memory_ttl_expired:{}", final_seq.value());
+    // The registered handle publishes and flushes the same event stream.
+    // 注册句柄负责发布并持久化同一份事件流。
+    let handle = registered_session_v1_handle_from_state(state, session_id)?;
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::DisplayBoundary,
+            |document| {
+                if document.events().iter().rev().take_while(|event| event.seq > final_seq).any(|event| {
+                    matches!(&event.event, EventBody::DisplayNote(note)
+                        if note.notice_kind == DisplayNoticeKind::MemoryExpired && note.reason_code == reason_code)
+                }) {
+                    return Ok(SessionMutationChange::Unchanged(()));
+                }
+                document.append_display_note(
+                    None,
+                    DisplayNoticeKind::MemoryExpired,
+                    NoticeSeverity::Info,
+                    reason_code,
+                    Some(detail),
+                    None,
+                    None,
+                    None,
+                    current_unix_millis_value() as i64,
+                )?;
+                Ok(SessionMutationChange::Changed(()))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Emits terminal-report deltas without rebuilding the full workbench snapshot.
@@ -1229,6 +1314,70 @@ pub(super) fn spawn_conversation_completion_hook_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keeps a terminal memory expiration in durable UI history without changing the Provider projection.
+    /// 将终态记忆过期写入可靠界面历史，同时保持 Provider 投影不变。
+    #[test]
+    fn memory_expiration_notice_is_durable_ui_only_and_idempotent() {
+        use crate::session_runtime_registry_v1::SessionHandle;
+        use crate::tests::test_support::{
+            TestHostRuntimeRoot, test_service_state_with_parent_session,
+        };
+        use vulcan_session_core::v1::{
+            ClientInputSubmission, EventVisibility, TurnOutcome, ids::ClientActionId,
+            projection::provider_visible_fingerprint,
+        };
+        use vulcan_workspace_store::workspace_store::load_session_v1_full;
+
+        let session_id = SessionId::new_v4();
+        let root = TestHostRuntimeRoot::new(session_id);
+        let locator = root.v1_storage_locator();
+        let mut document = load_session_v1_full(&locator).unwrap().document;
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("expiry-test").unwrap(),
+                    "Review",
+                    Vec::new(),
+                ),
+                2,
+            )
+            .unwrap();
+        let final_seq = document.close_turn(TurnOutcome::Completed, 1, 3).unwrap();
+        let provider_before = provider_visible_fingerprint(document.events(), final_seq).unwrap();
+        let service = test_service_state_with_parent_session(session_id);
+        service
+            .session_runtime_registry
+            .register(SessionHandle::new(session_id, locator.clone(), document))
+            .unwrap();
+        let state = std::sync::Arc::new(std::sync::Mutex::new(service));
+        let detail = "#137\nFixture memory".to_owned();
+        for _ in 0..2 {
+            persist_memory_expiration_notice(&state, session_id, final_seq, detail.clone())
+                .unwrap();
+        }
+
+        let reloaded = load_session_v1_full(&locator).unwrap().document;
+        let mut notices = reloaded
+            .events()
+            .iter()
+            .filter_map(|event| match &event.event {
+                EventBody::DisplayNote(note)
+                    if note.notice_kind == DisplayNoticeKind::MemoryExpired =>
+                {
+                    Some((event, note))
+                }
+                _ => None,
+            });
+        let (event, note) = notices.next().expect("durable expiration notice");
+        assert!(notices.next().is_none());
+        assert_eq!(event.visibility, EventVisibility::UiOnly);
+        assert_eq!(note.redacted_detail.as_deref(), Some(detail.as_str()));
+        assert_eq!(
+            provider_visible_fingerprint(reloaded.events(), event.seq).unwrap(),
+            provider_before
+        );
+    }
 
     /// Records every service event so the emitted terminal delta can be inspected.
     /// 记录每个服务事件，以便检查发出的终态增量。

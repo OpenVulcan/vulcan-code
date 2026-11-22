@@ -7,7 +7,7 @@ use crate::{apply_output_style_snapshot, resolve_output_style_snapshot};
 use uuid::Uuid;
 use vulcan_agent_runtime::attachment_asset_index::promote_staged_attachment_to_message_ref;
 use vulcan_agent_runtime::workbench_prompt_turn::{
-    SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
+    SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
 use vulcan_service_api::{
     ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
@@ -3756,7 +3756,6 @@ async fn service_start_conversation_execution(
         "new"
     };
     let turn_id = Some(precheck_start.preparation_turn_id.clone());
-    let preparation_prompt_source = precheck_start.source;
     webui_submit_trace(
         "submit_prompt_turn_begin_ready",
         format!(
@@ -3975,21 +3974,12 @@ async fn service_start_conversation_execution(
                 return Ok(false);
             };
             let precheck_plan_started_at = current_unix_millis_value();
-            let precheck_plan = if preparation_prompt_source.runs_user_prompt_precheck() {
-                webui_shared_prompt_precheck_plan(
-                    &agent_runtime_for_preparation,
-                    &workspace_snapshot,
-                    session_id,
-                    &workspace_path,
-                    precheck_start.vmm_precheck_ready,
-                )?
-            } else {
-                SharedPromptPrecheckPlan {
-                    has_precheck_hooks: false,
-                    should_skip_precheck: true,
-                    progress_labels: Vec::new(),
-                }
-            };
+            let precheck_plan = webui_shared_prompt_precheck_plan(
+                &agent_runtime_for_preparation,
+                &workspace_snapshot,
+                &precheck_start,
+                &workspace_path,
+            )?;
             webui_submit_trace(
                 "submit_prompt_precheck_plan_ready",
                 format!(

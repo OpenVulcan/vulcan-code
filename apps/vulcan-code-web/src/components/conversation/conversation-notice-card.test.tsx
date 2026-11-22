@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ScrollText } from "lucide-react";
 import { I18nProvider } from "@/i18n";
+import { loadedLocaleCatalog } from "@/i18n-catalogs";
 import type { ConversationBlock } from "./conversation-model";
 import { ConversationNoticeCard } from "./conversation-notice-card";
 
@@ -82,17 +83,14 @@ it("shows a single-category card without a pager", () => {
   expect(host.querySelector(".vk-memory-pager")).toBeNull();
 });
 
-// Expiration-only notices use one line even if the old card was expanded in the saved UI state.
-// 即使旧卡片的界面状态曾保存为展开，纯失效提示也只占一行。
-it.each([
-  { category: "injection", useTitle: false },
-  { category: "memoryExpiration", useTitle: true },
-] as const)("renders an expiration-only notice for $category as a status line", ({ category, useTitle }) => {
+// A generic expiry without source text stays a status line even if expansion was saved earlier.
+// 没有来源正文的通用失效仍显示为状态行，即使之前保存过展开状态。
+it("renders a generic expiry as a status line", () => {
   // Model the projected state and the matching saved card expansion.
   // 模拟投影后的状态及对应的卡片展开记录。
   const block: ConversationBlock = { ...injectionBlock, summary: "Fixture expiration summary", rawMetadata: {
     notice_kind: "context_injection",
-    context_entries: [{ context_key: "injection.persistent", category, operation: "expire", content: "" }],
+    context_entries: [{ context_key: "injection.persistent", category: "injection", operation: "expire", content: "" }],
   } };
   act(() => root.render(
     <I18nProvider initialLocale="en-US">
@@ -100,6 +98,33 @@ it.each([
         onExpandedChange={() => undefined} title={block.title} />
     </I18nProvider>,
   ));
-  expect(host.querySelector(".vk-note-text")?.textContent).toBe(useTitle ? block.title : block.summary);
+  expect(host.querySelector(".vk-note-text")?.textContent).toBe(block.summary);
   expect(host.querySelector(".vk-tool")).toBeNull();
+});
+
+// Verifies the dedicated header opens the expired source text in the conversation.
+// 验证点击专属标题后在会话内展开过期来源正文。
+it("opens an expired memory notice to show the original memory", () => {
+  // The projected detail contains memory text, including punctuation that Markdown must preserve verbatim.
+  // 投影详情携带记忆正文，其中的 Markdown 标点必须原样展示。
+  const content = "Fixture expired memory includes ``` a literal fence.";
+  const title = loadedLocaleCatalog("en-US")!["conversation.contextInjection.category.memoryExpiration"];
+  const onExpandedChange = vi.fn();
+  const block: ConversationBlock = { ...injectionBlock, title, rawMetadata: {
+    notice_kind: "context_injection",
+    context_entries: [{ context_key: "injection.persistent", category: "memoryExpiration", operation: "expire", content }],
+  } };
+  act(() => root.render(
+    <I18nProvider initialLocale="en-US">
+      <ConversationNoticeCard block={block} expandedIds={new Set()} icon={ScrollText}
+        onExpandedChange={onExpandedChange} title={title} />
+    </I18nProvider>,
+  ));
+  const head = host.querySelector<HTMLButtonElement>(".vk-tool-head")!;
+  expect(head.textContent).toContain(title);
+  expect(host.textContent).not.toContain(content);
+  act(() => head.click());
+  expect(onExpandedChange).toHaveBeenCalledWith(`note:${block.id}`, true);
+  expect(host.querySelector(".vk-tool-body pre")?.textContent?.trim()).toBe(content);
+  expect(document.querySelector("[role=dialog]")).toBeNull();
 });

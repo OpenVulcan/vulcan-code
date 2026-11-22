@@ -165,8 +165,8 @@ fn project_webui_vmm_runtime_readiness(
 /// `agent_runtime` 持有 Provider 配置与 hook 运行态。
 /// `workspace_snapshot` contains session-scoped VMM overrides.
 /// `workspace_snapshot` 包含会话级 VMM 覆盖配置。
-/// `session_id` selects the session being prepared.
-/// `session_id` 选择正在准备的会话。
+/// `start` identifies the session and decides whether the submitted user text needs PreCheck.
+/// `start` 标识会话并决定提交的用户文本是否需要 PreCheck。
 /// `workspace_path` identifies the cached project VMM layer.
 /// `workspace_path` 标识缓存中的项目 VMM 配置层。
 ///
@@ -177,10 +177,20 @@ fn project_webui_vmm_runtime_readiness(
 pub(crate) fn webui_shared_prompt_precheck_plan(
     agent_runtime: &AgentRuntimeBridge,
     workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
+    start: &SharedPromptTurnStart,
     workspace_path: &str,
-    vmm_precheck_ready: bool,
 ) -> Result<SharedPromptPrecheckPlan, String> {
+    if !start.runs_user_prompt_precheck() {
+        return Ok(SharedPromptPrecheckPlan {
+            has_precheck_hooks: false,
+            should_skip_precheck: true,
+            progress_labels: Vec::new(),
+        });
+    }
+    // Resolve hooks and configuration only when there is user text to check.
+    // 仅在存在需要预检的用户文本时读取 Hook 和配置。
+    let session_id = start.session_id;
+    let vmm_precheck_ready = start.vmm_precheck_ready;
     let project_configuration_started_at = current_unix_millis_value();
     let project_layer = cached_project_vmm_layer(workspace_path);
     webui_trace(
@@ -371,7 +381,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         "precheck_continue_entered",
         format!("session={session_id} source={:?}", start.source),
     );
-    let runs_user_prompt_precheck = start.source.runs_user_prompt_precheck();
+    let runs_user_prompt_precheck = start.runs_user_prompt_precheck();
     let snapshot_lock_started_at = current_unix_millis_value();
     // capturedOwner makes the initial workspace read indivisible from exact generation validation.
     // capturedOwner 让初始工作区读取与精确代际校验不可分割。

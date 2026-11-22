@@ -49,15 +49,18 @@ export function contextInjectionOperationLabel(operation: ContextInjectionEntry[
 // contextInjectionEntryMarkdown returns one entry's status and any instruction text in a verbatim fence.
 // contextInjectionEntryMarkdown 返回单条记录的状态，并用围栏逐字展示其中的指令正文。
 export function contextInjectionEntryMarkdown(entry: ContextInjectionEntry, t: Translation): string {
-  // The heading alone communicates expiration when it shares a card with instruction text.
-  // 失效说明与指令正文共用卡片时，只用标题即可传达失效状态。
+  // A generic expiry has no source text. A memory expiry can show the actual expired content.
+  // 通用失效记录没有来源正文；记忆过期记录可展示实际过期内容。
   const heading = entry.label ?? contextInjectionOperationLabel(entry.operation, t);
-  if (entry.operation === "expire") return `**${heading}**`;
+  if (entry.operation === "expire" && !entry.content) return `**${heading}**`;
   // Size the fence so embedded backticks cannot escape the instruction block.
   // 按正文中的反引号长度设置围栏，避免正文提前结束代码块。
   const longestRun = Math.max(0, ...(entry.content.match(/`{3,}/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `**${heading}**\n\n${fence}text\n${entry.content}\n${fence}`;
+  const body = `${fence}text\n${entry.content}\n${fence}`;
+  // The card already names the expired memory category, so its body starts with the items themselves.
+  // 卡片已标出记忆过期类别，正文直接从记忆条目开始。
+  return entry.category === "memoryExpiration" ? body : `**${heading}**\n\n${body}`;
 }
 
 // shellJobNoticeLabel names a finished background command like its command card: the purpose (or the command's first

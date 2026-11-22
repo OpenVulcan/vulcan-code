@@ -1590,17 +1590,62 @@ mod tests {
     /// 覆盖工作台 begin/continue/launch 链路，确保预播种用户提示词仍作为控制器提示词。
     #[test]
     fn launch_payload_preserves_workbench_preseeded_user_prompt_through_shared_turn_flow() {
+        assert_workbench_preseeded_image_launch("Inspect the entry point.");
+    }
+
+    /// Covers attachment-only submission through the same preparation and launch path.
+    /// 覆盖纯附件提交在同一准备及启动链路中的行为。
+    #[test]
+    fn launch_payload_preserves_attachment_only_input_without_text_precheck() {
+        assert_workbench_preseeded_image_launch("");
+    }
+
+    /// Checks that `prompt` controls PreCheck and that the seeded image input reaches launch once.
+    /// 验证 `prompt` 控制 PreCheck，且预置的图片输入只进入一次启动载荷。
+    fn assert_workbench_preseeded_image_launch(prompt: &str) {
+        use vulcan_session_core::v1::projection::provider_visible_user_input_text;
+        use vulcan_workspace_store::workspace_store::{
+            ProjectResourceCatalogRegistry, ProjectResourceRegistration,
+            load_project_resource_catalog,
+        };
+
         let session_id = Uuid::nil();
-        let prompt = "请分析主入口文件";
+        // Register a real managed image so the V1 input references an available project resource.
+        // 登记一张真实托管图片，使 V1 输入引用可读取的项目资源。
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_path = workspace.path().to_str().unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(1, 1))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let resource_ids = ProjectResourceCatalogRegistry::default()
+            .resolve_or_register_project_resources(
+                workspace.path(),
+                &[ProjectResourceRegistration {
+                    original_name: String::from("image.png"),
+                    mime: Some(String::from("image/png")),
+                    content: png.into_inner(),
+                    provider_bindings: Vec::new(),
+                }],
+            )
+            .unwrap();
+        let catalog = load_project_resource_catalog(workspace.path()).unwrap();
+        let resource = catalog
+            .entries
+            .iter()
+            .find(|entry| resource_ids.contains(&entry.resource_id))
+            .expect("registered image");
         let attachment = ConversationAttachment {
             kind: ConversationAttachmentKind::Image,
-            file_name: String::from("image.png"),
-            local_path: String::from(r"D:\workspace\image.png"),
-            resource_path: None,
+            file_name: resource.original_name.clone(),
+            local_path: String::new(),
+            resource_path: Some(resource.entity_relative_path.clone()),
             source_path: None,
-            asset_id: None,
-            byte_len: Some(1024),
-            source_sha256: None,
+            asset_id: Some(crate::attachment_asset_index::project_resource_asset_id(
+                resource.resource_id.value(),
+            )),
+            byte_len: Some(resource.size),
+            source_sha256: Some(resource.sha256.clone()),
             delivery_mode: None,
             preview_local_path: None,
             mime_type: String::from("image/png"),
@@ -1613,7 +1658,7 @@ mod tests {
             SharedPromptTurnRuntimeBeginInput {
                 session_id,
                 session_title: "测试会话",
-                workspace_path: r"D:\workspace",
+                workspace_path,
                 prompt_entry_id: String::from("prompt-entry-1"),
                 continuation_action_id: None,
                 prompt,
@@ -1633,6 +1678,7 @@ mod tests {
             },
         )
         .expect("begin shared prompt turn");
+        assert_eq!(start.runs_user_prompt_precheck(), !prompt.trim().is_empty());
         let precheck_outcome = start.precheck_request.clone().skip();
         // profile_outcome keeps profile preparation distinct in this transport-focused test.
         // profile_outcome 在该传输链路测试中保持画像准备的独立性。
@@ -1656,28 +1702,35 @@ mod tests {
                 project_configuration: Default::default(),
                 runtime_reasoning_effort: None,
                 provider_reasoning_effort: None,
-                patch_visible_user_prompt_record: true,
+                patch_visible_user_prompt_record: !prompt.trim().is_empty(),
             },
         )
         .expect("continue shared prompt turn");
-        let request = continuation.request;
+        let mut request = continuation.request;
         let latest_request_message = request
             .conversation_state
             .messages
-            .last()
+            .last_mut()
             .expect("request should contain preseeded user message");
-        assert!(matches!(
-            &latest_request_message.payload,
-            crate::conversation_protocol::SessionConversationPayload::UserText {
-                text,
-                attachments,
-            } if text == prompt && attachments.len() == 1
-        ));
+        let crate::conversation_protocol::SessionConversationPayload::UserText {
+            text,
+            attachments,
+        } = &mut latest_request_message.payload
+        else {
+            panic!("request should contain user input");
+        };
+        assert_eq!(text.as_str(), prompt);
+        assert_eq!(attachments.len(), 1);
+        // The V1 projector supplies the resource-only note after the raw user text passes PreCheck admission.
+        // 原始用户文字完成 PreCheck 准入判断后，由 V1 投影补入纯资源说明。
+        let projected_user_text = provider_visible_user_input_text(text, &resource_ids);
+        text.clone_from(&projected_user_text);
+        let latest_request_message_id = latest_request_message.id.clone();
 
         let mut preparation = build_test_preparation();
         preparation.session_id = session_id;
         preparation.session_title = String::from("测试会话");
-        preparation.workspace_path = String::from(r"D:\workspace");
+        preparation.workspace_path = workspace_path.to_owned();
         let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None)
             .expect("runtime bootstrap core should build");
         let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
@@ -1701,7 +1754,7 @@ mod tests {
         else {
             panic!("latest projected message should be user text");
         };
-        assert!(projected_text.contains(prompt));
+        assert!(projected_text.contains(projected_user_text.as_str()));
         assert!(projected_text.contains("ATTACHMENT:"));
         assert_ne!(projected_text, prompt);
         assert!(projected_attachments.is_empty());
@@ -1721,7 +1774,7 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(latest_projected_message.id, latest_request_message.id);
+        assert_eq!(latest_projected_message.id, latest_request_message_id);
         let seeded_messages = serde_json::to_value(&core_snapshot.messages).unwrap();
         let bootstrap = RuntimeStreamBootstrap {
             preparation,

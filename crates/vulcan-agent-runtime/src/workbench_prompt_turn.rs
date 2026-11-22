@@ -222,6 +222,16 @@ pub struct SharedPromptTurnStart {
     pub canonical_user_message_id: Option<String>,
 }
 
+impl SharedPromptTurnStart {
+    /// Returns whether this accepted user source has actual text for the PreCheck hook.
+    /// 判断已接纳的用户来源是否含有可供 PreCheck Hook 处理的真实文本。
+    /// Uses the prepared user text. Attachments and model-only guidance remain separate.
+    /// 使用已准备的用户文本，附件及仅模型可见的引导仍单独处理。
+    pub fn runs_user_prompt_precheck(&self) -> bool {
+        self.source.runs_user_prompt_precheck() && !self.prompt.trim().is_empty()
+    }
+}
+
 impl fmt::Debug for SharedPromptTurnStart {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -525,7 +535,7 @@ fn begin_shared_prompt_turn_with_input_projection(
             canonical_inputs,
         )?
     };
-    let initial_phase = if input.source.runs_user_prompt_precheck() {
+    let initial_phase = if start.runs_user_prompt_precheck() {
         SessionRunPhase::MemoryRecall
     } else {
         SessionRunPhase::Preparing

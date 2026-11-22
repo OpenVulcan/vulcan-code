@@ -46,6 +46,24 @@ describe("view-only usage coverage", () => {
     expect(usageCacheRatio(undefined, undefined, coverage).percent).toBeNull();
   });
 
+  // Uses only a valid same-request pair, with cache writes included in uncached input.
+  // 只使用同一请求内的有效配对，无缓存输入包含缓存写入。
+  it("derives uncached usage from paired requests and skips inconsistent or incomplete counts", () => {
+    const events = kimiPartialUsageEvents();
+    for (const summary of events) {
+      if (summary.event.kind !== "api_stats") continue;
+      summary.event.usage = {};
+    }
+    const samples = events.flatMap((summary) => summary.event.kind === "api_stats" ? [summary.event] : []);
+    samples[0].usage = { input_tokens: 100, cache_read_tokens: 60, cache_write_tokens: 20 };
+    samples[1].usage = { input_tokens: 50 };
+    samples[2].usage = { cache_read_tokens: 10 };
+    samples[3].usage = { input_tokens: 10, cache_read_tokens: 11 };
+    const coverage = projectTurnUsageCoverage(events).get(9)!.total;
+    expect(coverage.dimensions.uncached_input_tokens).toEqual({ knownTokens: 40, reportedApiCallCount: 1 });
+    expect(usageCacheRatio(undefined, undefined, coverage)).toEqual({ percent: 60, partial: true });
+  });
+
   it("removes the partial marker only when every request has an explicit cache sample", () => {
     const events = kimiPartialUsageEvents();
     if (events[0].event.kind === "api_stats") {

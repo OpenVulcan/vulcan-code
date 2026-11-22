@@ -1,8 +1,9 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { readLocaleMessage, type LocaleCode } from "@/i18n";
+import { formatMessage, readLocaleMessage, type LocaleCode } from "@/i18n";
 import type { TranslationKey } from "@/i18n-messages";
+import { formatTokenCount } from "@/lib/usage-format";
 import { kimiPartialUsageEvents } from "@/service/__fixtures__/kimi-partial-usage";
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { TurnStatsTooltipCard } from "./conversation-turn-stats-card";
@@ -89,11 +90,35 @@ describe("partial usage display from old persisted V1 events", () => {
     expect(markup).toContain(label("zh-CN", "conversation.turnStats.uncachedInput"));
     expect(markup).toContain(label("zh-CN", "conversation.turnStats.cacheHitRate"));
     expect(markup).toContain("91.8%");
+    expect(markup).toContain(formatMessage(readLocaleMessage("zh-CN", "conversation.turnStats.cacheHitRateSample"), { count: 7, total: 8 }));
     expect(markup).not.toMatch(/≥|7\/8|turn-stats-coverage-note/);
     expect(statsPairCount(markup)).toBe(completeLayoutPairCount());
     expect(markup).toContain("214.8K");
     expect(markup).not.toContain("83.98");
     expect(JSON.stringify(events)).toBe(original);
+  });
+
+  // Reopening the affected turn still has its exact input and cache totals without any detailed API events.
+  // 重开受影响回合时，即使没有 API 明细，仍有精确的输入与缓存总量。
+  it("shows uncached input and fills the cache bar from exact persisted input and cache reads", () => {
+    // The saved bucket mirrors the affected Opencode Go turn with no separate uncached count.
+    // 此持久化统计桶复现受影响的 Opencode Go 回合，其中没有单独的无缓存计数。
+    const terminal = kimiPartialUsageEvents().find((summary) => summary.event.kind === "turn_stats")!;
+    if (terminal.event.kind !== "turn_stats") throw new Error("fixture terminal");
+    const usage = { input_tokens: 7_826_944, cache_read_tokens: 7_489_536, output_tokens: 20_114, total_tokens: 7_847_058 };
+    const aggregate = { ...terminal.event.buckets.direct, api_call_count: 38, tool_call_count: 38, usage };
+    terminal.event.buckets.direct = aggregate;
+    terminal.event.buckets.total = aggregate;
+    const branch = projectConversationBranchPresentationV1("fixture", [terminal], {
+      sessionId: "fixture", resources: new Map(), contentUrl: () => "", error: null, status: "ready",
+    }, (key) => key);
+    const metadata = branch.messages.find((message) => message.recordKind === "turn-stats")!.metadata;
+    const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
+    expect(markup).toContain(`${label("zh-CN", "conversation.turnStats.uncachedInput")}<strong>${formatTokenCount(337_408)}</strong>`);
+    expect(markup).toContain("95.7%");
+    expect(markup).not.toContain("vk-stats-note");
+    expect(markup).toContain(`aria-valuenow="${usage.cache_read_tokens / usage.input_tokens * 100}"`);
+    expect(usage).not.toHaveProperty("uncached_input_tokens");
   });
 
   // Hidden accounting metadata remains available to the adapter without rendering a separate API row.
@@ -111,12 +136,13 @@ describe("partial usage display from old persisted V1 events", () => {
     // Select the authoritative terminal message, not text scraped from an assistant response.
     // 选择权威终态消息，不从 assistant 回复中抓取文本。
     const metadata = branch.messages.find((message) => message.recordKind === "turn-stats")!.metadata;
-    // The English surface keeps the same amounts without coverage qualifiers.
-    // 英文界面保留相同数值，不附加覆盖限定说明。
+    // The English surface identifies the sample for the rate while leaving raw totals unchanged.
+    // 英文界面说明命中率的样本范围，并保留用量总计。
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="en-US" subagentStats={false} />);
     expect(markup).toContain("179.5K");
     expect(markup).toContain(label("en-US", "conversation.usage.cacheRead"));
     expect(markup).toContain(label("en-US", "conversation.turnStats.cacheHitRate"));
+    expect(markup).toContain(formatMessage(readLocaleMessage("en-US", "conversation.turnStats.cacheHitRateSample"), { count: 7, total: 8 }));
     expect(markup).not.toMatch(/≥|known|Known|7\/8|turn-stats-coverage-note/);
   });
 
