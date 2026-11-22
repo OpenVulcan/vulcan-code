@@ -262,6 +262,7 @@ fn insert_test_workbench_conversation(state: &mut ServiceBridgeState, session_id
         title: String::from("Test session"),
         status: SessionState::Completed.label().to_string(),
         run_phase: SessionRunPhase::Ready.to_string(),
+        tool_request_started_at_ms: None,
         last_updated_label: String::from("just now"),
         last_updated_at: String::from("100"),
         created_at: String::from("100"),

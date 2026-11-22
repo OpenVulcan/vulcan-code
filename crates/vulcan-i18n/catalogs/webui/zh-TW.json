@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "{running} 執行中 / {total}",
   "sessionActivity.backgroundCommands": "背景命令",
   "toolCard.shell.background": "背景",
+  "toolCard.shell.noTimeout": "無逾時限制",
+  "toolCard.shell.timeout": "逾時 {duration}",
   "toolCard.shell.backgroundNote": "仍作為背景工作 {job} 執行；結束時會通知 AI。",
   "toolCard.shell.notRunning": "命令已不在執行。",
   "toolCard.shell.moveToBackground": "移至背景",

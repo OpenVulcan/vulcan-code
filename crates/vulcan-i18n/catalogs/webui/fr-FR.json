@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "{running} en cours / {total}",
   "sessionActivity.backgroundCommands": "Commandes en arrière-plan",
   "toolCard.shell.background": "Arrière-plan",
+  "toolCard.shell.noTimeout": "Sans limite de temps",
+  "toolCard.shell.timeout": "Délai {duration}",
   "toolCard.shell.backgroundNote": "Continue en tant que tâche d’arrière-plan {job} ; l’IA sera prévenue à la fin.",
   "toolCard.shell.notRunning": "La commande ne s’exécute plus.",
   "toolCard.shell.moveToBackground": "Passer en arrière-plan",

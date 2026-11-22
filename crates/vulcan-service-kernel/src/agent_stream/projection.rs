@@ -464,6 +464,7 @@ where
         for conversation in &mut guard.workbench.conversations {
             if conversation.id == conversation_id {
                 conversation.run_phase = run_phase.to_string();
+                conversation.tool_request_started_at_ms = None;
                 conversation.status = session_state.label().to_string();
                 conversation.last_updated_label = String::from("just now");
                 conversation.last_updated_at = current_unix_millis_text();
@@ -475,6 +476,7 @@ where
             delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
                 conversation_id,
                 run_phase: run_phase.to_string(),
+                tool_request_started_at_ms: None,
                 status: Some(session_state.label().to_string()),
                 last_updated_label: Some(String::from("now")),
             }),
@@ -683,6 +685,7 @@ fn commit_workspace_snapshot_and_emit_session_phase_delta_internal(
             for conversation in &mut guard.workbench.conversations {
                 if conversation.id == conversation_id {
                     conversation.run_phase = run_phase.to_string();
+                    conversation.tool_request_started_at_ms = None;
                     conversation.status = session_state.label().to_string();
                     conversation.last_updated_label = String::from("just now");
                     conversation.last_updated_at = current_unix_millis_text();
@@ -695,6 +698,7 @@ fn commit_workspace_snapshot_and_emit_session_phase_delta_internal(
                     UpdateConversationRunPhaseDelta {
                         conversation_id,
                         run_phase: run_phase.to_string(),
+                        tool_request_started_at_ms: None,
                         status: Some(session_state.label().to_string()),
                         last_updated_label: Some(String::from("now")),
                     },

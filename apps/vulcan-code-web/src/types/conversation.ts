@@ -71,6 +71,9 @@ export interface ConversationSummary {
   // Current per-session runtime phase.
   // 当前会话级运行阶段。
   runPhase?: string;
+  // Core timestamp for the start of the current tool request construction phase.
+  // 当前工具请求构造阶段的 Core 起点时间戳。
+  toolRequestStartedAtMs?: number;
   // Relative last-updated label.
   // 相对最后更新时间标签。
   lastUpdatedLabel?: string;
@@ -242,6 +245,9 @@ export interface UpdateConversationRunPhaseDelta {
   // Current backend run phase for the conversation.
   // 会话当前的后端运行阶段。
   runPhase: string;
+  // Core timestamp when this phase is tool request construction.
+  // 工具请求构造阶段的 Core 起点时间戳。
+  toolRequestStartedAtMs?: number;
   // Optional backend status label paired with the phase.
   // 与阶段配套的可选后端状态标签。
   status?: string | null;

@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "{running} laufend / {total}",
   "sessionActivity.backgroundCommands": "Hintergrundbefehle",
   "toolCard.shell.background": "Hintergrund",
+  "toolCard.shell.noTimeout": "Kein Zeitlimit",
+  "toolCard.shell.timeout": "Zeitlimit {duration}",
   "toolCard.shell.backgroundNote": "Läuft als Hintergrundjob {job} weiter; die KI wird benachrichtigt, wenn er endet.",
   "toolCard.shell.notRunning": "Der Befehl läuft nicht mehr.",
   "toolCard.shell.moveToBackground": "In den Hintergrund",

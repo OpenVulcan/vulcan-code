@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "выполняется {running} / {total}",
   "sessionActivity.backgroundCommands": "Фоновые команды",
   "toolCard.shell.background": "Фон",
+  "toolCard.shell.noTimeout": "Без ограничения времени",
+  "toolCard.shell.timeout": "Тайм-аут {duration}",
   "toolCard.shell.backgroundNote": "Продолжает работать как фоновая задача {job}; ИИ получит уведомление по завершении.",
   "toolCard.shell.notRunning": "Команда больше не выполняется.",
   "toolCard.shell.moveToBackground": "Перевести в фон",

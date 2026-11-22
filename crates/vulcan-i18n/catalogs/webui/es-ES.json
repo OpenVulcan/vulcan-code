@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "{running} en ejecución / {total}",
   "sessionActivity.backgroundCommands": "Comandos en segundo plano",
   "toolCard.shell.background": "Segundo plano",
+  "toolCard.shell.noTimeout": "Sin límite de tiempo",
+  "toolCard.shell.timeout": "Límite {duration}",
   "toolCard.shell.backgroundNote": "Sigue ejecutándose como tarea en segundo plano {job}; se avisará a la IA cuando termine.",
   "toolCard.shell.notRunning": "El comando ya no se está ejecutando.",
   "toolCard.shell.moveToBackground": "Pasar a segundo plano",

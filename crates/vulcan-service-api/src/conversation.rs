@@ -61,6 +61,10 @@ pub struct ConversationSummary {
     /// 当前会话级运行阶段。
     #[serde(default)]
     pub run_phase: String,
+    /// Unix milliseconds when the active tool-request construction phase began.
+    /// 当前工具请求构造阶段开始时的 Unix 毫秒时间戳。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_request_started_at_ms: Option<i64>,
     /// Relative last-updated label shown in the sidebar.
     /// 侧栏中展示的相对最后更新时间。
     #[serde(default)]
@@ -585,6 +589,10 @@ pub struct UpdateConversationRunPhaseDelta {
     /// Current backend run phase for the conversation.
     /// 会话当前的后端运行阶段。
     pub run_phase: String,
+    /// The same construction start as the retained conversation row, if this phase has one.
+    /// 此阶段有构造起点时，使用与保留会话行相同的时间戳。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_request_started_at_ms: Option<i64>,
     /// Optional backend status label paired with the phase.
     /// 与阶段配套的可选后端状态标签。
     #[serde(default, skip_serializing_if = "Option::is_none")]

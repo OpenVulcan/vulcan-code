@@ -100,6 +100,7 @@ fn cold_state(session_id: SessionId, controller: HostRuntimeHandle) -> SharedSer
         title: "Fixture".into(),
         status: SessionState::Completed.label().into(),
         run_phase: SessionRunPhase::Ready.to_string(),
+        tool_request_started_at_ms: None,
         last_updated_label: "now".into(),
         last_updated_at: "1".into(),
         created_at: "1".into(),

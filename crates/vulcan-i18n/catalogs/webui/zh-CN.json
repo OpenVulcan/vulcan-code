@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "{running} 运行中 / {total}",
   "sessionActivity.backgroundCommands": "后台命令",
   "toolCard.shell.background": "后台",
+  "toolCard.shell.noTimeout": "无超时限制",
+  "toolCard.shell.timeout": "超时 {duration}",
   "toolCard.shell.backgroundNote": "仍作为后台任务 {job} 运行；结束时会通知 AI。",
   "toolCard.shell.notRunning": "命令已不在运行。",
   "toolCard.shell.moveToBackground": "转到后台",

@@ -959,6 +959,7 @@ mod tests {
             title: String::from("Session"),
             status: String::from("idle"),
             run_phase: String::from("idle"),
+            tool_request_started_at_ms: None,
             last_updated_label: String::from("now"),
             last_updated_at: last_updated_at.to_string(),
             created_at: last_updated_at.to_string(),

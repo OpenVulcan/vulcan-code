@@ -6,6 +6,8 @@ import type {
 
 // conversationRuntimeCue resolves the compact active-state cue shown above the composer.
 // conversationRuntimeCue 解析显示在输入区上方的紧凑运行状态提示。
+// Takes the selected conversation, translator and Core request clocks. Returns null when no cue applies.
+// 接收选中的会话、翻译函数与 Core 请求起点。无对应提示时返回 null。
 export function conversationRuntimeCue(
   conversation: ConversationSummary | undefined,
   t: ReturnType<typeof useI18n>["t"],
@@ -17,7 +19,9 @@ export function conversationRuntimeCue(
   if (conversation.status.toLowerCase() !== "running") {
     return null;
   }
-  const phaseCue = sessionRunPhaseCue(conversation.runPhase, t, activeRequestStartedAtMs);
+  const phaseCue = sessionRunPhaseCue(
+    conversation.runPhase, t, activeRequestStartedAtMs, conversation.toolRequestStartedAtMs ?? null,
+  );
   if (phaseCue) {
     return phaseCue;
   }
@@ -49,10 +53,13 @@ export function normalizedSessionRunPhase(runPhase?: string | null): string | nu
 
 // sessionRunPhaseCue maps the backend per-session phase to a reusable active cue.
 // sessionRunPhaseCue 将后端会话级阶段映射为可复用的活动提示。
+// Takes phase text, a translator, and the model and tool request clocks. Returns a cue or null.
+// 接收阶段文本、翻译函数及模型与工具请求起点，返回提示或 null。
 function sessionRunPhaseCue(
   runPhase: string | null | undefined,
   t: ReturnType<typeof useI18n>["t"],
   activeRequestStartedAtMs: number | null,
+  toolRequestStartedAtMs: number | null,
 ): RuntimeCue | null {
   const normalized = normalizedSessionRunPhase(runPhase);
   if (!normalized || normalized === "idle" || normalized === "ready" || normalized === "failed" || normalized === "stopped") {
@@ -65,7 +72,7 @@ function sessionRunPhaseCue(
     return null;
   }
   if (normalized === "toolcalling") {
-    return { kind: "default", text: t("runtime.toolCalling") };
+    return { kind: "default", text: t("runtime.toolCalling"), startedAtMs: toolRequestStartedAtMs };
   }
   if (normalized === "toolrunning") {
     return null;

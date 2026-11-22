@@ -4235,6 +4235,9 @@ pub(crate) fn emit_queued_prompt_run_phase_delta(
         let run_phase_text = run_phase.to_string();
         let mut status = None;
         let mut last_updated_label = None;
+        // Queueing republishes the current phase, including any active construction clock.
+        // 排队操作会重新发布当前阶段及其活动构造计时起点。
+        let mut tool_request_started_at_ms = None;
         if let Some(conversation) = guard
             .workbench
             .conversations
@@ -4242,6 +4245,10 @@ pub(crate) fn emit_queued_prompt_run_phase_delta(
             .find(|candidate| candidate.id == conversation_id)
         {
             conversation.run_phase = run_phase_text.clone();
+            if run_phase != SessionRunPhase::ToolCalling {
+                conversation.tool_request_started_at_ms = None;
+            }
+            tool_request_started_at_ms = conversation.tool_request_started_at_ms;
             status = Some(conversation.status.clone());
             last_updated_label = Some(conversation.last_updated_label.clone());
         }
@@ -4252,6 +4259,7 @@ pub(crate) fn emit_queued_prompt_run_phase_delta(
                     UpdateConversationRunPhaseDelta {
                         conversation_id,
                         run_phase: run_phase_text,
+                        tool_request_started_at_ms,
                         status,
                         last_updated_label,
                     },

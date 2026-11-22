@@ -902,6 +902,7 @@ function applyUpdateConversationRunPhaseDelta(
         ? {
             ...conversation,
             runPhase: delta.runPhase,
+            toolRequestStartedAtMs: delta.toolRequestStartedAtMs,
             status: delta.status ?? conversation.status,
             lastUpdatedLabel: delta.lastUpdatedLabel ?? conversation.lastUpdatedLabel,
             // The kernel stamps the update time together with the label, and the row age reads the timestamp.

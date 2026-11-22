@@ -265,6 +265,7 @@ pub(crate) fn commit_materialized_submission_activation(
         }
         .to_string(),
         run_phase: run_phase.to_string(),
+        tool_request_started_at_ms: None,
         last_updated_label: session.last_updated_label.clone(),
         last_updated_at: session.updated_at.clone(),
         created_at: session.created_at.clone(),

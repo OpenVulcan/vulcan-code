@@ -953,6 +953,7 @@ fn emit_terminal_execution_report_workbench_deltas(
             WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
                 conversation_id: conversation_id.clone(),
                 run_phase: run_phase.to_string(),
+                tool_request_started_at_ms: None,
                 status: Some(status_label.to_string()),
                 last_updated_label: Some(String::from("now")),
             }),
@@ -961,6 +962,7 @@ fn emit_terminal_execution_report_workbench_deltas(
         for conversation in &mut guard.workbench.conversations {
             if conversation.id == conversation_id {
                 conversation.run_phase = run_phase.to_string();
+                conversation.tool_request_started_at_ms = None;
                 conversation.status = status_label.to_string();
                 conversation.last_updated_label = String::from("just now");
                 conversation.last_updated_at = current_unix_millis_text();
@@ -1270,6 +1272,7 @@ mod tests {
                 title: String::from("background"),
                 status: String::from("Running"),
                 run_phase: SessionRunPhase::Preparing.to_string(),
+                tool_request_started_at_ms: None,
                 last_updated_label: String::new(),
                 last_updated_at: String::from("1"),
                 created_at: String::from("1"),

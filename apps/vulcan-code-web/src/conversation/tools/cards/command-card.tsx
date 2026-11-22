@@ -3,13 +3,13 @@
 // 命令卡一眼回答三个问题：运行了什么（AI 给出的标题，或命令本身）、如何结束、耗时多久。正文是终端记录，末尾注明运行位置。
 import * as React from "react";
 import { SquareTerminal } from "lucide-react";
-import { useI18n, type TranslationKey } from "@/i18n";
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import { backgroundShellCommand } from "@/service/session-activity-service";
 import { Button } from "@/ui-kit/primitives/button";
 import { toast } from "@/ui-kit/primitives/toast";
 import { ToolCardSessionContext, ToolFrame, type ToolCardProps } from "../tool-card";
-import { listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
+import { formatToolDuration, listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
 import { TerminalView } from "../views/terminal-view";
 import { useShellCommandLiveOutput, type ShellCommandLiveTarget } from "./use-shell-command-live-output";
 
@@ -23,6 +23,19 @@ export function ShellCommandCard(props: ToolCardProps) {
   const purpose = (textOf(run?.purpose) ?? textOf(call.input.title) ?? "").trim();
   const jobId = textOf(run?.job_id);
   const backgrounded = textOf(run?.status) === SHELL_COMMAND_BACKGROUND_STATUS;
+  // The active command's configured timeout is known only once its arguments have finished streaming.
+  // 活动命令的超时配置只有在参数流结束后才可确定。
+  let timeoutLabel: string | null = null;
+  if (call.state === "running" && !call.request && !backgrounded) {
+    // The native tool treats omitted and null timeouts as unlimited. Invalid numeric input has no valid duration.
+    // 原生工具将省略或为 null 的超时视为无限等待。无效数字没有有效时长。
+    const timeoutMs = call.input.timeout_ms;
+    if (timeoutMs == null) {
+      timeoutLabel = t("toolCard.shell.noTimeout");
+    } else if (typeof timeoutMs === "number" && Number.isInteger(timeoutMs) && timeoutMs > 0) {
+      timeoutLabel = formatMessage(t("toolCard.shell.timeout"), { duration: formatToolDuration(timeoutMs) });
+    }
+  }
   const hook = objectOf(run?.hook_transform);
   const effective = textOf(hook?.effective_command);
   const exitCode = numberOf(run?.exit_code) ?? exitCodeFromText(call.modelOutput);
@@ -45,6 +58,7 @@ export function ShellCommandCard(props: ToolCardProps) {
             <span className="vk-badge" key={index} title={`${textOf(badge?.label) ?? ""}: ${textOf(badge?.value) ?? ""}`}>{textOf(badge?.badge)}</span>
           ))}
           {backgrounded ? <span className="vk-badge" title={jobId ?? undefined}>{t("toolCard.shell.background")}</span> : null}
+          {timeoutLabel ? <span className="vk-tool-timeout">{timeoutLabel}</span> : null}
           {exitCode !== null && exitCode !== 0 ? <span className="vk-del">{t("toolCard.exitCode").replace("{code}", String(exitCode))}</span> : null}
         </>
       )}

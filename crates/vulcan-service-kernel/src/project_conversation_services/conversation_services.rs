@@ -861,6 +861,7 @@ mod tests {
             title: String::from("Archive event test"),
             status: String::from("Archived"),
             run_phase: String::from("idle"),
+            tool_request_started_at_ms: None,
             last_updated_label: String::from("just now"),
             last_updated_at: String::from("1783671000000"),
             created_at: String::from("1783671000000"),

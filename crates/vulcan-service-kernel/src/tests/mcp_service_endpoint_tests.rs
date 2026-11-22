@@ -221,6 +221,7 @@ fn mcp_test_state() -> SharedServiceBridgeState {
                 title: session.to_string(),
                 status: String::from("idle"),
                 run_phase: String::from("Idle"),
+                tool_request_started_at_ms: None,
                 last_updated_label: String::from("now"),
                 last_updated_at: String::from("2026-10-22T00:00:00Z"),
                 created_at: String::from("2026-10-22T00:00:00Z"),

@@ -514,7 +514,7 @@ async fn try_refresh_workbench_snapshot(
 /// 全部匹配会话刷新后返回 `Ok(())`，实时注册表读取失败时返回精确错误。
 pub(crate) fn reconcile_workbench_conversation_lifecycle_projection(
     workbench: &mut WorkbenchSnapshot,
-    _state: &ServiceBridgeState,
+    state: &ServiceBridgeState,
     workspace: &WorkspaceSnapshot,
 ) -> Result<(), String> {
     // liveProjections keeps status and phase sourced from the same final lock revision.
@@ -537,14 +537,31 @@ pub(crate) fn reconcile_workbench_conversation_lifecycle_projection(
                 session.status.label()
             }
             .to_string();
-        live_projections.insert(session.id.to_string(), (status, run_phase.to_string()));
+        live_projections.insert(session.id.to_string(), (status, run_phase));
     }
+    // Keep the Core's construction start across a full snapshot rebuild, for the same live session.
+    // 完整重建快照时，为同一活动会话保留 Core 的构造起点。
+    let tool_request_starts: BTreeMap<_, _> = state
+        .workbench
+        .conversations
+        .iter()
+        .filter_map(|conversation| {
+            conversation
+                .tool_request_started_at_ms
+                .map(|start| (conversation.id.as_str(), start))
+        })
+        .collect();
     for conversation in &mut workbench.conversations {
         let Some((status, run_phase)) = live_projections.get(&conversation.id) else {
             continue;
         };
         conversation.status.clone_from(status);
-        conversation.run_phase.clone_from(run_phase);
+        conversation.run_phase = run_phase.to_string();
+        conversation.tool_request_started_at_ms = if *run_phase == SessionRunPhase::ToolCalling {
+            tool_request_starts.get(conversation.id.as_str()).copied()
+        } else {
+            None
+        };
     }
     Ok(())
 }
@@ -1395,6 +1412,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 title: session.title.clone(),
                 status: String::from("Archived"),
                 run_phase: SessionRunPhase::Idle.to_string(),
+                tool_request_started_at_ms: None,
                 last_updated_label: session.last_updated_label.clone(),
                 last_updated_at: session.updated_at.clone(),
                 created_at: session.created_at.clone(),
@@ -1590,6 +1608,7 @@ fn workbench_conversation_summary(
             }
             .to_string(),
         run_phase: run_phase.to_string(),
+        tool_request_started_at_ms: None,
         last_updated_label: session.last_updated_label.clone(),
         last_updated_at: session.updated_at.clone(),
         created_at: session.created_at.clone(),

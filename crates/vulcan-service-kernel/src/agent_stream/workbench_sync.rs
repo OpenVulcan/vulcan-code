@@ -263,13 +263,16 @@ pub(crate) fn apply_session_phase_to_state(
     let session_state = session_state_for_run_phase(phase);
     // updated_at keeps retained workspace and Workbench timestamps aligned to the same mutation.
     // updated_at 使保留工作区与 Workbench 时间戳对齐到同一次变更。
-    let updated_at = current_unix_millis_text();
+    let updated_at_ms = current_unix_millis_value() as i64;
+    let updated_at = updated_at_ms.to_string();
     // workspace owns the authoritative retained run phase.
     // workspace 持有权威保留运行阶段。
     let workspace = state.workspace_snapshot.as_mut().ok_or_else(|| {
         String::from("service is still starting; workspace snapshot is not ready")
     })?;
-    workspace.session_run_phases.insert(session_id, phase);
+    // The previous phase distinguishes a real transition from another streamed progress update.
+    // 通过上一个阶段区分真实阶段转换与后续流式进度更新。
+    let previous_phase = workspace.session_run_phases.insert(session_id, phase);
     if let Some(session) = workspace
         .sessions
         .iter_mut()
@@ -287,8 +290,19 @@ pub(crate) fn apply_session_phase_to_state(
     // status_label is shared by retained Workbench state and the emitted delta.
     // status_label 由保留 Workbench 状态与发送增量共享。
     let status_label = session_state.label().to_string();
+    // Retain the original construction start across repeated progress and preview events.
+    // 在后续进度与预览事件中保留构造阶段的原始起点。
+    let mut tool_request_started_at_ms = None;
     for conversation in &mut state.workbench.conversations {
         if conversation.id == conversation_id {
+            tool_request_started_at_ms = if phase != SessionRunPhase::ToolCalling {
+                None
+            } else if previous_phase == Some(phase) {
+                conversation.tool_request_started_at_ms
+            } else {
+                Some(updated_at_ms)
+            };
+            conversation.tool_request_started_at_ms = tool_request_started_at_ms;
             conversation.run_phase = phase.to_string();
             conversation.status = status_label.clone();
             conversation.last_updated_label = String::from("just now");
@@ -301,6 +315,7 @@ pub(crate) fn apply_session_phase_to_state(
         delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
             conversation_id,
             run_phase: phase.to_string(),
+            tool_request_started_at_ms,
             status: Some(status_label),
             last_updated_label: Some(String::from("now")),
         }),

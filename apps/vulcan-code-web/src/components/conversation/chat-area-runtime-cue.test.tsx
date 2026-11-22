@@ -18,6 +18,7 @@ import { formatWorkProcessDuration } from "@/components/conversation/conversatio
 import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import type { TransientReasoningStatus } from "@/types";
+import { applyWorkbenchDelta } from "@/state/workbench-state";
 
 // liveStatus lets each scenario choose which request-local status competes with the runtime cue.
 // liveStatus 让每个场景选择与运行提示竞争的请求局部状态。
@@ -446,6 +447,52 @@ describe("session runtime cue placement", () => {
       },
     }]);
     expect(host.querySelector(".vk-runtime-cue-elapsed")).toBeNull();
+  });
+
+  // Uses the actual phase delta for the live clock and an independent selection snapshot on return.
+  // 实时计时使用真实阶段增量，返回会话时使用独立的选择快照。
+  it("keeps the Core tool request clock through progress updates and switching away and back", async () => {
+    vi.useFakeTimers();
+    // The tool formation started before the UI received its first phase update.
+    // 工具构造先于界面收到首条阶段增量开始。
+    const startedAtMs = Date.now() - 12_000;
+    const props = chatAreaProps("requesting");
+    const toolCalling = applyWorkbenchDelta(props.workbench, {
+      generation: (props.workbench.revision ?? 0) + 1,
+      delta: { kind: "updateConversationRunPhase", payload: {
+        conversationId: "test-playwright", runPhase: "toolCalling", toolRequestStartedAtMs: startedAtMs,
+      } },
+    });
+    await render({ ...props, workbench: toolCalling });
+    expect(host.querySelector(".vk-runtime-cue-elapsed")?.textContent).toBe(formatWorkProcessDuration(12_000, "en-US"));
+    await React.act(async () => vi.advanceTimersByTimeAsync(2_000));
+    // A progress update during formation retains the exact start supplied by Core.
+    // 构造期间收到的进度更新保留 Core 提供的精确起点。
+    const progress = applyWorkbenchDelta(toolCalling, {
+      generation: (toolCalling.revision ?? 0) + 1,
+      delta: { kind: "updateConversationRunPhase", payload: {
+        conversationId: "test-playwright", runPhase: "toolCalling", toolRequestStartedAtMs: startedAtMs,
+      } },
+    });
+    await render({ ...props, workbench: progress });
+    expect(host.querySelector(".vk-runtime-cue-elapsed")?.textContent).toBe(formatWorkProcessDuration(14_000, "en-US"));
+
+    await render({ ...chatAreaProps("idle"), selectedConversationId: "test-tools" });
+    await React.act(async () => vi.advanceTimersByTimeAsync(5_000));
+    // Core selection restores the phase clock even when no live argument fragment arrives during the switch.
+    // 切换期间即使没有新的参数片段，Core 选择快照也恢复阶段计时。
+    const selected = chatAreaProps("toolCalling");
+    selected.workbench.conversations = selected.workbench.conversations.map((conversation) => (
+      conversation.id === "test-playwright" ? { ...conversation, toolRequestStartedAtMs: startedAtMs } : conversation
+    ));
+    await render(selected);
+    expect(host.querySelector(".vk-runtime-cue-elapsed")?.textContent).toBe(formatWorkProcessDuration(19_000, "en-US"));
+
+    await render(chatAreaProps("toolCalling"));
+    expect(host.querySelector("[data-runtime-cue]")).not.toBeNull();
+    expect(host.querySelector(".vk-runtime-cue-elapsed")).toBeNull();
+    await render(chatAreaProps("toolRunning"));
+    expect(host.querySelector("[data-runtime-cue]")).toBeNull();
   });
 });
 

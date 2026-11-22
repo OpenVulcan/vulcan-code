@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "実行中 {running} / {total}",
   "sessionActivity.backgroundCommands": "バックグラウンドコマンド",
   "toolCard.shell.background": "バックグラウンド",
+  "toolCard.shell.noTimeout": "タイムアウトなし",
+  "toolCard.shell.timeout": "タイムアウト {duration}",
   "toolCard.shell.backgroundNote": "バックグラウンドジョブ {job} として実行中です。終了すると AI に通知されます。",
   "toolCard.shell.notRunning": "コマンドはもう実行されていません。",
   "toolCard.shell.moveToBackground": "バックグラウンドへ移動",

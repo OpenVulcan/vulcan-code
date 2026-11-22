@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "{running} running / {total}",
   "sessionActivity.backgroundCommands": "Background commands",
   "toolCard.shell.background": "Background",
+  "toolCard.shell.noTimeout": "No timeout",
+  "toolCard.shell.timeout": "Timeout {duration}",
   "toolCard.shell.backgroundNote": "Still running as background job {job}; the AI is told when it finishes.",
   "toolCard.shell.notRunning": "The command is no longer running.",
   "toolCard.shell.moveToBackground": "Move to background",

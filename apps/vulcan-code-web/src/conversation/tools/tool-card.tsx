@@ -118,6 +118,41 @@ function ToolRequestMark(props: { request: ToolRequest; state: ToolCardState }) 
   return <span className="vk-tool-request" data-phase={props.request.phase}>{t(key).replace("{size}", size)}</span>;
 }
 
+// ToolMeta preserves the widest rendered metadata for one active tool card.
+// ToolMeta 为一张活动工具卡保留已渲染过的最大元信息宽度。
+// live enables the width floor and children provide the card's facts. Returns one metadata column.
+// live 启用宽度下限，children 提供卡片的状态信息。返回一列元信息。
+function ToolMeta({ live, children }: { live: boolean; children: React.ReactNode }) {
+  // The metadata column owns its measurement for this rendered card.
+  // 元信息列持有当前卡片的宽度测量。
+  const ref = React.useRef<HTMLSpanElement>(null);
+  React.useLayoutEffect(() => {
+    const element = ref.current;
+    if (!live || !element) return;
+    // The column stays at its previous width when compact units drop a decimal or change units.
+    // 紧凑单位省略小数或切换单位时，元信息列维持之前的宽度。
+    let widest = 0;
+    // Update the column only when its rendered width grows. Takes no arguments and returns nothing.
+    // 仅在列的实际布局变宽时更新。不接收参数，无返回值。
+    const raise = () => {
+      const width = element.getBoundingClientRect().width;
+      if (width <= widest) return;
+      widest = width;
+      element.style.setProperty("--vk-tool-meta-min-w", `${width}px`);
+    };
+    raise();
+    // Observe actual layout so child-only updates and font changes also count.
+    // 观察真实布局，也计入仅更新子元素或字体变化造成的宽度变化。
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(raise);
+    observer?.observe(element);
+    return () => {
+      observer?.disconnect();
+      element.style.removeProperty("--vk-tool-meta-min-w");
+    };
+  }, [live]);
+  return <span className="vk-tool-meta" data-live={live ? "" : undefined} ref={ref}>{children}</span>;
+}
+
 // ToolFileAction shows the card's file in the files panel; it sits beside the head trigger, never inside it.
 // ToolFileAction 在文件面板中显示卡片的文件；它位于标题触发器旁边，从不嵌入其中。
 function ToolFileAction(props: { path: string; lines: WorkspaceFileLines | null; open: WorkspaceFileOpener }) {
@@ -168,11 +203,11 @@ export function ToolFrame(props: ToolFrameProps) {
         <b>{props.verb}</b>
         {props.target ? <code>{props.target}</code> : null}
       </span>
-      <span className="vk-tool-meta">
+      <ToolMeta key={props.call?.event.request_stream_id ?? props.call?.key} live={props.state === "running"}>
         {props.meta}
         {props.call?.request ? <ToolRequestMark request={props.call.request} state={props.state} /> : null}
         {props.call && !props.call.request ? <ToolElapsed call={props.call} /> : null}
-      </span>
+      </ToolMeta>
       <ToolStateMark state={props.state} />
       {expandable ? <ChevronRight aria-hidden="true" className="vk-tool-chev" /> : <span />}
     </CollapsibleTrigger>

@@ -7269,6 +7269,8 @@
   "sessionActivity.runningOfTotal": "실행 중 {running} / {total}",
   "sessionActivity.backgroundCommands": "백그라운드 명령",
   "toolCard.shell.background": "백그라운드",
+  "toolCard.shell.noTimeout": "시간 제한 없음",
+  "toolCard.shell.timeout": "시간 제한 {duration}",
   "toolCard.shell.backgroundNote": "백그라운드 작업 {job}(으)로 계속 실행 중이며, 끝나면 AI에 알립니다.",
   "toolCard.shell.notRunning": "명령이 더 이상 실행 중이 아닙니다.",
   "toolCard.shell.moveToBackground": "백그라운드로 이동",
