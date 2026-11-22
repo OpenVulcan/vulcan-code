@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { ChevronRight, Terminal, Wrench, X } from "lucide-react";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { useI18n } from "@/i18n";
 import { Button } from "@/ui-kit/primitives/button";
-import type { RequestContextAssistantResponse, RequestContextNode, RequestContextPromptOrigin, RequestContextRows, RequestContextToolPart } from "./request-context-dialog";
+import type { RequestContextAssistantResponse, RequestContextNode, RequestContextPromptOrigin, RequestContextToolPart } from "./request-context-dialog";
+import type { RequestContextEntry, RequestContextView } from "./request-context-entries";
 import { presentRequestNode, PROMPT_ORIGIN_KEYS, readableInitialPrompt } from "./request-context-presentation";
 import { readRequestToolDeclarations, RequestToolSchemaPreview } from "./request-context-tool-schema";
 
@@ -34,13 +35,12 @@ function isSystemNode(node: RequestContextNode): boolean {
 
 /** Shows a dense request-node list with one selected detail and a separate tool catalog. */
 /** 展示紧凑的请求节点列表、一个所选详情及独立工具清单。 */
-export function RequestContextInspector({ rows, response }: {
-  rows: RequestContextRows;
-  response: RequestContextAssistantResponse | null;
+export function RequestContextInspector({ rows }: {
+  rows: RequestContextView;
 }) {
   const { t } = useI18n();
-  // A new execution remounts this inspector so selection never crosses request boundaries.
-  // 新执行重新挂载检查器，使选中状态不会跨越请求边界。
+  // Group rows in the new request without changing the reading identity of surviving nodes.
+  // 按新请求顺序组织行，并保留仍然存在的节点的阅读身份。
   const groups = useMemo(() => {
     // System updates that arrive after the first history message remain at their original position.
     // 在第一条历史消息之后到达的系统更新保留原位置。
@@ -54,23 +54,23 @@ export function RequestContextInspector({ rows, response }: {
   }, [rows.nodes]);
   // The initial system row is the natural first inspection target when the request has one.
   // 请求存在初始系统行时，它是默认检查对象。
-  const [selected, setSelected] = useState<string | null>(() => groups.system.length || groups.tools.length || rows.toolsUnavailable ? "setup" : null);
+  const hasSetup = Boolean(groups.system.length || groups.tools.length || rows.toolsUnavailable);
+  const [selected, setSelected] = useState<number | "setup" | null>(() => hasSetup ? "setup" : null);
   // Resolve the current selection against the displayed execution only.
   // 只从当前显示的执行中解析所选对象。
-  const message = groups.messages.find((node) => nodePath(node) === selected);
+  const message = groups.messages.find((node) => node.entryId === selected);
   // The right pane resolves the same semantic type as the selected row.
   // 右侧详情从已选行解析相同的语义类型。
   const selectedMessage = message ? presentRequestNode(message) : undefined;
   // Resolve the same tool labels in the header that the row exposes in its summary.
   // 详情标题使用与列表摘要相同的工具名称。
   const selectedToolNames = message ? toolNames(message) : "";
-  const setup = selected === "setup";
-  const selectedResponse = selected === "response" ? response : null;
+  const setup = selected === "setup" && hasSetup;
   // A continuation request may carry tools without repeating a system prompt.
   // 续接请求可能传入工具而无需重复提交系统提示词。
   const systemTitle = t(groups.system.length ? "requestContext.initialPrompt" : "skills.action.tools");
   return (
-    <div className="vk-request-context-inspector" data-detail={Boolean(setup || message || selectedResponse)}>
+    <div className="vk-request-context-inspector" data-detail={Boolean(setup || message)}>
       <div className="vk-request-context-list">
         {groups.system.length || groups.tools.length || rows.toolsUnavailable ? (
           <button className="vk-request-context-row" type="button" aria-pressed={setup} data-tone="system"
@@ -82,19 +82,11 @@ export function RequestContextInspector({ rows, response }: {
           </button>
         ) : null}
         {groups.messages.map((node) => (
-          <ContextRow key={nodePath(node)} node={node} selected={selected === nodePath(node)} onSelect={setSelected} />
+          <ContextRow key={node.entryId} node={node} selected={selected === node.entryId} onSelect={setSelected} />
         ))}
-        {response ? (
-          <button className="vk-request-context-row" type="button" aria-pressed={Boolean(selectedResponse)} data-tone="assistant"
-            onClick={() => setSelected("response")}>
-            <strong className="vk-request-context-badge">{t("requestContext.assistantResponse")}</strong>
-            <span className="vk-request-context-preview">{response.content.slice(0, 256)}</span>
-            <ChevronRight aria-hidden="true" className="vk-request-context-row-arrow" />
-          </button>
-        ) : null}
-        {rows.nodeCount > rows.nodes.length ? <p className="vk-request-context-status">{t("requestContext.omitted")}</p> : null}
+        {rows.omitted > 0 ? <p className="vk-request-context-status">{t("requestContext.omitted")}</p> : null}
       </div>
-      {setup || message || selectedResponse ? (
+      {setup || message ? (
         <div className="vk-request-context-detail">
           <div className="vk-request-context-detail-header">
             <strong>{setup ? systemTitle : t(selectedMessage?.title ?? "requestContext.assistantResponse")}
@@ -106,25 +98,20 @@ export function RequestContextInspector({ rows, response }: {
           </div>
           {setup ? <SetupDetails system={groups.system} tools={groups.tools} origins={rows.promptOrigins ?? []}
             toolsUnavailable={rows.toolsUnavailable} /> : null}
-          {message ? <NodeDetails key={nodePath(message)} node={message} /> : null}
-          {selectedResponse ? <PreviewBody markdown={selectedResponse.content} raw={selectedResponse.content}
-            truncated={selectedResponse.truncated} reasoning={selectedResponse.reasoning} /> : null}
+          {message ? <NodeDetails key={message.entryId} node={message} /> : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-/** Renders one compact selectable node and sends its original path to `onSelect`. */
-/** 渲染一个紧凑的可选节点，并将原始路径交给 `onSelect`。 */
-function ContextRow({ node, selected, onSelect }: {
-  node: RequestContextNode;
+/** Renders one compact selectable node and sends its stable identity to `onSelect`. */
+/** 渲染一个紧凑的可选节点，并将其稳定身份交给 `onSelect`。 */
+const ContextRow = memo(function ContextRow({ node, selected, onSelect }: {
+  node: RequestContextEntry;
   selected: boolean;
-  onSelect: (path: string) => void;
+  onSelect: (id: number) => void;
 }) {
-  // Wire paths remain visible for matching the original provider payload.
-  // 保持传输路径可见，便于对应供应商原始请求。
-  const path = nodePath(node);
   const { t } = useI18n();
   // Derive the title and wrapper-free excerpt from the exact producer tag or role.
   // 从精确生产者标签或角色解析标题及无信封摘录。
@@ -136,7 +123,7 @@ function ContextRow({ node, selected, onSelect }: {
     .slice(0, 256).replace(/\s+/g, " ");
   return (
     <button type="button" className="vk-request-context-row" aria-pressed={selected}
-      data-tone={presentation.kind} onClick={() => onSelect(path)}>
+      data-tone={presentation.kind} onClick={() => onSelect(node.entryId)}>
       <span className="vk-request-context-badge">{t(presentation.kind === "injection" ? "requestContext.injection" : presentation.title)}</span>
       {presentation.kind === "injection" && presentation.title !== "requestContext.injection" ? <strong>{t(presentation.title)}</strong> : null}
       {names ? <code className="vk-request-context-tool-name">{names}</code> : null}
@@ -144,11 +131,11 @@ function ContextRow({ node, selected, onSelect }: {
       <ChevronRight aria-hidden="true" className="vk-request-context-row-arrow" />
     </button>
   );
-}
+});
 
 /** Renders the selected node and makes its redacted raw payload available. */
 /** 展示所选节点，并可查看其脱敏后的原始正文。 */
-function NodeDetails({ node }: { node: RequestContextNode }) {
+const NodeDetails = memo(function NodeDetails({ node }: { node: RequestContextNode }) {
   const { t } = useI18n();
   // Tagged nodes show the host metadata separately from the Markdown body.
   // 带标签节点把宿主元数据与 Markdown 正文分开展示。
@@ -163,25 +150,28 @@ function NodeDetails({ node }: { node: RequestContextNode }) {
           ))}
         </dl>
       ) : null}
-      <PreviewBody markdown={body} raw={node.content} truncated={node.truncated} path={nodePath(node)}
+      <PreviewBody markdown={body} raw={node.content} truncated={node.truncated} path={node.field === "response" ? undefined : nodePath(node)}
         reasoning={node.reasoning} tools={node.toolParts} />
     </>
   );
-}
+});
 
 /** Displays system instructions and tool definitions in independent tabs. */
 /** 在独立标签页中展示系统提示词和工具定义。 */
-function SetupDetails({ system, tools, origins, toolsUnavailable }: {
+const SetupDetails = memo(function SetupDetails({ system, tools, origins, toolsUnavailable }: {
   system: RequestContextNode[];
-  tools: RequestContextNode[];
+  tools: RequestContextEntry[];
   origins: RequestContextPromptOrigin[];
   /** Whether local tool resolution failed before producing a catalog. */
   /** 本地工具解析是否在生成目录前失败。 */
   toolsUnavailable?: boolean;
 }) {
   const { t } = useI18n();
-  const [showTools, setShowTools] = useState(system.length === 0);
-  const [toolPath, setToolPath] = useState<string | null>(null);
+  const [preferTools, setShowTools] = useState(system.length === 0);
+  // If one tab disappears, show the remaining content without disturbing an available selection.
+  // 页签消失时展示剩余内容，仍可用的页签继续保持选中。
+  const showTools = !system.length || (preferTools && Boolean(tools.length || toolsUnavailable));
+  const [toolId, setToolId] = useState<number | null>(null);
   return (
     <>
       <div className="vk-request-context-tabs">
@@ -193,19 +183,25 @@ function SetupDetails({ system, tools, origins, toolsUnavailable }: {
       {showTools ? (
         <div className="vk-request-context-detail-scroll">
           {toolsUnavailable ? <p className="vk-request-context-text">{t("requestContext.toolsUnavailable")}</p> : null}
-          {tools.map((tool) => <ToolDefinition key={nodePath(tool)} node={tool} open={toolPath === nodePath(tool)} onToggle={setToolPath} />)}
+          {tools.map((tool) => <ToolDefinition key={tool.entryId} node={tool} open={toolId === tool.entryId} onToggle={setToolId} />)}
         </div>
       ) : <InitialPromptDetails nodes={system} origins={origins} />}
     </>
   );
-}
+}, (previous, next) => previous.toolsUnavailable === next.toolsUnavailable
+  && previous.system.length === next.system.length && previous.system.every((node, i) => node === next.system[i])
+  && previous.tools.length === next.tools.length && previous.tools.every((node, i) => node === next.tools[i])
+  && previous.origins.length === next.origins.length && previous.origins.every((origin, i) => {
+    const nextOrigin = next.origins[i];
+    return origin.kind === nextOrigin.kind && origin.tag === nextOrigin.tag && origin.source === nextOrigin.source;
+  }));
 
 /** Renders a tool declaration and mounts its schema only when selected. */
 /** 渲染工具声明，并仅在选中时挂载其 Schema。 */
-function ToolDefinition({ node, open, onToggle }: {
-  node: RequestContextNode;
+const ToolDefinition = memo(function ToolDefinition({ node, open, onToggle }: {
+  node: RequestContextEntry;
   open: boolean;
-  onToggle: (path: string | null) => void;
+  onToggle: (id: number | null) => void;
 }) {
   // The row path remains stable for grouped provider declarations.
   // 对分组的供应商声明保留稳定的行路径。
@@ -219,7 +215,7 @@ function ToolDefinition({ node, open, onToggle }: {
   return (
     <>
       <button type="button" className="vk-request-context-row" aria-expanded={open} data-tone="tool"
-        onClick={() => onToggle(open ? null : path)}>
+        onClick={() => onToggle(open ? null : node.entryId)}>
         <Wrench aria-hidden="true" />
         <code className="vk-request-context-catalog-tool-name">{declarations.length ? declarations.map((tool) => tool.name).join(", ") : path}</code>
         {description ? <span className="vk-request-context-preview">{description}</span> : null}
@@ -227,7 +223,7 @@ function ToolDefinition({ node, open, onToggle }: {
       {open ? <ToolDefinitionDetails node={node} declarations={declarations} /> : null}
     </>
   );
-}
+});
 
 /** Shows the tool declaration and lets the reader switch to its redacted raw source. */
 /** 展示工具声明，并允许读者切换至脱敏后的原始内容。 */

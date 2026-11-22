@@ -3,6 +3,7 @@ import { formatMessage, useI18n } from "@/i18n";
 import { serviceClient } from "@/service/webui-service-runtime";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { RequestContextInspector } from "./request-context-inspector";
+import { reconcileRequestContext, type RequestContextView } from "./request-context-entries";
 import "./request-context-dialog.css";
 
 // One row corresponds to a field or an item in a field of the encoded provider body.
@@ -129,16 +130,13 @@ const PURPOSE_KEY = {
 /** 展示 `sessionId` 的最新请求，Core 报告没有实发记录时组装预览。 */
 export function RequestContextDialog({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
   const { locale, t } = useI18n();
-  // Undefined is loading; null means Core observed no request for this session in its current lifetime.
-  // undefined 为加载中；null 表示本次 Core 运行尚未观察到该会话的任何请求。
-  const [snapshot, setSnapshot] = useState<RequestContextSnapshot | null>();
-  // The matching response can arrive after the request is displayed.
-  // 对应回复可在请求已展示后到达。
-  const [assistantResponse, setAssistantResponse] = useState<RequestContextAssistantResponse | null>(null);
+  // Both sources update the same mounted inspector. Null records a failed simulation.
+  // 两个来源更新同一个已挂载的检查面板，null 表示模拟失败。
+  const [view, setView] = useState<RequestContextView | null>();
   const [failed, setFailed] = useState(false);
   // One local preview is requested per period in which Core reports an empty dispatch slot.
   // Core 每次进入无实发记录的状态时，只请求一次本机预览。
-  const [simulation, setSimulation] = useState<RequestContextRows | null>();
+  const [simulated, setSimulated] = useState(false);
 
   useEffect(() => {
     // One effect owns the timer and latest execution ID for an exact session selection.
@@ -149,6 +147,9 @@ export function RequestContextDialog({ sessionId, onClose }: { sessionId: string
     // Poll the same API for its response until the backend proves it is finalized.
     // 持续查询同一个 API 的回复，直到后端证实它已完成。
     let knownAssistantResponse = false;
+    // Token for the single local assembly allowed during this empty period.
+    // 标识本次无实发请求期间唯一的本地组装，避免迟到结果覆盖实发请求。
+    let pendingSimulation: object | undefined;
 
     /** Reads and applies at most one replacement snapshot per poll. */
     /** 每次轮询至多读取并应用一份替换快照。 */
@@ -160,16 +161,22 @@ export function RequestContextDialog({ sessionId, onClose }: { sessionId: string
         if (!active) return;
         setFailed(false);
         if (result.status === "available") {
+          pendingSimulation = undefined;
           knownExecutionId = result.snapshot.dispatch.executionId;
           knownAssistantResponse = result.assistantResponse != null;
-          setSnapshot({ ...result.snapshot, economy: result.economy });
-          setAssistantResponse(result.assistantResponse ?? null);
-          setSimulation(undefined);
-        } else if (result.status === "empty") {
+          setSimulated(false);
+          setView((prior) => reconcileRequestContext(prior, { ...result.snapshot, economy: result.economy },
+            result.snapshot.dispatch, result.assistantResponse));
+        } else if (result.status === "empty" && !pendingSimulation) {
           knownExecutionId = undefined;
           knownAssistantResponse = false;
-          setSnapshot(null);
-          setAssistantResponse(null);
+          setSimulated(true);
+          const token = {};
+          pendingSimulation = token;
+          void serviceClient.request<RequestContextRows>("service_simulate_request_context_v1", { sessionId }).then(
+            (rows) => { if (active && pendingSimulation === token) setView((prior) => reconcileRequestContext(prior, rows)); },
+            () => { if (active && pendingSimulation === token) setView(null); },
+          );
         }
       } catch {
         if (active) setFailed(true);
@@ -182,35 +189,17 @@ export function RequestContextDialog({ sessionId, onClose }: { sessionId: string
     return () => { active = false; clearTimeout(timer); };
   }, [sessionId]);
 
-  // The actual-request poll continues while the fallback is loading or visible.
-  // 模拟预览加载和显示期间，继续轮询实发请求。
-  const simulated = snapshot === null;
-  useEffect(() => {
-    if (!simulated) return;
-    // Retire the fallback when an actual request arrives or the dialog closes.
-    // 实发请求到达或弹窗关闭时，结束模拟预览。
-    let active = true;
-    void serviceClient.request<RequestContextRows>("service_simulate_request_context_v1", { sessionId }).then(
-      (rows) => { if (active) setSimulation(rows); },
-      () => { if (active) setSimulation(null); },
-    );
-    return () => { active = false; };
-  }, [sessionId, simulated]);
-
   // Header facts identify the exact physical attempt, even when several belong to one business turn.
   // 即使同一业务回合包含多次尝试，标题区仍标明当前精确物理尝试。
-  const rows = simulated ? simulation : snapshot;
-  const dispatch = snapshot?.dispatch;
-  // Only an actual dispatch owns a separate finalized assistant reply.
-  // 只有实发请求才持有独立的已完成助手回复。
-  const response = dispatch ? assistantResponse : null;
+  const rows = view;
+  const dispatch = view?.dispatch;
   // An empty preview is reported in the description alongside the other states.
   // 空预览与其他状态一同在说明行显示。
-  const empty = rows?.nodes.length === 0 && response === null;
+  const empty = rows?.nodes.length === 0;
   // Report read or assembly failures on the description line without hiding previously loaded rows.
   // 在说明行显示读取或组装失败，并继续展示已加载节点。
-  const error = failed || (simulated && simulation === null);
-  const status = failed ? t("requestContext.error") : simulated && simulation === null
+  const error = failed || (simulated && view === null);
+  const status = failed ? t("requestContext.error") : simulated && view === null
     ? t("requestContext.simulationError") : rows === undefined ? t("requestContext.loading")
       : empty ? t(simulated ? "requestContext.empty" : "requestContext.noNodes") : null;
 
@@ -239,8 +228,7 @@ export function RequestContextDialog({ sessionId, onClose }: { sessionId: string
         </DialogHeader>
         <div className="vk-dialog-body vk-request-context-body">
           {rows && !empty ? (
-            <RequestContextInspector key={simulated ? "simulation" : dispatch?.executionId}
-              rows={rows} response={response} />
+            <RequestContextInspector rows={rows} />
           ) : null}
         </div>
       </DialogContent>

@@ -69,6 +69,63 @@ it("expands one dispatched node, replaces it on the next dispatch, and stops rea
   expect(request).toHaveBeenCalledTimes(2);
 });
 
+it("appends in place and keeps the reader on a surviving node across compaction", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const request = vi.mocked(serviceClient.request);
+  request.mockReset();
+  // Append to the history, move the surviving message, then reuse its wire position for different content.
+  // 先追加历史，再移动留存消息，最后用其他内容占用该传输位置。
+  for (const [executionId, ...texts] of [
+    ["first", "before", "reading"],
+    ["append", "before", "reading", "added"],
+    ["compact", "reading", "added"],
+    ["removed", "replacement", "added"],
+  ]) {
+    const result = snapshot(executionId, "");
+    result.snapshot.nodes = texts.map((text, index) => ({
+      field: "input", role: "user", kind: "message", index, text, content: JSON.stringify({ content: text }), truncated: false,
+    }));
+    result.snapshot.nodeCount = texts.length;
+    request.mockResolvedValueOnce(result);
+  }
+  const host = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<I18nProvider initialLocale="en-US"><RequestContextDialog sessionId="reader" onClose={vi.fn()} /></I18nProvider>));
+    const list = document.querySelector<HTMLElement>(".vk-request-context-list")!;
+    const reading = [...list.querySelectorAll("button")].find((row) => row.textContent?.includes("reading"))!;
+    await act(async () => reading.click());
+    const raw = [...document.querySelectorAll<HTMLButtonElement>(".vk-request-context-tabs button")]
+      .find((button) => button.textContent === readLocaleMessage("en-US", "requestContext.raw"))!;
+    await act(async () => { raw.click(); raw.focus(); });
+    const detail = document.querySelector<HTMLElement>(".vk-request-context-detail-scroll")!;
+    list.scrollTop = 26;
+    detail.scrollTop = 71;
+    for (const survivors of [["before", "reading", "added"], ["reading", "added"]]) {
+      await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+      expect([...list.querySelectorAll(".vk-request-context-preview")].map((row) => row.textContent)).toEqual(survivors);
+      expect(list.querySelector('[aria-pressed="true"]')).toBe(reading);
+      expect(document.activeElement).toBe(raw);
+      expect(raw.getAttribute("aria-pressed")).toBe("true");
+      expect(document.querySelector(".vk-request-context-detail-scroll")).toBe(detail);
+      expect(document.querySelector(".vk-request-context-list")).toBe(list);
+      expect(detail.scrollTop).toBe(71);
+      expect(list.scrollTop).toBe(26);
+      expect(detail.textContent).toContain(`input[${survivors.indexOf("reading")}]`);
+    }
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(list.textContent).toContain("replacement");
+    expect(list.querySelector('[aria-pressed="true"]')).toBeNull();
+    expect(document.querySelector(".vk-request-context-detail")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("assembles only once while the actual record is absent and switches when one arrives", async () => {
   // Keep polling the actual record while displaying local simulation.
   // 显示本机模拟时继续轮询实发记录。
@@ -185,6 +242,13 @@ it("groups system prompt and tool schemas, and adds the same execution's assista
     content: "## finished reply", reasoning: "### thinking before the reply", truncated: false,
   } });
   request.mockResolvedValueOnce({ status: "unchanged" });
+  // The next physical request carries the finalized response as an ordinary history message.
+  // 下一份物理请求将刚完成的答复作为普通历史消息发送。
+  const history = { field: "messages", index: 3, kind: null, role: "assistant", text: "## finished reply",
+    content: '{"role":"assistant","content":"## finished reply"}', reasoning: "### thinking before the reply", truncated: false };
+  request.mockResolvedValueOnce({ ...actual, snapshot: { ...actual.snapshot,
+    dispatch: { ...actual.snapshot.dispatch, executionId: "execution-next" },
+    nodes: [...actual.snapshot.nodes, history], nodeCount: actual.snapshot.nodeCount + 1 } });
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
   try {
@@ -227,9 +291,62 @@ it("groups system prompt and tool schemas, and adds the same execution's assista
     expect(request).toHaveBeenLastCalledWith("service_latest_request_context_v1", {
       sessionId: "fixture-session", knownExecutionId: "execution-c", knownAssistantResponse: true,
     });
+    const reasoning = document.querySelector<HTMLDetailsElement>(".vk-request-context-reasoning")!;
+    reasoning.open = true;
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(document.querySelector('.vk-request-context-list [aria-pressed="true"]')).toBe(response);
+    expect(document.querySelector(".vk-request-context-reasoning")).toBe(reasoning);
+    expect(reasoning.open).toBe(true);
+    expect(raw.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector(".vk-request-context-text pre")?.textContent).toContain(history.content);
   } finally {
     await act(async () => root.unmount());
     await vi.runOnlyPendingTimersAsync();
+    host.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("keeps an expanded tool on its raw tab when the catalog moves and a stale simulation completes", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const request = vi.mocked(serviceClient.request);
+  request.mockReset();
+  let finishSimulation!: (rows: RequestContextSnapshot) => void;
+  request.mockResolvedValueOnce({ status: "empty" }).mockReturnValueOnce(
+    new Promise<RequestContextSnapshot>((resolve) => { finishSimulation = resolve; }),
+  );
+  // Both snapshots describe the same tool at different positions in the provider catalog.
+  // 两份快照中同一工具位于供应商工具清单的不同位置。
+  for (const [executionId, ...names] of [["first", "lookup"], ["next", "extra", "lookup"]]) {
+    const actual = snapshot(executionId, "question");
+    actual.snapshot.nodes.push(...names.map((name, index) => ({
+      field: "tools", index, role: null, kind: "function", content: JSON.stringify({ name, parameters: {} }), truncated: false,
+    })));
+    actual.snapshot.nodeCount = actual.snapshot.nodes.length;
+    request.mockResolvedValueOnce(actual);
+  }
+  const host = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<I18nProvider initialLocale="en-US"><RequestContextDialog sessionId="tool-reader" onClose={vi.fn()} /></I18nProvider>));
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    const tool = document.querySelector<HTMLButtonElement>('.vk-request-context-detail [data-tone="tool"]')!;
+    await act(async () => tool.click());
+    const raw = [...document.querySelectorAll<HTMLButtonElement>(".vk-request-context-tabs button")]
+      .find((button) => button.textContent === readLocaleMessage("en-US", "requestContext.raw"))!;
+    await act(async () => raw.click());
+    const source = document.querySelector(".vk-request-context-detail pre")!;
+    await act(async () => { finishSimulation(snapshot("late", "stale preview").snapshot); });
+    expect(document.querySelector(".vk-request-context-detail pre")).toBe(source);
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(document.querySelectorAll('.vk-request-context-detail [data-tone="tool"]')).toHaveLength(2);
+    expect(document.querySelector('.vk-request-context-detail [aria-expanded="true"]')).toBe(tool);
+    expect(document.querySelector(".vk-request-context-detail pre")).toBe(source);
+    expect(raw.getAttribute("aria-pressed")).toBe("true");
+  } finally {
+    await act(async () => root.unmount());
     host.remove();
     vi.useRealTimers();
     vi.unstubAllGlobals();
