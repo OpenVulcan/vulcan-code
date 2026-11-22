@@ -1,7 +1,8 @@
 import React from "react";
-import { File, Folder, Puzzle, BookOpen } from "lucide-react";
+import { File, Folder, Puzzle, BookOpen, Server } from "lucide-react";
 
 import { useI18n } from "@/i18n";
+import { Badge } from "@/ui-kit/primitives/badge";
 
 import type { ComposerPathMention } from "./use-composer-path-mention";
 import { composerListOptionId } from "./use-composer-textarea-keys";
@@ -21,11 +22,16 @@ export function ComposerPathMentionPanel(props: { mention: ComposerPathMention; 
   return (
     <div aria-label={t(props.mention.marker === "#" ? "area.skills" : "composer.mention.references")} className="vk-slash" data-kind={props.mention.marker === "#" ? "plugin" : "path"} id={props.id} ref={listRef} role="listbox">
       {suggestions.map((entry, index) => {
-        // Keep the visible identifier short for bundled guides while retaining the exact reference.
-        // 随包指南显示简短标识，同时保留精确的引用名称。
+        // Tagged rows show their catalog title while retaining the exact inserted reference.
+        // 带标签的条目显示目录名称，同时保留插入时的精确引用。
+        const badge = entry.kind === "mcp" ? "MCP" : entry.kind === "luaSkill" ? "LuaSkills" : null;
         const name = entry.kind === "path"
           ? `${entry.entry.name}${entry.entry.isDirectory ? "/" : ""}`
-          : entry.displayName ?? entry.name;
+          : badge ? entry.label : entry.displayName ?? entry.name;
+        // Tagged rows show the introduction, and other shortcuts keep their existing secondary text.
+        // 带标签的条目显示介绍，其余快捷指令保留现有的补充文字。
+        const description = entry.kind === "path" ? null
+          : badge ? entry.description?.trim() : entry.label === name ? null : entry.label;
         return (
           <button
             aria-selected={index === highlightedIndex}
@@ -43,12 +49,12 @@ export function ComposerPathMentionPanel(props: { mention: ComposerPathMention; 
           >
             {entry.kind === "path"
               ? entry.entry.isDirectory ? <Folder aria-hidden="true" /> : <File aria-hidden="true" />
-              : entry.kind === "skill" ? <BookOpen aria-hidden="true" /> : <Puzzle aria-hidden="true" />}
+              : entry.kind === "skill" ? <BookOpen aria-hidden="true" />
+              : entry.kind === "mcp" ? <Server aria-hidden="true" /> : <Puzzle aria-hidden="true" />}
             <span className="vk-mention-names">
-              <span className="vk-slash-cmd" title={entry.kind === "path" ? name : entry.name}>{name}</span>
-              {entry.kind !== "path" && entry.label !== name ? (
-                <span className="vk-slash-desc" title={entry.label}>{entry.label}</span>
-              ) : null}
+              <span className="vk-slash-cmd" title={entry.kind === "path" || badge ? name : entry.name}>{name}</span>
+              {badge && <Badge variant="secondary">{badge}</Badge>}
+              {description && <span className="vk-slash-desc" title={description}>{description}</span>}
             </span>
           </button>
         );

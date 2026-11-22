@@ -1,4 +1,19 @@
 import type { PluginSummary } from "@/types";
+import type { LuaSkillIntroduction } from "@/types/composer-skills";
+import { matchLocaleTag } from "@/i18n-locales";
+
+// Selects the introduction from manifest translations for the interface locale or the declared default.
+// 从清单翻译中选择界面语言对应的介绍，找不到时使用包声明的默认语言。
+export function localizeLuaSkillIntroduction(
+  translations: Record<string, LuaSkillIntroduction>,
+  locale: string,
+  defaultLocale: string,
+): LuaSkillIntroduction | undefined {
+  // Equivalent language tags arrive in manifest order from the service.
+  // 等价语言标签按服务清单的顺序到达。
+  const match = Object.keys(translations).find((tag) => matchLocaleTag(tag) === locale);
+  return translations[locale] ?? (match ? translations[match] : undefined) ?? translations[defaultLocale];
+}
 
 // localizedPluginText resolves plugin manifest text for the active WebUI locale.
 // localizedPluginText 为当前 WebUI 语言解析插件清单文案。

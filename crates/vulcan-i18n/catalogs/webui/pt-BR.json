@@ -5724,7 +5724,7 @@
   "settings.mcp.enabled": "Ativado",
   "settings.mcp.toolExposure": "Exposição de ferramentas",
   "settings.mcp.usageHint": "Quando usar este MCP",
-  "settings.mcp.usageHintHelp": "Opcional. Em branco, o servidor só aparece no prompt quando você menciona o nome dele com @. O modelo também pode encontrá-lo consultando os servidores MCP disponíveis.",
+  "settings.mcp.usageHintHelp": "Opcional. Em branco, o servidor não aparece nas dicas automáticas. Digite # para selecioná-lo ou deixe que o modelo o encontre quando necessário.",
   "settings.mcp.implicitExposure": "Implícita · Sob demanda",
   "settings.mcp.explicitExposure": "Explícita · Em cada solicitação",
   "settings.mcp.projectScope": "Escopo de projetos",

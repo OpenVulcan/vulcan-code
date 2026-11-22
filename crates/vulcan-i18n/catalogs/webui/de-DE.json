@@ -5724,7 +5724,7 @@
   "settings.mcp.enabled": "Aktiviert",
   "settings.mcp.toolExposure": "Werkzeugbereitstellung",
   "settings.mcp.usageHint": "Wann dieser MCP-Server verwendet werden soll",
-  "settings.mcp.usageHintHelp": "Optional. Ohne Beschreibung erscheint der Server erst nach einer Erwähnung mit @ und seinem Namen im Prompt. Das Modell kann ihn auch über die verfügbaren MCP-Server finden.",
+  "settings.mcp.usageHintHelp": "Optional. Ohne Beschreibung erfolgt kein automatischer Hinweis. Tippe #, um diesen MCP-Server auszuwählen. Das Modell kann ihn auch bei Bedarf suchen.",
   "settings.mcp.implicitExposure": "Implizit · Bei Bedarf",
   "settings.mcp.explicitExposure": "Explizit · Bei jeder Anfrage",
   "settings.mcp.projectScope": "Projektumfang",

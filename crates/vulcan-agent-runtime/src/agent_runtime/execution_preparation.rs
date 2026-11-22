@@ -733,6 +733,28 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
             "Configured MCP discovery",
         ));
     }
+    // Explicit shortcuts refer to tools that survived final filtering and are already registered.
+    // 显式快捷指令引用通过最终筛选且已注册的工具。
+    let referenced_explicit = tool_exposure
+        .mcp_tools
+        .iter()
+        .filter_map(|tool| {
+            let id = tool.server_id()?;
+            (tool.partition_key() == "user"
+                && tool_exposure.referenced_mcp_servers.contains(id)
+                && resolved_tools.descriptors.iter().any(|descriptor| {
+                    descriptor.source == VulcanToolSourceKind::Mcp && descriptor.id == tool.id()
+                }))
+            .then_some(id)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if !referenced_explicit.is_empty() {
+        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
+            "Explicit MCP shortcuts",
+            format!("The user selected these MCP servers: {}. Use the already registered tools belonging to these server IDs for this task.", serde_json::json!(referenced_explicit)),
+            "User MCP references",
+        ));
+    }
     // Reference hints only name actions and skills actually available in this turn.
     // 引用指引只列出本回合实际可用的动作与技能。
     if prompt_skill_tool_available
@@ -1056,7 +1078,7 @@ fn append_user_tool_references(
         } else {
             continue;
         };
-        if plugin_name.is_empty() {
+        if plugin_name.is_empty() || plugin_name.starts_with("mcp:") {
             continue;
         }
         for entry in enabled()

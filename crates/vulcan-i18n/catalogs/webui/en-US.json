@@ -5724,7 +5724,7 @@
   "settings.mcp.enabled": "Enabled",
   "settings.mcp.toolExposure": "Tool exposure",
   "settings.mcp.usageHint": "When to use this MCP",
-  "settings.mcp.usageHintHelp": "Optional. Leave blank to keep it out of the prompt until you mention its name with @. The model can also discover it by querying available MCP servers.",
+  "settings.mcp.usageHintHelp": "Optional. Leaving it blank keeps the server out of automatic hints. Type # to select it, or let the model discover it on demand.",
   "settings.mcp.implicitExposure": "Implicit · On demand",
   "settings.mcp.explicitExposure": "Explicit · In every request",
   "settings.mcp.projectScope": "Project scope",

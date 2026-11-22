@@ -10,7 +10,8 @@ import {
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import { ComposerDock } from "@/components/composer/composer-dock";
 import { I18nProvider } from "@/i18n";
-import type { WorkbenchSnapshot } from "@/types";
+import { createMcpDraft } from "@/components/features/settings/mcp-form-model";
+import type { LuaSkillSummary, PluginSummary, WorkbenchSnapshot } from "@/types";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "../thinking-display";
 
 // The projection test stops at the child boundary and never starts composer hooks or services.
@@ -90,6 +91,79 @@ async function project(workbench: WorkbenchSnapshot, id: string | null, empty: b
 }
 
 describe("composer dock authoritative settings", () => {
+  it("offers configured MCP shortcuts only for the active submission project", async () => {
+    // The saved servers differ in project scope and enablement.
+    // 已保存服务器的项目范围和启用状态各不相同。
+    const draft = createMcpDraft(null);
+    const workbench = configuredSnapshot();
+    workbench.mcpServers = [
+      { ...draft, id: "global", name: "Global", access: { exposure: "explicit", projects: { mode: "all" } } },
+      { ...draft, id: "reader", name: "Reader", access: { exposure: "implicit", projects: { mode: "selected", projectIds: ["preview"] }, usageHint: "Read test notes" } },
+      { ...draft, id: "foreign", name: "Foreign", access: { exposure: "implicit", projects: { mode: "selected", projectIds: ["elsewhere"] } } },
+      { ...draft, id: "disabled", name: "Disabled", enabled: false },
+    ];
+    expect((await project(workbench, "preview", false)).shortcuts?.filter((row) => row.kind === "mcp")).toEqual([
+      expect.objectContaining({ name: "mcp:global", label: "Global" }),
+      expect.objectContaining({ name: "mcp:reader", label: "Reader", description: "Read test notes" }),
+    ]);
+  });
+
+  it("keeps callable plugins and LuaSkills packages with their own introduction", async () => {
+    // This UI-only plugin has a host action and no model tool.
+    // 这个仅提供界面的插件有宿主动作但没有模型工具。
+    const uiPlugin: PluginSummary = {
+      id: "statistics", name: "Statistics", kind: "lua", runtimeState: "enabled", capability: "",
+      nameByLocale: {}, capabilityByLocale: {}, enabled: true, desiredEnabled: true, available: true,
+      toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 0,
+      diagnostics: [], runtimeErrors: [], managementKind: "vulcanPlugin",
+      extension: {
+        runtimeIdentity: "statistics:1", origin: "bundled", permissions: [], hooks: [], actions: ["refresh"],
+        uiMounts: [], skills: [], agents: [], hasLuaRuntime: true, hasConfiguration: false, mcpServers: [],
+      },
+    };
+    // The browser's packaged MCP tools are usable before its runtime has started.
+    // 浏览器随包声明的 MCP 工具在运行时启动前就可引用。
+    const browserPlugin: PluginSummary = {
+      ...uiPlugin, id: "browser", name: "Browser",
+      extension: {
+        ...uiPlugin.extension!, mcpServers: [{ id: "playwright", name: "Playwright", transport: "stdio",
+          endpoint: "fixture", status: "stopped", generation: 1, retryCount: 0, toolCount: 0, bundledToolCount: 1,
+          promptCount: 0, resourceCount: 0, secretKeys: [] }],
+      },
+    };
+    // The package's translation is distinct from the introduction of its prompt guide.
+    // 包翻译与随包提示词指南的介绍相互独立。
+    const packageSkill: LuaSkillSummary = {
+      skillId: "reading", displayName: "Runtime name", version: "1", rootName: "test", skillDir: "test",
+      enabled: true, systemOwned: false, managed: false, entryCount: 1,
+      registration: {
+        defaultImplicit: true, defaultLocale: "es-ES",
+        locales: {
+          "en-US": { title: "Reading package", description: "Package introduction" },
+          "es-ES": { title: "Default title", description: "Default package introduction" },
+        },
+        promptSkills: { guide: { "en-US": { title: "Guide title", description: "Guide introduction" } } },
+      },
+      tools: [{ canonicalName: "reading-open", localName: "open", description: "", registrationState: "implicit", registrationLabel: "", registrationHelp: "" }],
+    };
+    // Include a package with all its tools disabled in the same catalog.
+    // 同一目录也包含一个所有工具都已禁用的包。
+    const workbench = configuredSnapshot();
+    workbench.luaSkills!.skills = [
+      packageSkill,
+      { ...packageSkill, skillId: "disabled-reading", tools: packageSkill.tools.map((tool) => ({ ...tool, registrationState: "disabled" })) },
+    ];
+    workbench.plugins = [
+      uiPlugin, browserPlugin,
+      { ...uiPlugin, id: packageSkill.skillId, managementKind: "luaSkill", toolCount: 1, extension: null },
+      { ...uiPlugin, id: "disabled-reading", managementKind: "luaSkill", toolCount: 1, extension: null },
+    ];
+    expect((await project(workbench, "preview", false)).shortcuts?.filter((row) => row.kind !== "skill")).toEqual([
+      { kind: "plugin", name: "browser", label: "Browser" },
+      { kind: "luaSkill", name: "reading", label: "Reading package", description: "Package introduction" },
+    ]);
+  });
+
   it("skips Workbench deltas that touch only fields the composer does not read", () => {
     const workbench = configuredSnapshot();
     const before = layerProps(workbench, "preview", false);

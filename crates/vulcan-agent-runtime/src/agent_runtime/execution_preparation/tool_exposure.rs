@@ -37,8 +37,8 @@ pub(crate) struct ExecutionToolExposureSelection {
     /// Project- and policy-allowed MCP tools discoverable without provider function schemas.
     /// 符合项目范围和策略、可在不发送供应商函数 Schema 时发现的 MCP 工具。
     pub implicit_mcp_tools: Vec<McpRuntimeToolBinding>,
-    /// Implicit MCP server IDs explicitly referenced in the current user input.
-    /// 当前用户输入明确引用的隐式 MCP 服务器 ID。
+    /// Configured MCP server IDs explicitly referenced in the current user input.
+    /// 当前用户输入明确引用的已配置 MCP 服务器 ID。
     pub referenced_mcp_servers: BTreeSet<String>,
     /// Normalized selector state used for final public tool filtering.
     /// 用于最终公开工具过滤的规范化选择器状态。
@@ -120,8 +120,13 @@ pub(crate) fn resolve_execution_tool_exposure(
     // 仅对符合项目范围与工具策略的服务器解析引用。
     let servers = implicit_mcp_tools
         .iter()
-        .filter_map(|tool| Some((tool.server_id()?, tool.server_name()?)))
-        .collect::<BTreeMap<_, _>>();
+        .chain(
+            mcp_tools
+                .iter()
+                .filter(|tool| tool.partition_key() == "user"),
+        )
+        .filter_map(McpRuntimeToolBinding::server_id)
+        .collect::<BTreeSet<_>>();
     let referenced_mcp_servers = referenced_mcp_servers(&request.prompt, &servers);
     ExecutionToolExposureSelection {
         native_tool_ids,
@@ -135,42 +140,46 @@ pub(crate) fn resolve_execution_tool_exposure(
     }
 }
 
-/// Returns exact, unambiguous MCP names or stable IDs mentioned after a standalone `@`.
-/// 返回在独立 `@` 后出现、精确且无歧义的 MCP 名称或稳定 ID。
-fn referenced_mcp_servers(prompt: &str, servers: &BTreeMap<&str, &str>) -> BTreeSet<String> {
-    // Match the longest complete registered name or ID, so spaces and shared prefixes work.
-    // 匹配最长的完整已登记名称或 ID，支持包含空格和共用前缀的名称。
+/// Returns the IDs from the authorized server set explicitly referenced in the submitted prompt.
+/// 从已授权服务器集合中返回提交内容显式引用的标识。
+fn referenced_mcp_servers(prompt: &str, servers: &BTreeSet<&str>) -> BTreeSet<String> {
     let mut referenced = BTreeSet::new();
-    for (index, _) in prompt.match_indices('@') {
-        if !prompt[..index].chars().next_back().is_none_or(|ch| {
-            ch.is_whitespace() || matches!(ch, '(' | '[' | '（' | '【' | ',' | '，' | '、')
-        }) {
+    // Only qualified references select an MCP server, keeping a same-named plugin unambiguous.
+    // 仅用限定引用选择 MCP 服务器，使同名插件的引用保持无歧义。
+    for (index, marker) in prompt.match_indices("#mcp:") {
+        if !mcp_mention_starts_here(&prompt[..index]) {
             continue;
         }
-        let rest = &prompt[index + 1..];
-        let matches = servers
+        // Prefer the longest complete registered ID when two IDs share a prefix.
+        // 两个标识存在共同前缀时，优先匹配最长的完整已注册标识。
+        let suffix = &prompt[index + marker.len()..];
+        if let Some(id) = servers
             .iter()
-            .filter_map(|(&id, &name)| {
-                [id, name]
-                    .into_iter()
-                    .filter(|label| !label.is_empty())
-                    .filter(|label| rest.strip_prefix(label).is_some_and(mcp_mention_ends_here))
-                    .map(str::len)
-                    .max()
-                    .map(|length| (id, length))
-            })
-            .collect::<Vec<_>>();
-        let Some(longest) = matches.iter().map(|(_, length)| *length).max() else {
-            continue;
-        };
-        let mut exact = matches.into_iter().filter(|(_, length)| *length == longest);
-        if let Some((id, _)) = exact.next()
-            && exact.next().is_none()
+            .copied()
+            .filter(|id| suffix.strip_prefix(*id).is_some_and(mcp_mention_ends_here))
+            .max_by_key(|id| id.len())
         {
             referenced.insert(id.to_owned());
         }
     }
     referenced
+}
+
+/// Recognizes the start of a standalone shortcut or the plugin part of a combined skill shortcut.
+/// 识别独立快捷指令的起始位置，或组合技能快捷指令中的插件部分。
+fn mcp_mention_starts_here(prefix: &str) -> bool {
+    prefix.chars().next_back().is_none_or(|ch| {
+        ch.is_whitespace() || matches!(ch, '(' | '[' | '（' | '【' | ',' | '，' | '、')
+    }) || prefix
+        .rsplit(char::is_whitespace)
+        .next()
+        .and_then(|word| word.strip_prefix('@'))
+        .is_some_and(|skill| {
+            !skill.is_empty()
+                && skill
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b':' | b'-'))
+        })
 }
 
 /// Distinguishes a complete mention from a longer identifier or a file extension.

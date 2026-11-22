@@ -321,6 +321,10 @@ fn plugin_mcp_server_summary(
         generation: plugin.generation,
         retry_count: runtime_state.map_or(0, |state| state.retry_count),
         tool_count: runtime_state.map_or(0, |state| state.tool_count),
+        bundled_tool_count: server
+            .prompt_tool_snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.tools.len()),
         prompt_count: runtime_state.map_or(0, |state| state.prompt_count),
         resource_count: runtime_state.map_or(0, |state| state.resource_count),
         last_error: runtime_state.and_then(|state| state.last_error.clone()),

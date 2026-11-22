@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "@/ui-kit/primitives/toast";
 import { ConversationHistoryDialogContext } from "@/state/conversation-history-dialog";
 import { ComposerPanel } from "./composer-panel";
+import { loadMcpRuntimeSnapshot } from "@/service/mcp-settings-service";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
 import { ComposerEnterSendSettingsSection } from "@/components/features/settings/composer-enter-send-settings";
 import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings";
@@ -15,6 +16,7 @@ import { classifyDroppedComposerFiles, planComposerAttachments, prepareComposerA
 // transport 仅替换外部服务边界；输入区控件和全部草稿 Hook 均使用真实实现。
 const transport = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), loadSettings: vi.fn(), loadSession: vi.fn() }));
 vi.mock("@/service/conversation-session-drafts-v1", () => ({ sessionDraftClientV1: transport }));
+vi.mock("@/service/mcp-settings-service", () => ({ loadMcpRuntimeSnapshot: vi.fn() }));
 vi.mock("@/service/settings-actions-service", () => ({
   loadPublicAiSettings: transport.loadSettings,
   loadPublicAiSessionProviderToolSelections: transport.loadSession,
@@ -643,6 +645,19 @@ it("keeps a new conversation's pending stop locked when the old conversation fin
 // Keyboard and pointer selection insert stable references into the actual composer draft.
 // 键盘和鼠标选择把稳定引用插入实际输入草稿。
 it("offers skill and plugin shortcuts and inserts references without sending", async () => {
+  // The local catalog reports one usable MCP, one empty server, and one plugin-owned server.
+  // 本地目录报告一个可用 MCP、一个无工具服务器和一个插件自有服务器。
+  const inspection = (id: string, source: "user" | "plugin", toolCount: number) => ({
+    inspectionGeneration: 1, tools: [],
+    state: { id, name: id, source, pluginId: null, generation: null, transport: "stdio",
+      endpoint: "fixture", status: "connected" as const, retryCount: 0, protocolVersion: null, serverProduct: null,
+      serverVersion: null, toolCount, promptCount: 0, resourceCount: 0, lastError: null, recentLogs: [] },
+  });
+  vi.mocked(loadMcpRuntimeSnapshot).mockResolvedValue([
+    inspection("reader", "user", 1),
+    inspection("empty", "user", 0),
+    inspection("owned", "plugin", 1),
+  ]);
   const props = composerProps({
     isConversationRunning: false,
     workspacePath: null,
@@ -650,6 +665,10 @@ it("offers skill and plugin shortcuts and inserts references without sending", a
       { kind: "skill", name: "session-mcp", label: "Session MCP" },
       { kind: "skill", name: "luaskills-vulcan-curl:http-workflow", displayName: "http-workflow", label: "HTTP requests" },
       { kind: "plugin", name: "context7", label: "Context7 Docs" },
+      { kind: "luaSkill", name: "vulcan-curl", label: "HTTP client", description: "Send HTTP requests" },
+      { kind: "mcp", name: "mcp:reader", label: "Reader server", description: "Look up library notes" },
+      { kind: "mcp", name: "mcp:empty", label: "Empty server" },
+      { kind: "mcp", name: "mcp:owned", label: "Plugin-owned server" },
     ],
   });
   await mount(props);
@@ -665,6 +684,7 @@ it("offers skill and plugin shortcuts and inserts references without sending", a
   };
   await type("use @");
   expect(host.querySelector('[role="option"] .vk-mention-names')?.textContent).toBe("session-mcpSession MCP");
+  expect(loadMcpRuntimeSnapshot).not.toHaveBeenCalled();
   await pressEnter();
   expect(field.value).toBe("use @session-mcp ");
   await type("use @http");
@@ -676,5 +696,28 @@ it("offers skill and plugin shortcuts and inserts references without sending", a
   expect(option.querySelector(".vk-mention-names")?.textContent).toBe("context7Context7 Docs");
   await act(async () => option.click());
   expect(field.value).toBe("use @session-mcp#context7 ");
+
+  await type("use #");
+  // Check the composed row parts separately so names, tags, and package text are all visible.
+  // 分别检查条目组成，确认名称、类型标签和包介绍均可见。
+  const taggedRows = [...host.querySelectorAll('[role="option"]')].filter((row) => row.querySelector('[data-slot="badge"]'));
+  expect(taggedRows.map((row) => ({
+    name: row.querySelector(".vk-slash-cmd")?.textContent,
+    tag: row.querySelector('[data-slot="badge"]')?.textContent,
+    introduction: row.querySelector(".vk-slash-desc")?.textContent,
+  }))).toEqual([
+    { name: "HTTP client", tag: "LuaSkills", introduction: "Send HTTP requests" },
+    { name: "Reader server", tag: "MCP", introduction: "Look up library notes" },
+  ]);
+  // Typing within an open shortcut only filters its published results.
+  // 在已打开的快捷指令内继续键入时，仅筛选已发布结果。
+  const catalogReads = vi.mocked(loadMcpRuntimeSnapshot).mock.calls.length;
+  await type("use #rea");
+  expect(loadMcpRuntimeSnapshot).toHaveBeenCalledTimes(catalogReads);
+  const mcpOption = host.querySelector<HTMLButtonElement>('[role="option"]')!;
+  expect(mcpOption.querySelector(".vk-slash-cmd")?.textContent).toBe("Reader server");
+  await act(async () => mcpOption.click());
+  expect(field.value).toBe("use #mcp:reader ");
+  expect(props.onSubmitPrompt).not.toHaveBeenCalled();
   expect(props.onStopConversationRun).not.toHaveBeenCalled();
 });

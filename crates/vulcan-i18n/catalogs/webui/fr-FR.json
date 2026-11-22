@@ -5724,7 +5724,7 @@
   "settings.mcp.enabled": "Activé",
   "settings.mcp.toolExposure": "Disponibilité des outils",
   "settings.mcp.usageHint": "Quand utiliser ce serveur MCP",
-  "settings.mcp.usageHintHelp": "Facultatif. Si ce champ est vide, le serveur apparaît dans le prompt lorsque vous mentionnez son nom avec @. Le modèle peut aussi le trouver en consultant les serveurs MCP disponibles.",
+  "settings.mcp.usageHintHelp": "Facultatif. Si ce champ est vide, le serveur ne fait pas l’objet d’un rappel automatique. Tapez # pour le sélectionner, ou laissez le modèle le rechercher au besoin.",
   "settings.mcp.implicitExposure": "Implicite · À la demande",
   "settings.mcp.explicitExposure": "Explicite · Dans chaque requête",
   "settings.mcp.projectScope": "Périmètre des projets",

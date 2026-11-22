@@ -2039,6 +2039,14 @@ async fn configured_mcp_respects_project_scope_and_implicit_exposure() {
     let ordinary =
         prepare_execution_with_tool_snapshot(&unhinted, None, &unhinted_config, &request).unwrap();
     request.prompt = "@Fixture MCP，查文档。".into();
+    let at_reference =
+        prepare_execution_with_tool_snapshot(&unhinted, None, &unhinted_config, &request).unwrap();
+    // An unqualified plugin with the same name does not select this MCP server.
+    // 同名插件的非限定引用不会选择此 MCP 服务器。
+    request.prompt = "#fixture 查文档。".into();
+    let plugin_reference =
+        prepare_execution_with_tool_snapshot(&unhinted, None, &unhinted_config, &request).unwrap();
+    request.prompt = "#mcp:fixture 查文档。".into();
     let mentioned =
         prepare_execution_with_tool_snapshot(&unhinted, None, &unhinted_config, &request).unwrap();
     request.project_id = Some("project-b".into());
@@ -2047,6 +2055,8 @@ async fn configured_mcp_respects_project_scope_and_implicit_exposure() {
     for (round, advertised) in [
         (&allowed, true),
         (&ordinary, false),
+        (&at_reference, false),
+        (&plugin_reference, false),
         (&mentioned, true),
         (&denied, false),
     ] {
@@ -2141,13 +2151,9 @@ async fn configured_mcp_respects_project_scope_and_implicit_exposure() {
         serde_json::from_str(&call(&denied, "mcp_tools", json!({})).await.unwrap()).unwrap();
     assert_eq!(denied_roster, json!({"servers":[]}));
     let listing: serde_json::Value = serde_json::from_str(
-        &call(
-            &mentioned,
-            "mcp_tools",
-            json!({"server_name":"Fixture MCP"}),
-        )
-        .await
-        .unwrap(),
+        &call(&mentioned, "mcp_tools", json!({"server_id":"fixture"}))
+            .await
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(listing["server_id"], "fixture");
@@ -2203,6 +2209,15 @@ async fn configured_mcp_respects_project_scope_and_implicit_exposure() {
     entry.access.projects = crate::provider_config::McpProjectScope::All;
     let explicit = test_runtime_foundation_with_mcp(&config, None, None, None, mcp.clone());
     let exposed = prepare_execution_with_tool_snapshot(&explicit, None, &config, &request).unwrap();
+    // Selecting the explicit server emits its stable identity without enabling implicit discovery.
+    // 选择显式服务器会传递其稳定标识，同时无需启用隐式发现。
+    assert!(
+        exposed
+            .preparation
+            .additional_developer_segments
+            .iter()
+            .any(|segment| segment.body.contains("[\"fixture\"]"))
+    );
     assert!(
         !exposed
             .preparation

@@ -5724,7 +5724,7 @@
   "settings.mcp.enabled": "启用",
   "settings.mcp.toolExposure": "工具公开方式",
   "settings.mcp.usageHint": "何时使用这个 MCP",
-  "settings.mcp.usageHintHelp": "选填。留空时不会主动提示。可在对话中用 @服务器名称 引用，模型也可以主动查询可用的 MCP。",
+  "settings.mcp.usageHintHelp": "选填。留空时不主动提示。输入 # 可从快捷列表选择此 MCP，模型也可以主动查询。",
   "settings.mcp.implicitExposure": "隐式 · 按需发现",
   "settings.mcp.explicitExposure": "显式 · 随请求发送",
   "settings.mcp.projectScope": "项目范围",

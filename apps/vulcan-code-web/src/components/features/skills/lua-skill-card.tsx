@@ -28,8 +28,7 @@ import {
 } from "@/ui-kit/primitives/dropdown-menu";
 import { formatSkillText } from "@/components/features/featureText";
 import { useI18n } from "@/i18n";
-import { matchLocaleTag } from "@/i18n-locales";
-import type { LuaSkillIntroduction } from "@/types/composer-skills";
+import { localizeLuaSkillIntroduction } from "./plugin-localized-text";
 import type { LuaSkillSummary, LuaSkillToolSummary, LuaSkillUpdateCheck } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
@@ -43,19 +42,6 @@ const SKILL_SOURCE_TYPE_NAMES: Readonly<Record<string, string>> = { github: "Git
 function skillSourceTypeLabel(sourceType: string | null | undefined): string | null {
   const kind = sourceType?.trim();
   return kind ? SKILL_SOURCE_TYPE_NAMES[kind.toLowerCase()] ?? kind : null;
-}
-
-// localizeIntroduction selects the shared interface language or the package default.
-// localizeIntroduction 选择共享界面语言或包声明的默认语言。
-function localizeIntroduction(
-  translations: Record<string, LuaSkillIntroduction>,
-  locale: string,
-  defaultLocale: string,
-): LuaSkillIntroduction | undefined {
-  // Sort-equivalent language tags arrive in manifest order from the service.
-  // 等价语言标签按服务清单的顺序到达。
-  const match = Object.keys(translations).find((tag) => matchLocaleTag(tag) === locale);
-  return translations[locale] ?? (match ? translations[match] : undefined) ?? translations[defaultLocale];
 }
 
 // hasLuaSkillConfigOptions determines whether one catalog row exposes actual package configuration options.
@@ -110,7 +96,7 @@ export function LuaSkillCard(props: {
   const registration = props.skill.registration;
   // Unregistered legacy packages have no package-owned introduction.
   // 未注册的旧包没有自带介绍。
-  const introduction = registration && localizeIntroduction(registration.locales, locale, registration.defaultLocale);
+  const introduction = registration && localizeLuaSkillIntroduction(registration.locales, locale, registration.defaultLocale);
   // source is the compact source description shown below the unified label line.
   // source 是统一标签行下方显示的紧凑来源说明。
   const source = props.skill.sourceLocator ?? t("skills.source.unknown");
@@ -260,7 +246,7 @@ export function LuaSkillDetailDialog(props: {
   const registration = skill?.registration;
   // Missing translations use the same declared default for both kinds of description.
   // 两类说明缺少译文时均使用同一个包声明默认语言。
-  const introduction = registration && localizeIntroduction(registration.locales, locale, registration.defaultLocale);
+  const introduction = registration && localizeLuaSkillIntroduction(registration.locales, locale, registration.defaultLocale);
   const source = skill?.sourceLocator ? [skillSourceTypeLabel(skill.sourceType), skill.sourceLocator].filter(Boolean).join(" · ") : t("skills.source.unknown");
   return (
     <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
@@ -275,7 +261,7 @@ export function LuaSkillDetailDialog(props: {
             {registration && Object.entries(registration.promptSkills).map(([name, translations]) => {
               // Resolve the guide in the same locale as the enclosing package card.
               // 以包卡片所用的同一语言解析指南。
-              const guide = localizeIntroduction(translations, locale, registration.defaultLocale);
+              const guide = localizeLuaSkillIntroduction(translations, locale, registration.defaultLocale);
               return guide ? (
                 <div className="wide" key={name}>
                   <strong>{guide.title}</strong>

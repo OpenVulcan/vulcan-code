@@ -1,5 +1,6 @@
 import React from "react";
 
+import { loadMcpRuntimeSnapshot } from "@/service/mcp-settings-service";
 import { DEFAULT_WORKSPACE_FILE_FILTERS, loadWorkspaceFileDirectory } from "@/service/workbench-snapshot-service";
 import type { WorkspaceFileEntrySummary } from "@/types";
 
@@ -64,12 +65,15 @@ export function pathMentionSuggestions(entries: readonly WorkspaceFileEntrySumma
 // ComposerShortcut stores an exact catalog reference and its display label.
 // ComposerShortcut 保存精确目录引用和对应显示名称。
 export interface ComposerShortcut {
-  kind: "skill" | "plugin";
+  kind: "skill" | "plugin" | "luaSkill" | "mcp";
   name: string;
-  // Bundled guides show their declared file name while insertion uses the qualified name.
-  // 随包指南显示声明的文件名，插入时使用带命名空间的完整名称。
+  // Bundled guides and MCP servers can display a shorter name than their inserted reference.
+  // 随包指南与 MCP 服务器可显示比插入引用更短的名称。
   displayName?: string;
   label: string;
+  // Optional introduction for MCP servers and LuaSkills packages.
+  // MCP 服务器与 LuaSkills 包的可选介绍。
+  description?: string;
 }
 
 // ComposerMentionRow combines catalog references with selectable workspace entries.
@@ -150,6 +154,37 @@ export function useComposerPathMention(options: {
   const split = mention?.marker === "@" ? splitPathMention(mention.query) : null;
   const directory = split?.directory ?? null;
 
+  // The token start stays stable while typing, so the menu reads the local catalog once per shortcut.
+  // 输入时引用起点保持不变，因此菜单每次打开只读取一次本地目录。
+  const mcpShortcutStart = mention?.marker === "#" && options.shortcuts?.some((item) => item.kind === "mcp")
+    ? mention.start : null;
+  // Record which saved options the inspection belonged to before showing any MCP rows.
+  // 显示 MCP 条目前记录检查结果对应的已保存候选项。
+  const [mcpCatalog, setMcpCatalog] = React.useState<{
+    start: number;
+    shortcuts: readonly ComposerShortcut[] | undefined;
+    names: ReadonlySet<string>;
+  } | null>(null);
+  const shortcuts = options.shortcuts;
+  React.useEffect(() => {
+    setMcpCatalog(null);
+    if (mcpShortcutStart === null) return;
+    // Read the published catalog after asynchronous discovery, without starting or consulting remote servers.
+    // 读取异步发现后的已发布目录，全程无需启动或查询远程服务器。
+    let active = true;
+    void loadMcpRuntimeSnapshot().then((servers) => {
+      if (!active) return;
+      const names = new Set(servers
+        .filter(({ state }) => state.source === "user" && state.toolCount > 0)
+        .map(({ state }) => `mcp:${state.id}`));
+      setMcpCatalog({ start: mcpShortcutStart, shortcuts, names });
+    }, () => {
+      // Leave configured MCP shortcuts hidden until the next successful catalog read.
+      // 在下次成功读取目录前隐藏配置的 MCP 快捷指令。
+    });
+    return () => { active = false; };
+  }, [mcpShortcutStart, shortcuts]);
+
   React.useEffect(() => {
     if (!workspacePath || directory === null || folders?.has(directory)) return;
     const store = (entries: readonly WorkspaceFileEntrySummary[] | null) => setListings((current) => {
@@ -176,9 +211,9 @@ export function useComposerPathMention(options: {
   // 目录匹配项排在路径之前，路径仍可按目录浏览。
   const suggestions: ComposerMentionRow[] = [];
   if (mention && !split?.directory) {
-    const kind = mention.marker === "#" ? "plugin" : "skill";
     const query = mention.query.toLowerCase();
-    suggestions.push(...(options.shortcuts ?? []).filter((item) => item.kind === kind
+    suggestions.push(...(shortcuts ?? []).filter((item) => (mention.marker === "#" ? item.kind !== "skill" : item.kind === "skill")
+      && (item.kind !== "mcp" || (mcpCatalog?.start === mention.start && mcpCatalog.shortcuts === shortcuts && mcpCatalog.names.has(item.name)))
       && (item.name.toLowerCase().includes(query) || item.label.toLowerCase().includes(query))));
   }
   if (entries && split) {

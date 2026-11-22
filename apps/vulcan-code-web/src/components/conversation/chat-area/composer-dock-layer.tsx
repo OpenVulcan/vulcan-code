@@ -1,6 +1,6 @@
 import React from "react";
 import { useI18n } from "@/i18n";
-import { localizedPluginText } from "@/components/features/skills/plugin-localized-text";
+import { localizedPluginText, localizeLuaSkillIntroduction } from "@/components/features/skills/plugin-localized-text";
 import type { ComposerShortcut } from "@/components/composer/composer-panel/use-composer-path-mention";
 import {
   ComposerDock,
@@ -91,6 +91,9 @@ function composerDockInputs(props: ChatAreaComposerDockLayerProps) {
     shortcutAgentSkills: workbench.agentSkills?.records,
     shortcutLuaSkills: workbench.luaSkills?.skills,
     shortcutPlugins: workbench.plugins,
+    // Saved servers supply names and project scopes for the shortcut candidates.
+    // 已保存的服务器为快捷指令候选提供名称和项目范围。
+    shortcutMcpServers: workbench.mcpServers,
     contextUsage: workbench.contextUsage,
     sessionProviderUsage: workbench.sessionProviderUsage,
     contextCompactionWindowNodes: workbench.contextCompactionWindowNodes,
@@ -169,12 +172,46 @@ function ChatAreaComposerDockLayerView(props: ChatAreaComposerDockLayerProps) {
         rows.push({ kind: "skill", name, displayName: guide, label: locales[locale]?.title ?? locales[registration.defaultLocale]?.title ?? guide });
       }
     }
+    // Resolve LuaSkills enablement and introductions by the package ID used in the unified catalog.
+    // 按统一目录中的包标识解析 LuaSkills 的工具启用情况与包介绍。
+    const luaSkillsById = new Map(inputs.shortcutLuaSkills?.map((skill) => [skill.skillId, skill]));
     for (const plugin of inputs.shortcutPlugins ?? []) {
       if (!plugin.enabled || !plugin.available) continue;
+      if (plugin.managementKind === "luaSkill") {
+        // Both implicit and explicit tools are callable from a package shortcut.
+        // 隐式与显式工具均可通过包快捷指令引用。
+        const skill = luaSkillsById.get(plugin.id);
+        if (!skill?.tools.some((tool) => tool.registrationState !== "disabled")) continue;
+        // Registered packages supply their own localized introduction independently of any guide.
+        // 已注册的包提供自己的本地化介绍，与随包指南独立。
+        const introduction = skill.registration && localizeLuaSkillIntroduction(
+          skill.registration.locales, locale, skill.registration.defaultLocale,
+        );
+        rows.push({
+          kind: "luaSkill",
+          name: plugin.id,
+          label: introduction?.title ?? plugin.name,
+          description: introduction?.description ?? plugin.capability,
+        });
+        continue;
+      }
+      // On-demand plugin MCP tools also count before their transport has started.
+      // 按需启动的插件 MCP 工具在传输启动前也计入。
+      if (plugin.toolCount === 0 && !plugin.extension?.mcpServers.some(
+        (server) => server.toolCount > 0 || (server.bundledToolCount ?? 0) > 0,
+      )) continue;
       rows.push({ kind: "plugin", name: plugin.id, label: localizedPluginText(plugin.nameByLocale, locale, plugin.name) });
     }
+    for (const server of inputs.shortcutMcpServers ?? []) {
+      // Use the submission project, and qualify MCP IDs to distinguish same-named plugin shortcuts.
+      // 使用实际提交项目，并限定 MCP 标识以区别同名插件快捷指令。
+      const scope = server.access.projects;
+      if (!server.enabled) continue;
+      if (scope.mode === "selected" && (props.projectId === null || !scope.projectIds.includes(props.projectId))) continue;
+      rows.push({ kind: "mcp", name: `mcp:${server.id}`, label: server.name, description: server.access.usageHint });
+    }
     return rows;
-  }, [inputs.shortcutAgentSkills, inputs.shortcutLuaSkills, inputs.shortcutPlugins, locale]);
+  }, [inputs.shortcutAgentSkills, inputs.shortcutLuaSkills, inputs.shortcutPlugins, inputs.shortcutMcpServers, locale, props.projectId]);
   // Resolve visibility from the local session/project; another client may own the shared snapshot selection.
   // 从本地会话/项目解析可见性；共享快照的选择可能由另一客户端持有。
   const memoryEnabled = props.conversationId

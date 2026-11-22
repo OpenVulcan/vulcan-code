@@ -5724,7 +5724,7 @@
   "settings.mcp.enabled": "Activado",
   "settings.mcp.toolExposure": "Visibilidad de las herramientas",
   "settings.mcp.usageHint": "Cuándo usar este MCP",
-  "settings.mcp.usageHintHelp": "Opcional. Si se deja en blanco, no aparecerá en el prompt hasta que lo menciones con @ y su nombre. El modelo también puede encontrarlo consultando los servidores MCP disponibles.",
+  "settings.mcp.usageHintHelp": "Opcional. Si se deja en blanco, no aparece en las indicaciones automáticas. Escribe # para seleccionar el servidor, o deja que el modelo lo busque cuando lo necesite.",
   "settings.mcp.implicitExposure": "Implícita · Bajo demanda",
   "settings.mcp.explicitExposure": "Explícita · En cada solicitud",
   "settings.mcp.projectScope": "Ámbito de proyectos",

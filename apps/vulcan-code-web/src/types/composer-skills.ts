@@ -1295,6 +1295,9 @@ export interface PluginSummary {
       // Current complete tool count.
       // 当前完整工具数量。
       toolCount: number;
+      // Tools in the validated bundled snapshot before the server starts.
+      // 服务器启动前，经校验的随包快照中的工具数量。
+      bundledToolCount?: number;
       // Current prompt count.
       // 当前 Prompt 数量。
       promptCount: number;

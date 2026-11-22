@@ -5724,7 +5724,7 @@
   "settings.mcp.enabled": "有効",
   "settings.mcp.toolExposure": "ツールの公開方式",
   "settings.mcp.usageHint": "この MCP を使う場面",
-  "settings.mcp.usageHintHelp": "任意です。空欄の場合は、@ でサーバー名を指定したときにプロンプトに表示されます。モデルが利用可能な MCP サーバーを検索することもできます。",
+  "settings.mcp.usageHintHelp": "任意です。空欄の場合は自動で案内されません。# を入力してサーバーを選ぶか、必要に応じてモデルに探させることができます。",
   "settings.mcp.implicitExposure": "暗黙 · 必要時に取得",
   "settings.mcp.explicitExposure": "明示 · リクエストごとに送信",
   "settings.mcp.projectScope": "プロジェクトの範囲",

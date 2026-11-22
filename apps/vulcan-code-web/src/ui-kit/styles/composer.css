@@ -338,6 +338,9 @@
 .vk-slash:is([data-kind="path"], [data-kind="plugin"]) .vk-slash-row { grid-template-columns: 14px minmax(0, 1fr); }
 .vk-slash:is([data-kind="path"], [data-kind="plugin"]) .vk-slash-row > svg { width: 14px; height: 14px; color: var(--vk-ink-3); }
 .vk-mention-names { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); min-width: 0; }
+/* Keep the shortcut type legible beside long names or descriptions. */
+/* 名称或介绍较长时，仍保持快捷指令类型清晰可读。 */
+.vk-mention-names > [data-slot="badge"] { flex: none; }
 .vk-slash[data-kind="path"] .vk-slash-cmd { font-weight: 500; }
 
 /* ---------- Strips docked on the composer ---------- */

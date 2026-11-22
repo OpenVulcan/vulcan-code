@@ -244,6 +244,10 @@ pub struct PluginMcpServerSummary {
     /// Number of tools in the complete last valid snapshot.
     /// 最近完整有效快照中的工具数量。
     pub tool_count: usize,
+    /// Number of tools declared in the validated bundled snapshot before the server starts.
+    /// 服务器启动之前，经校验的随包快照声明的工具数量。
+    #[serde(default)]
+    pub bundled_tool_count: usize,
     /// Number of discovered prompts.
     /// 已发现 Prompt 数量。
     pub prompt_count: usize,
