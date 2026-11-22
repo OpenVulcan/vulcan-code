@@ -11,6 +11,7 @@
     "build": "tsc -b && node tools/copy-i18n-catalogs.mjs",
     "start": "electron dist/gui/main.js",
     "test:unit": "node --test dist/**/*.test.js",
+    "test:electron-runtime": "node --test tools/electron-runtime.test.mjs",
     "test:workbench-history": "node tools/test-workbench-history.mjs",
     "test:integration": "node tools/test-integration.mjs",
     "w02:compatibility": "node tools/w02-compatibility.mjs",
@@ -20,7 +21,7 @@
     "@types/css-tree": "3.2.0",
     "@types/node": "^25.9.1",
     "@types/ws": "8.18.1",
-    "electron": "44.4.1",
+    "electron": "44.11.5",
     "playwright-core": "1.64.0-alpha-1789764292000",
     "rcedit": "5.0.2",
     "typescript": "5.9.3"

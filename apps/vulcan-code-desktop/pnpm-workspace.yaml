@@ -4,4 +4,4 @@
 allowBuilds:
   electron: false
 minimumReleaseAgeExclude:
-  - electron@44.4.1
+  - electron@44.11.5
