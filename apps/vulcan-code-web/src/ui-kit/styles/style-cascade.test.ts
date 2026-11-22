@@ -25,6 +25,10 @@ it("keeps the gutter reasoning tag absolute and no taller than the shortest tool
   // rules 是套件真实的会话顶层规则，排除视口与容器分支。
   const rules = postcss.parse(readFileSync(resolve("src/ui-kit/styles/conversation.css"), "utf8")).nodes
     .filter((node: { type: string }) => node.type === "rule");
+  // The shared token definitions supply the tool header height across interface densities.
+  // 共享设计标记为不同界面密度提供统一的工具卡标题行高度。
+  const tokens = postcss.parse(readFileSync(resolve("src/ui-kit/styles/tokens.css"), "utf8")).nodes
+    .filter((node: { type: string }) => node.type === "rule");
   // declaration returns the last value a rule listing the given selector declares for the property.
   // declaration 返回列出给定选择器的规则为该属性声明的最后取值。
   const declaration = (selector: string, property: string): string => {
@@ -33,10 +37,13 @@ it("keeps the gutter reasoning tag absolute and no taller than the shortest tool
     expect(values.length, `${selector} declares no ${property}`).toBeGreaterThan(0);
     return values[values.length - 1];
   };
-  // units reads a kit length written as calc(var(--vk-u) * N), so both sides share one scale.
-  // units 读取写作 calc(var(--vk-u) * N) 的套件长度，使两侧使用同一刻度。
+  // units resolves a shared token or a literal kit length to the number of scale units.
+  // units 将共享设计标记或直接写出的套件长度换算为刻度单位数。
   const units = (value: string): number => {
-    const match = /^calc\(var\(--vk-u\) \* ([\d.]+)\)$/.exec(value.trim());
+    const reference = /^var\((--[\w-]+)\)$/.exec(value.trim());
+    const length = reference ? tokens.flatMap((node: { nodes: { prop: string; value: string }[] }) => node.nodes)
+      .find((decl: { prop: string }) => decl.prop === reference[1])?.value : value;
+    const match = /^calc\(var\(--vk-u\) \* ([\d.]+)\)$/.exec(length?.trim() ?? "");
     expect(match, `expected a --vk-u multiple, got ${value}`).not.toBeNull();
     return Number.parseFloat(match![1]);
   };

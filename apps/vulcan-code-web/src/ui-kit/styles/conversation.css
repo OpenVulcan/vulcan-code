@@ -321,6 +321,9 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-gutter-anchor { min-height: calc(var(--vk-u) * 5.5); }
 .vk-flow[data-think] > .vk-think-tag,
 .vk-gutter-anchor > .vk-think-tag { position: absolute; z-index: 1; top: 0; left: calc(var(--vk-u) * -8); }
+/* The tool prefix follows the header's center and stays there when its body expands.
+   工具卡前的图标与标题行居中对齐，正文展开后位置保持不变。 */
+.vk-flow[data-think="tool"] > .vk-think-tag { top: calc(var(--vk-bw) + var(--vk-h-lg) / 2); translate: 0 -50%; }
 /* The final answer's actions: copy the source and fork, beside the answer time. */
 .vk-answer-meta { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 2); min-width: 0; height: calc(var(--vk-u) * 5.5); margin-top: calc(var(--vk-u) * -1.5); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
 .vk-answer-meta > .vk-icon-btn { width: calc(var(--vk-u) * 5); height: calc(var(--vk-u) * 5); color: inherit; }
@@ -616,7 +619,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
   gap: calc(var(--vk-u) * 2.5);
   align-items: center;
   width: 100%;
-  min-height: calc(var(--vk-u) * 8);
+  min-height: var(--vk-h-lg);
   padding: 0 calc(var(--vk-u) * 2) 0 calc(var(--vk-u) * 1.5);
   border: 0;
   background: transparent;
