@@ -539,6 +539,7 @@ pub(crate) fn synchronize_runtime_host_request_context(
             return synchronize_runtime_host_events(snapshot, candidates, current_user_message_id);
         }
         ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::ShellJobContinuation
         | ExecutionPromptPurpose::AgentTask
         | ExecutionPromptPurpose::ExecutionRetry => {}
     }
@@ -787,6 +788,7 @@ fn resolve_prompt_assembly_mode(
     }
     match purpose {
         ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::ShellJobContinuation
         | ExecutionPromptPurpose::AgentTask
         | ExecutionPromptPurpose::ExecutionRetry
         | ExecutionPromptPurpose::QuestionExecution
@@ -803,6 +805,7 @@ fn build_prompt_purpose_developer_segments(
 ) -> Vec<AdditionalPromptSegment> {
     match purpose {
         ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::ShellJobContinuation
         | ExecutionPromptPurpose::AgentTask
         | ExecutionPromptPurpose::ExecutionRetry
         | ExecutionPromptPurpose::QuestionExecution

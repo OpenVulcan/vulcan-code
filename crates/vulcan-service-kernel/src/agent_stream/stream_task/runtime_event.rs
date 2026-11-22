@@ -45,7 +45,10 @@ pub(super) fn runtime_event_hook_policy_for_execution_scope(
     conversation_hook_turn_id: Option<&str>,
     purpose: ExecutionPromptPurpose,
 ) -> Result<RuntimeEventHookPolicy, String> {
-    if purpose == ExecutionPromptPurpose::QuestionExecution {
+    if matches!(
+        purpose,
+        ExecutionPromptPurpose::QuestionExecution | ExecutionPromptPurpose::ShellJobContinuation
+    ) {
         return Ok(RuntimeEventHookPolicy::Disabled);
     }
     if hooks_enabled && matches!(execution_scope, ExecutionScope::MainSession { .. }) {
@@ -479,6 +482,16 @@ mod tests {
                 ExecutionPromptPurpose::QuestionExecution
             )
             .expect("auxiliary execution does not need a business Hook"),
+            RuntimeEventHookPolicy::Disabled
+        );
+        assert_eq!(
+            runtime_event_hook_policy_for_execution_scope(
+                &main_scope,
+                true,
+                None,
+                ExecutionPromptPurpose::ShellJobContinuation,
+            )
+            .unwrap(),
             RuntimeEventHookPolicy::Disabled
         );
         assert_eq!(

@@ -5,9 +5,75 @@ use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
 };
 use crate::{AgentRuntimeBridge, SessionId};
+use vulcan_session_core::v1::document::TurnOrigin;
 
 mod continuation;
 pub(crate) use continuation::continuation_hook_authority;
+
+/// Returns the independent correlation of an open durable shell wake on `handle`.
+/// 返回 `handle` 所持有的开放且已持久化 Shell 唤醒的独立关联标识。
+/// Existing receipts retain their original ID so a legacy wake can also continue.
+/// 已有回执保留原始标识，以便旧版本启动的唤醒也能继续。
+pub(crate) fn shell_wake_identity(handle: &SessionHandle) -> Result<Option<String>, String> {
+    handle
+        .read(|document| {
+            let turn = document
+                .active_turn()
+                .filter(|turn| !turn.closed && turn.origin == TurnOrigin::ShellJobContinuation)?;
+            Some(match &document.metadata.business_hook.binding {
+                Some(binding)
+                    if binding.turn_id == turn.turn_id && binding.start_seq == turn.start_seq =>
+                {
+                    binding.hook_turn_id.clone()
+                }
+                _ => format!(
+                    "session-{}-shell-job-wake-{}",
+                    handle.session_id(),
+                    turn.turn_id.value()
+                ),
+            })
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Clears a stale process Hook only after `handle` proves a new unpublished user turn.
+/// 仅在 `handle` 证明存在尚未发布的新用户回合后清理陈旧的进程内 Hook。
+/// Returns without altering either a published user owner or durable memory state.
+/// 返回时保留已发布的用户所有者及持久记忆状态。
+pub(crate) fn prepare_user_root_hook_owner(
+    handle: &SessionHandle,
+    runtime: &AgentRuntimeBridge,
+) -> Result<(), String> {
+    if let Some(captured) = live_business_hook_state(handle)? {
+        return runtime
+            .lock_conversation_hooks()
+            .map_err(|error| error.to_string())?
+            .restore_business_hook_state(&captured)
+            .map(|_| ());
+    }
+    if !runtime
+        .lock_conversation_hooks()
+        .map_err(|error| error.to_string())?
+        .has_active_turn(handle.session_id())
+    {
+        return Ok(());
+    }
+    // A new canonical root proves that the retained process Hook belongs to an earlier turn.
+    // 新的规范根输入证明进程内遗留的 Hook 属于更早的回合。
+    let initial = handle
+        .read_full_durable(|document| document.main_business_initial_preparation())
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    if initial.origin != TurnOrigin::UserRoot {
+        return Err(String::from(
+            "Replacing a stale user Hook requires a new canonical user root.",
+        ));
+    }
+    runtime
+        .lock_conversation_hooks()
+        .map_err(|error| error.to_string())?
+        .discard_unpublished_business_preparation(&initial)
+}
 
 /// Publishes `start`'s actual Hook before allowing its deferred user observer to run.
 /// 允许延迟用户观察器运行之前，发布 `start` 的实际 Hook。
@@ -49,6 +115,9 @@ pub(crate) fn live_business_hook_state(
             let Some(turn) = document.active_turn().filter(|turn| !turn.closed) else {
                 return Ok(None);
             };
+            if turn.origin == TurnOrigin::ShellJobContinuation {
+                return Ok(None);
+            }
             let Some(binding) =
                 document
                     .metadata
@@ -138,10 +207,33 @@ pub(crate) fn capture_business_hook_before_dispatch(
         .map_err(|error| error.to_string())??;
     // Capture the real owner; a continuation string must never be used as original user content.
     // 捕获实际所有者；绝不能把续跑字符串用作原始用户正文。
-    let mut binding = runtime
-        .lock_conversation_hooks()
-        .map_err(|error| format!("Failed to lock business Hook runtime: {error}"))?
-        .capture_business_hook_binding(session_id, generation, turn.turn_id, turn.start_seq)?;
+    let mut binding = if turn.origin == TurnOrigin::ShellJobContinuation {
+        // A shell wake preserves its V1 dispatch receipt without creating a process-local user Hook.
+        // Shell 唤醒保留 V1 分发回执，同时不创建进程内用户 Hook。
+        let identity = shell_wake_identity(handle)?
+            .ok_or("Shell wake ownership changed before publication.")?;
+        match captured
+            .as_ref()
+            .filter(|value| value.turn_id == turn.turn_id)
+        {
+            Some(original) => original.clone(),
+            None => vulcan_session_core::v1::business_hook::BusinessHookBinding {
+                session_id: session_id.to_string(),
+                segment_generation: generation,
+                turn_id: turn.turn_id,
+                start_seq: turn.start_seq,
+                hook_turn_id: identity,
+                user_content: String::new(),
+                vmm_runtime_ready: false,
+                observes_user: false,
+            },
+        }
+    } else {
+        runtime
+            .lock_conversation_hooks()
+            .map_err(|error| format!("Failed to lock business Hook runtime: {error}"))?
+            .capture_business_hook_binding(session_id, generation, turn.turn_id, turn.start_seq)?
+    };
     if binding.hook_turn_id != expected_hook_id {
         return Err(String::from(
             "Business Hook admission no longer owns the prepared correlation.",

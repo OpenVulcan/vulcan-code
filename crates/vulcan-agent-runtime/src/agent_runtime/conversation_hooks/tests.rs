@@ -1,5 +1,51 @@
 use super::*;
 
+/// PreCheck uses the admitted input identity even when the business owner stays the same.
+/// 即使业务所有者相同，PreCheck 也使用已准入输入的身份。
+#[test]
+fn precheck_operation_tracks_input_and_ignores_shell_wake() {
+    let mut runtime = ConversationHookRuntime::new();
+    let session_id = SessionId::from_u128(0x6d11);
+    let mut prepare = |action, source| {
+        runtime.prepare_user_prompt_hook_requests(
+            session_id,
+            action,
+            None,
+            "D:/workspace".to_owned(),
+            source,
+            SystemPromptHookPhase::FirstSession,
+            "Recall the same rule",
+            &Default::default(),
+            true,
+        )
+    };
+    let first = prepare("first-input", PendingSessionPromptSource::UserFollowup);
+    let shell = prepare(
+        "shell-wake",
+        PendingSessionPromptSource::ShellJobContinuation,
+    );
+    let second = prepare("second-input", PendingSessionPromptSource::UserFollowup);
+    let retry = prepare("first-input", PendingSessionPromptSource::UserFollowup);
+    assert_eq!(first.turn_id, second.turn_id);
+    assert_eq!(retry.turn_id, first.turn_id);
+    assert_ne!(shell.turn_id, first.turn_id);
+    assert_eq!(
+        runtime.active_turn_id(session_id),
+        Some(first.turn_id.as_str())
+    );
+    let operation = |request: ConversationPrecheckRequest| {
+        request.skip().report.unwrap().payload.value["precheck_operation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_ne!(
+        operation(first.precheck.clone()),
+        operation(second.precheck)
+    );
+    assert_eq!(operation(first.precheck), operation(retry.precheck));
+}
+
 /// Genuine queued user input remains observable even while an agent-originated task owns the turn.
 /// 即使代理发起任务持有回合，真实用户排队输入仍可被观察。
 /// No parameters; asserts the actual emitted payload without changing the task's lifecycle policy.

@@ -165,7 +165,8 @@ impl ProviderRequestTelemetryContext {
             ExecutionPromptPurpose::ContextCompaction
             | ExecutionPromptPurpose::ContextCompactionCachePreserving => "context_compaction",
             ExecutionPromptPurpose::GitCommitSummary => "git_commit_summary",
-            ExecutionPromptPurpose::ExecutionRetry => "main_agent",
+            ExecutionPromptPurpose::ExecutionRetry
+            | ExecutionPromptPurpose::ShellJobContinuation => "main_agent",
             ExecutionPromptPurpose::QuestionExecution
                 if preparation.subagent_prompt_context.is_some() =>
             {
@@ -185,7 +186,8 @@ impl ProviderRequestTelemetryContext {
             ExecutionPromptPurpose::ContextCompaction
             | ExecutionPromptPurpose::ContextCompactionCachePreserving => "compact",
             ExecutionPromptPurpose::GitCommitSummary => "git_commit_summary",
-            ExecutionPromptPurpose::ExecutionRetry => "conversation",
+            ExecutionPromptPurpose::ExecutionRetry
+            | ExecutionPromptPurpose::ShellJobContinuation => "conversation",
             ExecutionPromptPurpose::QuestionExecution => "question_execution",
             ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::AgentTask => "conversation",
         };

@@ -164,6 +164,11 @@ pub(super) fn prepare_internal_continuation_hook_owner(
             Ok(preparation)
         })
         .map_err(|error| error.to_string())??;
+    // A shell wake uses its canonical turn identity without installing a user Hook.
+    // Shell 唤醒使用其规范回合身份，无需安装用户 Hook。
+    if matches!(source, InternalContinuationHookSource::ShellJob(_)) {
+        return Ok(());
+    }
     preparation.install(runtime)
 }
 

@@ -545,6 +545,9 @@ pub enum ExecutionPromptPurpose {
     /// Normal user-authored conversation turn.
     /// 普通用户发起的会话回合。
     UserTurn,
+    /// Independent main-session execution woken by a completed background shell job.
+    /// 后台 Shell 任务完成后唤醒的独立主会话执行。
+    ShellJobContinuation,
     /// Agent-authored business work already persisted in canonical history.
     /// 已持久化到规范历史中的代理发起业务任务。
     AgentTask,
@@ -597,6 +600,7 @@ impl ExecutionPromptPurpose {
         matches!(
             self,
             Self::UserTurn
+                | Self::ShellJobContinuation
                 | Self::AgentTask
                 | Self::ExecutionRetry
                 | Self::QuestionExecution
@@ -610,7 +614,10 @@ impl ExecutionPromptPurpose {
     /// user-turn compaction path; subagent, auxiliary and internal requests never do.
     /// 重试从恢复检查点继续同一规范会话，因此与用户回合共享压缩路径；子代理、辅助及内部请求从不参与。
     pub const fn supports_host_auto_compaction(self) -> bool {
-        matches!(self, Self::UserTurn | Self::ExecutionRetry)
+        matches!(
+            self,
+            Self::UserTurn | Self::ExecutionRetry | Self::ShellJobContinuation
+        )
     }
 
     /// Returns whether this purpose should run completed-turn hooks.
@@ -624,6 +631,7 @@ impl ExecutionPromptPurpose {
     pub const fn diagnostics_label(self) -> &'static str {
         match self {
             Self::UserTurn => "user-turn",
+            Self::ShellJobContinuation => "shell-job-continuation",
             Self::AgentTask => "agent-task",
             Self::ExecutionRetry => "execution-retry",
             Self::QuestionExecution => "question-execution",

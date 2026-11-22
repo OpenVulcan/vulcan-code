@@ -334,9 +334,13 @@ impl ConversationHookRuntime {
         // Auxiliary preparation has its own durable execution identity and never owns a business Hook turn.
         // 辅助准备使用独立的持久执行身份，绝不持有业务 Hook 回合。
         let is_question_execution = source == PendingSessionPromptSource::QuestionExecution;
+        // Shell wake has a durable execution correlation supplied by its V1 turn.
+        // Shell 唤醒使用其 V1 回合提供的持久执行身份。
+        let is_shell_wake = source == PendingSessionPromptSource::ShellJobContinuation;
         // Continuations inherit the restored origin; a new agent task cannot become a user observation.
         // 续跑继承恢复后的来源；新代理任务不能成为用户观察。
         let observes_user = source != PendingSessionPromptSource::AgentTask
+            && !is_shell_wake
             && self.permits_user_observation(session_id);
         // Host, Goal, shell-job wake and child-return continuation prompts are dispatch instructions,
         // never user observations.
@@ -349,13 +353,18 @@ impl ConversationHookRuntime {
                 | PendingSessionPromptSource::SubagentReturnContinuation
         );
         let was_recorded_while_queued = !is_question_execution
+            && !is_shell_wake
             && self
                 .active_turns
                 .get(&session_id)
                 .is_some_and(|turn| turn.recorded_prompt_entry_ids.contains(prompt_entry_id));
-        let is_new_turn = !is_question_execution && !self.active_turns.contains_key(&session_id);
+        let is_new_turn = !is_question_execution
+            && !is_shell_wake
+            && !self.active_turns.contains_key(&session_id);
         let turn_id = if is_question_execution {
             format!("session-{session_id}-question-execution-{prompt_entry_id}")
+        } else if is_shell_wake {
+            prompt_entry_id.to_owned()
         } else if is_new_turn {
             let turn_id = new_conversation_turn_id(session_id);
             self.active_turns.insert(
@@ -386,11 +395,21 @@ impl ConversationHookRuntime {
 
         // precheck_payload owns user-prompt recall context and contains no system-profile fields.
         // precheck_payload 持有用户提示召回上下文，且不包含系统画像字段。
+        // The canonical client action is stable across retry and distinct from the business Hook owner.
+        // 规范客户端操作在重试间保持稳定，并与业务 Hook 所有者独立。
+        let precheck_operation_id = {
+            use sha2::{Digest, Sha256};
+            format!(
+                "precheck:{session_id}:{}",
+                hex::encode(Sha256::digest(prompt_entry_id.as_bytes()))
+            )
+        };
         let precheck_payload = json!({
             "session_id": session_id.to_string(),
             "project_id": project_id,
             "workspace_path": workspace_path,
             "turn_id": turn_id,
+            "precheck_operation_id": precheck_operation_id,
             "event_kind": event_kind,
             "is_new_turn": is_new_turn,
             "was_recorded_while_queued": was_recorded_while_queued,

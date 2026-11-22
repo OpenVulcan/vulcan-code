@@ -3637,9 +3637,9 @@ async fn service_start_conversation_execution(
         );
         // vmmReadiness is captured before Hook turn admission and remains immutable for this request.
         // vmmReadiness 在 Hook 回合准入前捕获，并在本次请求期间保持不可变。
-        crate::session_business_hook::synchronize_live_business_hook_inputs(
-            handle.as_ref(), &agent_runtime,
-        )?;
+        if !submission_mode.is_continuation() {
+            crate::session_business_hook::prepare_user_root_hook_owner(handle.as_ref(), &agent_runtime)?;
+        }
         let vmm_readiness = webui_vmm_runtime_readiness(&state)?;
         let turn_begin_started_at = current_unix_millis_value();
         let precheck_start = {
@@ -3651,6 +3651,9 @@ async fn service_start_conversation_execution(
                     handle.as_ref(), &accepted_action_id, receipt,
                 )?)
             } else { None };
+            // A resumed shell wake retains its isolated durable correlation.
+            // 恢复 Shell 唤醒时沿用其独立的持久关联标识。
+            let shell_wake_id = crate::session_business_hook::shell_wake_identity(handle.as_ref())?;
             let mut hook_runtime = agent_runtime
                 .lock_conversation_hooks()
                 .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?;
@@ -3658,10 +3661,7 @@ async fn service_start_conversation_execution(
                     session_id,
                     session_title,
                     workspace_path,
-                    prompt_entry_id: format!(
-                        "webui-prompt-{session_id}-{}",
-                        current_unix_millis_text()
-                    ),
+                    prompt_entry_id: shell_wake_id.clone().unwrap_or_else(|| accepted_action_id.as_str().to_owned()),
                     continuation_action_id: continuation_action_id.clone(),
                     prompt: &prompt,
                     hidden_model_guidance: hidden_model_guidance.as_deref(),
@@ -3671,13 +3671,13 @@ async fn service_start_conversation_execution(
                     existing_canonical_user_message_id: direct_canonical_user_message_id,
                     append_canonical_user_message: false,
                     append_visible_user_prompt_record: append_user_records,
-                    source: prompt_source,
+                    source: if shell_wake_id.is_some() { PendingSessionPromptSource::ShellJobContinuation } else { prompt_source },
                     vmm_runtime_ready: vmm_readiness.service_ready,
                     vmm_precheck_ready: vmm_readiness.precheck_ready,
                     execution_mode: runtime_options.execution_mode,
                     reasoning_effort: runtime_options.reasoning_effort,
                 };
-            if let Some(authority) = continuation_authority {
+            if let Some(authority) = continuation_authority && shell_wake_id.is_none() {
                 hook_runtime.restore_business_hook_state(&authority.state)?;
                 vulcan_agent_runtime::workbench_prompt_turn::begin_shared_prompt_turn_with_canonical_inputs(
                     &mut workspace_snapshot, &mut hook_runtime, begin_input, &authority.inputs,

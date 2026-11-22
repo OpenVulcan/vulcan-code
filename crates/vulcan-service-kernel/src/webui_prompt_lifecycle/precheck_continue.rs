@@ -1580,7 +1580,14 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
     }
     match agent_runtime.lock_conversation_hooks() {
         Ok(mut hook_runtime) => {
-            hook_runtime.terminate_turn(session_id, boundary_commit.owning_project_id, error, 0);
+            if hook_runtime.active_turn_id(session_id) == Some(failed_turn_id) {
+                hook_runtime.terminate_turn(
+                    session_id,
+                    boundary_commit.owning_project_id,
+                    error,
+                    0,
+                );
+            }
         }
         Err(hook_error) => {
             diagnostics.push(format!(

@@ -255,6 +255,22 @@ fn terminal_action_consumes_vmm_ttl(
     action == TerminalConversationHookAction::Complete && completion_status.is_final()
 }
 
+/// Finds the current VMM owner or a receipt for the exact execution being replayed.
+/// 查找当前 VMM 所有者，或仅属于重放执行的确切回执。
+/// `memory` is the committed controller state and `execution_hook_id` is the physical request owner.
+/// `memory` 是已提交控制器状态，`execution_hook_id` 是物理请求所有者。
+fn expected_terminal_vmm_owner<'a>(
+    memory: &'a vulcan_vmm::VmmSessionMemoryState,
+    execution_hook_id: Option<&str>,
+) -> Option<&'a str> {
+    memory.active_turn_id.as_deref().or_else(|| {
+        memory
+            .last_consumed_turn_id
+            .as_deref()
+            .filter(|consumed| Some(*consumed) == execution_hook_id)
+    })
+}
+
 /// Immutable facts required to commit one terminal conversation-hook action.
 /// 提交单个终态会话 Hook 操作所需的不可变事实。
 struct TerminalConversationHookRequest<'a> {
@@ -285,6 +301,9 @@ struct TerminalConversationHookRequest<'a> {
     /// Exclusive logical-turn action selected before hook runtime locking.
     /// 在锁定 Hook 运行时前选择的互斥逻辑回合操作。
     action: TerminalConversationHookAction,
+    /// Exact owner carried by the physical launch.
+    /// 物理启动携带的确切所有者。
+    execution_hook_id: Option<&'a str>,
     /// Optional exact VMM active-turn identity that must match before Hook ownership is consumed.
     /// 在消费 Hook 所有权前必须匹配的可选精确 VMM 活动回合身份。
     expected_vmm_turn_id: Option<&'a str>,
@@ -323,6 +342,13 @@ where
         if !hook_runtime.has_active_turn(request.session_id) {
             return Err(String::from(
                 "Business completion requires restoration of its original conversation Hook owner.",
+            ));
+        }
+        if let Some(execution_hook_id) = request.execution_hook_id
+            && hook_runtime.active_turn_id(request.session_id) != Some(execution_hook_id)
+        {
+            return Err(String::from(
+                "Business completion no longer owns its original conversation Hook.",
             ));
         }
         if let Some(expected_turn_id) = request.expected_vmm_turn_id {
@@ -536,6 +562,17 @@ pub(super) fn apply_execution_report_to_memory(
     // 用持久终态回合序号为通知去重。
     let durable_turn_completed = completed_turn_final_seq.is_some();
     let session_id = report.session_id;
+    // Physical launches carry the exact Hook owner, if one exists.
+    // 物理启动携带确切的 Hook 所有者（如有）。
+    let execution_hook_id = report
+        .preparation
+        .as_ref()
+        .and_then(|preparation| preparation.conversation_hook_turn_id.as_deref());
+    // A Shell wake settles its V1 turn without touching the user Hook or VMM TTL.
+    // Shell 唤醒只结算自身 V1 回合，保留用户 Hook 与 VMM TTL。
+    let has_business_hook = report.preparation.as_ref().is_none_or(|preparation| {
+        preparation.prompt_purpose != ExecutionPromptPurpose::ShellJobContinuation
+    });
     webui_trace(
         "execution_report_apply_enter",
         format!("session={session_id}"),
@@ -562,7 +599,8 @@ pub(super) fn apply_execution_report_to_memory(
         .permits_user_observation(session_id);
     // Both immutable admission and current service readiness are required for terminal VMM work.
     // 终态 VMM 工作同时要求不可变准入事实与当前服务就绪。
-    let vmm_runtime_ready = observes_user
+    let vmm_runtime_ready = has_business_hook
+        && observes_user
         && report
             .preparation
             .as_ref()
@@ -656,7 +694,7 @@ pub(super) fn apply_execution_report_to_memory(
             // hook_action encodes the only legal logical-turn transition for this terminal report.
             // hook_action 编码此终态报告唯一合法的逻辑回合转换。
             let hook_action = TerminalConversationHookAction::from_terminal_facts(
-                is_main_session,
+                is_main_session && has_business_hook,
                 apply_result.is_success,
                 runs_completed_turn_hooks || completion_gate.has_active_hook_turn,
                 durable_turn_completed,
@@ -674,29 +712,11 @@ pub(super) fn apply_execution_report_to_memory(
                 && terminal_action_consumes_vmm_ttl(hook_action, completion_status);
             // expected_vmm_turn_id identifies the controller command that must commit under the Hook ownership lock.
             // expected_vmm_turn_id 标识必须在 Hook 所有权锁内提交的控制器命令。
-            let expected_vmm_turn_id = if consumes_vmm_ttl
-                && vmm_state_before_terminal.as_ref().is_some_and(|state| {
-                    state.active_turn_id.is_some() || state.last_consumed_turn_id.is_some()
-                }) {
-                // turn_id is the exact controller owner that must match the active Hook turn.
-                // turn_id 是必须与活动 Hook 回合匹配的精确控制器所有者。
-                let vmm_state_before_terminal =
-                    vmm_state_before_terminal.as_ref().ok_or_else(|| {
-                        String::from("Durable VMM state is unavailable at terminal completion.")
-                    })?;
-                let turn_id = vmm_state_before_terminal
-                    .active_turn_id
-                    .clone()
-                    .or_else(|| vmm_state_before_terminal.last_consumed_turn_id.clone())
-                    .ok_or_else(|| {
-                        String::from(
-                            "Durable VMM state has no registered active logical turn at terminal completion.",
-                        )
-                    })?;
-                Some(turn_id)
-            } else {
-                None
-            };
+            let expected_vmm_turn_id = vmm_state_before_terminal
+                .as_ref()
+                .filter(|_| consumes_vmm_ttl)
+                .and_then(|memory| expected_terminal_vmm_owner(memory, execution_hook_id))
+                .map(str::to_owned);
             // hook_commit makes logical-turn ownership explicit before any workspace mutation is installed.
             // hook_commit 在安装任何工作区变更前显式提交逻辑回合所有权。
             webui_trace(
@@ -717,6 +737,7 @@ pub(super) fn apply_execution_report_to_memory(
                     pending_subagent_count: completion_gate.pending_subagent_count,
                     vmm_runtime_ready,
                     action: hook_action,
+                    execution_hook_id,
                     expected_vmm_turn_id: expected_vmm_turn_id.as_deref(),
                 },
                 || {
@@ -758,7 +779,7 @@ pub(super) fn apply_execution_report_to_memory(
             );
             if let TerminalConversationHookCommit::Completion { turn_id, request } = hook_commit {
                 completion_request = Some(request);
-                if consumes_vmm_ttl {
+                if expected_vmm_turn_id.is_some() {
                     runtime_state
                         .context_injection_state
                         .consume_turn(&turn_id, &now);
@@ -1315,6 +1336,29 @@ pub(super) fn spawn_conversation_completion_hook_task(
 mod tests {
     use super::*;
 
+    /// A completed legacy wake must never consume or validate TTL against an older user's receipt.
+    /// 已完成的旧版唤醒不能使用更早的用户回执消费或校验 TTL。
+    #[test]
+    fn terminal_vmm_owner_ignores_another_turns_consumed_receipt() {
+        let mut memory = vulcan_vmm::VmmSessionMemoryState {
+            last_consumed_turn_id: Some("previous-user".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            expected_terminal_vmm_owner(&memory, Some("legacy-wake")),
+            None
+        );
+        assert_eq!(
+            expected_terminal_vmm_owner(&memory, Some("previous-user")),
+            Some("previous-user")
+        );
+        memory.active_turn_id = Some("current-user".to_owned());
+        assert_eq!(
+            expected_terminal_vmm_owner(&memory, Some("current-user")),
+            Some("current-user")
+        );
+    }
+
     /// Keeps a terminal memory expiration in durable UI history without changing the Provider projection.
     /// 将终态记忆过期写入可靠界面历史，同时保持 Provider 投影不变。
     #[test]
@@ -1506,6 +1550,7 @@ mod tests {
             pending_subagent_count: 0,
             vmm_runtime_ready: false,
             action: TerminalConversationHookAction::Complete,
+            execution_hook_id: None,
             expected_vmm_turn_id: None,
         };
         assert!(

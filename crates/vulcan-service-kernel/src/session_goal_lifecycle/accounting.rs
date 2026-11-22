@@ -30,11 +30,12 @@ pub(crate) async fn account_session_goal_from_report(
     expected_goal_id: Option<&str>,
     _elapsed_seconds: i64,
 ) -> Result<bool, String> {
-    if report
-        .preparation
-        .as_ref()
-        .is_some_and(|preparation| preparation.prompt_purpose != ExecutionPromptPurpose::UserTurn)
-    {
+    if report.preparation.as_ref().is_some_and(|preparation| {
+        !matches!(
+            preparation.prompt_purpose,
+            ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::ShellJobContinuation
+        )
+    }) {
         return Ok(false);
     }
     let Some(expected_goal_id) = expected_goal_id else {

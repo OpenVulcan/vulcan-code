@@ -784,7 +784,8 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         workspace_path: input.workspace_path.to_string(),
         project_id: input.owning_project_id,
         source: input.source,
-        observes_user: conversation_hook_runtime.permits_user_observation(input.session_id),
+        observes_user: input.source != PendingSessionPromptSource::ShellJobContinuation
+            && conversation_hook_runtime.permits_user_observation(input.session_id),
         vmm_runtime_ready: input.vmm_runtime_ready,
         vmm_precheck_ready: input.vmm_precheck_ready,
         precheck_request: hook_requests.precheck,
@@ -1301,13 +1302,17 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         request_prompt,
         input.start.hidden_model_guidance.as_deref(),
     );
-    let is_restored_provider_checkpoint =
-        input.start.source == PendingSessionPromptSource::ExecutionRetry;
+    let is_restored_provider_checkpoint = input.start.source
+        == PendingSessionPromptSource::ExecutionRetry
+        || input.start.continuation_action_id.is_some();
     // promptPurpose uses retry semantics only after an exact Provider checkpoint exists; resumed preparation preserves the original user-turn semantics without appending another message.
     // promptPurpose 仅在精确 Provider checkpoint 已存在后使用重试语义；恢复准备会保留原用户回合语义但不追加另一条消息。
     let prompt_purpose = match input.start.source {
         PendingSessionPromptSource::AgentTask => ExecutionPromptPurpose::AgentTask,
         PendingSessionPromptSource::QuestionExecution => ExecutionPromptPurpose::QuestionExecution,
+        PendingSessionPromptSource::ShellJobContinuation => {
+            ExecutionPromptPurpose::ShellJobContinuation
+        }
         PendingSessionPromptSource::ExecutionRetry => ExecutionPromptPurpose::ExecutionRetry,
         _ => ExecutionPromptPurpose::UserTurn,
     };
@@ -1352,7 +1357,8 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         runtime_policy,
         // Auxiliary preparation must not attach its correlation identity to a business Hook turn.
         // 辅助准备不能将其关联身份绑定到业务 Hook 回合。
-        conversation_hook_turn_id: (prompt_purpose != ExecutionPromptPurpose::QuestionExecution)
+        conversation_hook_turn_id: (prompt_purpose != ExecutionPromptPurpose::QuestionExecution
+            && input.start.source != PendingSessionPromptSource::ShellJobContinuation)
             .then_some(expected_turn_id),
         continuation_action_id: input.start.continuation_action_id,
         provider_request_continuation: None,

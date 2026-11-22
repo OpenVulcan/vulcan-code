@@ -7,6 +7,23 @@ use crate::v1::business_hook::{BusinessHookBinding, BusinessHookMetadata};
 #[cfg(test)]
 mod tests;
 
+/// Returns the user observation policy when capturing a new binding for `origin`.
+/// 返回为 `origin` 捕获新绑定时的用户观察策略。
+fn captures_user_observation(origin: TurnOrigin) -> bool {
+    !matches!(
+        origin,
+        TurnOrigin::AgentTask | TurnOrigin::ShellJobContinuation
+    )
+}
+
+/// Validates a published observation flag for its proven canonical `origin`.
+/// 按已证明的规范 `origin` 校验已发布的观察标志。
+/// The host keeps legacy shell receipts for replay without restoring them as user Hooks.
+/// 宿主保留旧 Shell 回执用于重放，且不将其恢复为用户 Hook。
+fn accepts_published_observation(origin: TurnOrigin, observes_user: bool) -> bool {
+    origin == TurnOrigin::ShellJobContinuation || observes_user == captures_user_observation(origin)
+}
+
 impl SessionDocument {
     /// Proves first main-business preparation from the complete durable owner frontier.
     /// 从完整可靠所有者前沿证明首次主业务准备。
@@ -158,7 +175,7 @@ impl SessionDocument {
         let turn = self.require_open_turn()?;
         if turn.turn_id != binding.turn_id
             || turn.start_seq != binding.start_seq
-            || binding.observes_user != (turn.origin != TurnOrigin::AgentTask)
+            || binding.observes_user != captures_user_observation(turn.origin)
             || turn.origin == TurnOrigin::QuestionExecution
             || self.active_api().is_some()
         {
@@ -185,7 +202,7 @@ impl SessionDocument {
             // 恢复归属不能把代理任务提升为用户记忆生命周期。
             if self.active_turn().is_some_and(|turn| {
                 turn.turn_id == binding.turn_id
-                    && binding.observes_user != (turn.origin != TurnOrigin::AgentTask)
+                    && !accepts_published_observation(turn.origin, binding.observes_user)
             }) {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "business_hook.observation_origin",
@@ -254,7 +271,7 @@ impl SessionDocument {
         )?;
         if turn.turn_id != binding.turn_id
             || turn.start_seq != binding.start_seq
-            || binding.observes_user != (turn.origin != TurnOrigin::AgentTask)
+            || !accepts_published_observation(turn.origin, binding.observes_user)
             || turn.origin == TurnOrigin::QuestionExecution
             || self.active_api().is_some()
             || self.collaboration_run_control()

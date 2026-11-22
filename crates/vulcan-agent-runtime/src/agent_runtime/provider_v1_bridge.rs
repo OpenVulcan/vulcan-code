@@ -768,6 +768,12 @@ impl ProviderV1RequestTemplate {
             }
             _ if preparation.subagent_prompt_context.is_some() => Some(ApiPurposeKind::Subagent),
             ExecutionPromptPurpose::ExecutionRetry => Some(ApiPurposeKind::RetryGeneration),
+            ExecutionPromptPurpose::ShellJobContinuation
+                if preparation.continuation_action_id.is_some() =>
+            {
+                Some(ApiPurposeKind::RetryGeneration)
+            }
+            ExecutionPromptPurpose::ShellJobContinuation => Some(ApiPurposeKind::MainGeneration),
             ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::AgentTask => {
                 Some(ApiPurposeKind::MainGeneration)
             }

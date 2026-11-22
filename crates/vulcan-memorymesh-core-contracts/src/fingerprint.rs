@@ -152,7 +152,8 @@ fn write_semantic_payload(writer: &mut CanonicalWriter, command: &crate::CoreCom
             writer.u32(command.session_recall_mode as u32);
             writer.u32(command.max_search_queries);
             writer.u32(command.max_memories);
-            writer.i64(command.now_ns);
+            // The host samples this clock on every retry; it does not identify the submitted query.
+            // 宿主在每次重试时重新取样该时钟；它不标识用户提交的查询。
         }
         crate::CoreCommand::PostActionIntake(command) => {
             writer.u32(command.input_kind.as_u32());

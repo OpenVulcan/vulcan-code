@@ -1298,16 +1298,41 @@ pub(super) async fn prepare_webui_pending_prompt(
         }
         _ => {}
     }
-    crate::session_business_hook::synchronize_live_business_hook_inputs(
-        hook_owner_handle.as_ref(),
-        &entry_agent_runtime,
-    )?;
+    if matches!(
+        &exact_dispatch,
+        ExactPendingPromptDispatch::Root { .. } | ExactPendingPromptDispatch::Queued { .. }
+    ) {
+        crate::session_business_hook::prepare_user_root_hook_owner(
+            hook_owner_handle.as_ref(),
+            &entry_agent_runtime,
+        )?;
+    } else {
+        crate::session_business_hook::synchronize_live_business_hook_inputs(
+            hook_owner_handle.as_ref(),
+            &entry_agent_runtime,
+        )?;
+    }
+    // The durable origin also identifies a human supplement during a shell wake.
+    // 持久回合来源也能识别 Shell 唤醒期间的用户补充。
+    let shell_wake_id =
+        crate::session_business_hook::shell_wake_identity(hook_owner_handle.as_ref())?;
+    // Both submission paths use the same canonical client action for PreCheck.
+    // 两条提交路径都使用相同的规范客户端操作标识作为 PreCheck 身份。
+    let prompt_entry_id = match &exact_dispatch {
+        ExactPendingPromptDispatch::Root { authority, .. } => {
+            authority.client_action_id.as_str().to_owned()
+        }
+        ExactPendingPromptDispatch::Queued { authority, .. } => {
+            authority.client_action_id.as_str().to_owned()
+        }
+        _ => shell_wake_id.clone().unwrap_or_else(|| entry.id.clone()),
+    };
     let vmm_readiness = webui_vmm_runtime_readiness(state)?;
     let mut prompt_turn_begin_input = SharedPromptTurnBeginInput {
         session_id,
         session_title: &session_title,
         workspace_path: &workspace_path,
-        prompt_entry_id: entry.id.clone(),
+        prompt_entry_id,
         continuation_action_id: None,
         prompt: &prompt_text,
         hidden_model_guidance: entry.hidden_model_guidance.as_deref(),
@@ -1317,7 +1342,11 @@ pub(super) async fn prepare_webui_pending_prompt(
         existing_canonical_user_message_id: None,
         append_canonical_user_message: false,
         append_visible_user_prompt_record: false,
-        source: entry.source,
+        source: if shell_wake_id.is_some() {
+            PendingSessionPromptSource::ShellJobContinuation
+        } else {
+            entry.source
+        },
         vmm_runtime_ready: vmm_readiness.service_ready,
         vmm_precheck_ready: vmm_readiness.precheck_ready,
         execution_mode: String::from("build"),
@@ -1525,9 +1554,9 @@ pub(super) async fn prepare_webui_pending_prompt(
             .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?;
         // Exact process inputs retain their individual canonical identities even when Provider preparation uses a batch prompt.
         // 即使 Provider 准备使用批次提示，精确过程输入仍保留各自规范身份。
-        let precheck_start = if let ExactPendingPromptDispatch::PendingInTurn {
-            authority, ..
-        } = &exact_dispatch
+        let precheck_start = if let ExactPendingPromptDispatch::PendingInTurn { authority, .. } =
+            &exact_dispatch
+            && shell_wake_id.is_none()
         {
             let inputs = authority.inputs.iter().map(|input|
                 vulcan_agent_runtime::agent_runtime::conversation_hooks::CanonicalInTurnHookInput {

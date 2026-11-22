@@ -133,7 +133,7 @@ pub fn precheck_request_from_payload(
     let session_id = required_string(payload, "session_id")?;
     let user_content = required_string(payload, "user_content")?;
     Ok(PreCheckRequest {
-        operation_id: required_string(payload, "turn_id")?,
+        operation_id: required_string(payload, "precheck_operation_id")?,
         session_id,
         user_id: required_config_id(config.user_id, "user_id")?,
         project_id: required_config_id(config.project_id, "project_id")?,
@@ -734,6 +734,7 @@ mod tests {
         config.session_compact_recall = true;
         let payload = json!({
             "turn_id": "turn-a",
+            "precheck_operation_id": "input-a",
             "session_id": "session-a",
             "user_content": " hello "
         });
@@ -741,6 +742,7 @@ mod tests {
         let request = precheck_request_from_payload(&payload, &config).expect("request");
 
         assert_eq!(request.session_id, "session-a");
+        assert_eq!(request.operation_id, "input-a");
         assert_eq!(request.user_id, 1);
         assert_eq!(request.project_id, 2);
         assert_eq!(

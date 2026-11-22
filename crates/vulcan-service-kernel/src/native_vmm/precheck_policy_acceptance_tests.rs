@@ -16,6 +16,9 @@ pub(super) const MARKERS: [&str; 3] = ["fixture-alpha", "fixture-beta", "fixture
 /// The actual user text stays identical across policy transitions.
 /// 实际用户文本在策略变化之间保持相同。
 pub(super) const USER_PROMPT: &str = "Recall the PolicyNeedle database configuration rules.";
+/// Second canonical input in the same shell wake recovery test.
+/// 同一 Shell 唤醒恢复测试中的第二条规范输入。
+const FOLLOW_UP_PROMPT: &str = "Recall the PolicyNeedle database configuration rules again.";
 
 /// Pauses one actual intent call after immutable command admission.
 /// 在不可变命令准入后暂停一次实际意图调用。
@@ -52,7 +55,10 @@ pub(super) async fn wait_for_intent(slot: &StdMutex<Option<IntentPause>>) {
 pub(super) fn response(purpose: &str, input: &serde_json::Value) -> serde_json::Value {
     match purpose {
         "precheck_l1" => {
-            assert_eq!(input["current_user_input"], USER_PROMPT);
+            assert!(matches!(
+                input["current_user_input"].as_str(),
+                Some(USER_PROMPT | FOLLOW_UP_PROMPT)
+            ));
             // The admitted query budget is observed at the real L1 boundary, not read from current saved settings.
             // 在真实 L1 边界观察已准入查询预算，不读取当前已保存设置。
             let count = usize::try_from(
@@ -65,7 +71,10 @@ pub(super) fn response(purpose: &str, input: &serde_json::Value) -> serde_json::
             serde_json::json!({"reason": "Recall the explicit database rules.", "need_memory": true, "queries": &QUERIES[..count]})
         }
         "precheck_l2" => {
-            assert_eq!(input["user_content"], USER_PROMPT);
+            assert!(matches!(
+                input["user_content"].as_str(),
+                Some(USER_PROMPT | FOLLOW_UP_PROMPT)
+            ));
             // Echo one-based public candidate numbers, never guessed memory IDs.
             // 回显从一开始的公开候选编号，绝不猜测记忆 ID。
             let candidates = input["candidates"]
@@ -367,13 +376,13 @@ pub(in crate::native_vmm) async fn verify(
     a.max_search_queries = 1;
     // The normal client owns all direct writes, retrieval commands and lifecycle observations.
     // 普通客户端持有全部主动写入、检索命令及生命周期观察。
-    let client = NativeVmmClient::new(
+    let client = Arc::new(NativeVmmClient::new(
         runtime.clone(),
         data_plane.clone(),
         gate,
         Arc::new(AtomicBool::new(true)),
         Arc::new(Notify::new()),
-    );
+    ));
     // Seed through the public atomic write path; distinct embedding components must prevent real hard dedupe.
     // 通过公开原子写入路径准备种子；不同向量分量必须避免实际硬去重。
     let written = client
@@ -593,4 +602,240 @@ pub(in crate::native_vmm) async fn verify(
             rows
         );
     }
+    verify_shell_wake_then_user_memory_round_trips(client, &runtime).await;
+}
+
+/// Exercises a real Shell wake followed by two canonical user inputs, recall retry, and durable PostAction.
+/// 验证真实 Shell 唤醒结束后的两条规范用户输入、召回重试及持久 PostAction。
+/// Uses the seeded native client and runtime; only inference responses are deterministic fixtures.
+/// 使用已有种子的原生客户端及运行时，只有推理响应来自确定性夹具。
+async fn verify_shell_wake_then_user_memory_round_trips(
+    client: Arc<NativeVmmClient>,
+    runtime: &NativeVmmCoreRuntime,
+) {
+    use crate::session_business_hook::{
+        capture_business_hook_before_dispatch, prepare_user_root_hook_owner, shell_wake_identity,
+    };
+    use crate::session_runtime_registry_v1::{
+        SessionFlushReason, SessionHandle, SessionMutationAdmission,
+    };
+    use crate::tests::test_support::{
+        TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
+    };
+    use vulcan_agent_runtime::agent_runtime::conversation_hooks::{
+        ConversationTurnCompletionStatus, VmmWritebackHookEffect,
+        vmm_recall_batch_effect_from_report,
+    };
+    use vulcan_agent_runtime::agent_runtime::vmm_hooks::{
+        VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks,
+    };
+    use vulcan_hooks::SystemPromptHookPhase;
+    use vulcan_host_tools::shell_job::{
+        ShellJobFinal, ShellJobNotice, ShellJobRuntime, ShellJobStatus,
+    };
+    use vulcan_session_core::v1::{ClientActionId, ClientInputSubmission, TurnOutcome};
+    use vulcan_workbench_model::PendingSessionPromptSource;
+    use vulcan_workspace_store::workspace_store::load_session_v1_full;
+
+    // Keep unrelated semantic noise inference outside the fixture's declared embedding inputs.
+    // 将无关的语义噪声推理排除在夹具声明的向量输入之外。
+    let mut settings = runtime.resource_catalog().await.unwrap().settings;
+    settings.noise_semantic_enabled = false;
+    runtime.update_resource_settings(settings).await.unwrap();
+
+    // V1 records the same typed job completion and shell continuation the app uses.
+    // V1 记录与应用一致的强类型任务完成及 Shell 续跑。
+    let session_id = uuid::Uuid::new_v4();
+    let root = TestHostRuntimeRoot::new(session_id);
+    let locator = root.v1_storage_locator();
+    let handle = SessionHandle::new(
+        session_id,
+        locator.clone(),
+        load_session_v1_full(&locator).unwrap().document,
+    );
+    let service = test_service_state_with_parent_session(session_id);
+    let catalog = service.project_resource_catalog_registry.clone();
+    let state = Arc::new(StdMutex::new(service));
+    ShellJobRuntime::global().requeue_notices(
+        &session_id.to_string(),
+        vec![ShellJobNotice {
+            job_id: "completed-background-job".to_owned(),
+            purpose: "Finish background work".to_owned(),
+            command: "test".to_owned(),
+            outcome: ShellJobFinal {
+                status: ShellJobStatus::Completed,
+                exit_code: Some(0),
+                duration_ms: 1,
+                finished_at_ms: 1,
+                failure_reason: None,
+            },
+        }],
+    );
+    crate::shell_job_continuation::open_shell_job_continuation_turn(&state, &handle)
+        .await
+        .unwrap()
+        .unwrap();
+    let sink =
+        crate::agent_stream::provider_v1_sink::ProviderV1StreamSink::new(handle.clone(), catalog);
+    assert_eq!(sink.consume_shell_job_notices().unwrap(), 1);
+
+    // Register the real recall and writeback hooks against this fixture's native client.
+    // 将真实召回及回写 Hook 注册到夹具的原生客户端。
+    let host = "precheck-host-b";
+    let workspace = root.v1_session_directory().to_string_lossy().into_owned();
+    let hooks = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot {
+        global: vulcan_vmm::VmmConfigLayer {
+            backend_mode: Some(vulcan_vmm::VmmBackendMode::Native),
+            enabled: Some(true),
+            precheck_enabled: Some(true),
+            memory_writeback_enabled: Some(true),
+            implicit_memory_turns: Some(3),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    hooks.install_native_client(client.clone()).unwrap();
+    let agent = test_agent_runtime_bridge();
+    register_builtin_vmm_hooks(
+        agent.lock_conversation_hooks().unwrap().dispatcher_mut(),
+        hooks,
+    )
+    .unwrap();
+    let conversation = Default::default();
+    let prepare = |id: &str, source, prompt: &str| {
+        agent
+            .lock_conversation_hooks()
+            .unwrap()
+            .prepare_user_prompt_hook_requests(
+                session_id,
+                id,
+                Some(host.to_owned()),
+                workspace.clone(),
+                source,
+                SystemPromptHookPhase::FirstSession,
+                prompt,
+                &conversation,
+                true,
+            )
+    };
+    let wake_id = shell_wake_identity(handle.as_ref()).unwrap().unwrap();
+    let wake = prepare(
+        &wake_id,
+        PendingSessionPromptSource::ShellJobContinuation,
+        "Background work completed",
+    );
+    assert_eq!(wake.turn_id, wake_id);
+    assert!(wake.deferred_user_event.is_none());
+    assert!(
+        !agent
+            .lock_conversation_hooks()
+            .unwrap()
+            .has_active_turn(session_id)
+    );
+    capture_business_hook_before_dispatch(handle.as_ref(), &agent, session_id, &wake_id).unwrap();
+    handle
+        .read(|document| {
+            let binding = document.metadata.business_hook.binding.as_ref().unwrap();
+            assert_eq!(binding.hook_turn_id, wake_id);
+            assert!(!binding.observes_user);
+        })
+        .unwrap();
+    // Close the wake using the same host clock as its admission.
+    // 使用与准入相同的宿主时钟闭合唤醒回合。
+    let wake_finished_at = crate::current_v1_unix_millis().unwrap();
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::TurnCompleted,
+            |document| document.close_turn(TurnOutcome::Completed, 1, wake_finished_at),
+        )
+        .unwrap();
+
+    // Recreate the stale process owner left by the old wake path. The new root has durable proof to discard it.
+    // 重现旧唤醒路径遗留的进程内所有者。新根回合可凭持久证明清理它。
+    let stale = prepare(
+        "old-wake",
+        PendingSessionPromptSource::AgentContinuation,
+        "Previous shell wake",
+    );
+    let mut previous_hook_id = stale.turn_id;
+    for (action, prompt) in [
+        ("recall-first", USER_PROMPT),
+        ("recall-second", FOLLOW_UP_PROMPT),
+    ] {
+        let now = crate::current_v1_unix_millis().unwrap();
+        handle
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new(action).unwrap(),
+                    prompt,
+                    Vec::new(),
+                ),
+                now,
+            )
+            .unwrap();
+        prepare_user_root_hook_owner(handle.as_ref(), &agent).unwrap();
+        let start = prepare(action, PendingSessionPromptSource::UserFollowup, prompt);
+        assert_ne!(start.turn_id, previous_hook_id);
+        capture_business_hook_before_dispatch(handle.as_ref(), &agent, session_id, &start.turn_id)
+            .unwrap();
+        let recalled = start.precheck.clone().run().await.report.unwrap();
+        assert!(
+            vmm_recall_batch_effect_from_report(&recalled)
+                .unwrap()
+                .is_some()
+        );
+        // A repeat of one accepted input must not reinforce the same memories a second time.
+        // 同一已接纳输入的重试不得再次强化相同记忆。
+        let reinforced = runtime.storage_snapshot().unwrap().dataset.memories;
+        let replay = start.precheck.run().await.report.unwrap();
+        assert!(
+            vmm_recall_batch_effect_from_report(&replay)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            runtime.storage_snapshot().unwrap().dataset.memories,
+            reinforced
+        );
+
+        handle
+            .mutate_durable(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::TurnCompleted,
+                |document| document.close_turn(TurnOutcome::Completed, 1, now + 1),
+            )
+            .unwrap();
+        let (completed, writeback) = agent
+            .lock_conversation_hooks()
+            .unwrap()
+            .prepare_turn_completion_dispatch_with_status(
+                session_id,
+                Some(host.to_owned()),
+                "The confirmed database rule applies.",
+                1,
+                &conversation,
+                ConversationTurnCompletionStatus::Completed,
+                0,
+                true,
+            );
+        assert_eq!(completed, start.turn_id);
+        let effects = writeback.run().await.vmm_writeback_effects;
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [VmmWritebackHookEffect::SessionStatus { .. }]
+            ),
+            "{effects:?}"
+        );
+        previous_hook_id = completed;
+    }
+    // Two canonical user writebacks are on disk; the shell wake and recall retry did not create turns.
+    // 两次规范用户回写均已落盘，Shell 唤醒与召回重试均未写入回合。
+    let turns = runtime.storage_snapshot().unwrap().dataset.turns;
+    let user_turns = turns
+        .iter()
+        .filter(|turn| turn.session_source_id.as_str() == session_id.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(user_turns.len(), 2);
 }
