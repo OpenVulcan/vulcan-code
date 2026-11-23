@@ -341,7 +341,7 @@ fn wait_for_dispatch(
 /// 启动已接收回合，或登记事件驱动等待并返回回执状态。
 /// The input identity is already durable, so failures remain attached to its receipt.
 /// 输入身份已可靠保存，因此失败仍附在原回执上。
-pub(super) async fn dispatch_accepted_queued_turn(
+pub(crate) async fn dispatch_accepted_queued_turn(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,

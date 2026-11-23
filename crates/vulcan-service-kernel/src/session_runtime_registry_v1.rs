@@ -26,16 +26,17 @@ use vulcan_session_core::v1::context_maintenance::{
     ManualCompactionPendingRequest, ManualContextMaintenanceSource,
 };
 use vulcan_session_core::v1::dedicated::{DedicatedSessionProfile, dedicated_provider_events};
+#[cfg(test)]
+use vulcan_session_core::v1::document::QueuedInputPendingTurnReceipt;
 use vulcan_session_core::v1::document::{
     ApiTransportObservedReceipt, ClientInputSubmission, CompactionCommitInput,
     ContinuationDispatchResolution, ContinuationRequest, ContinuationTerminalProjection,
     ContinueTurnReceipt, DraftMutationReceipt, EditGenerationInput, EnqueueInputReceipt,
     FlushCandidate, ForkGenerationInput, GenerationBuildOutput, IdempotentMutation,
     MemoryRevisionReceipt, PrepareAndStartApiInput, PreparedApiStart, PreparedToolBatchReceipt,
-    QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputPendingTurnReceipt,
-    QueuedInputRemovalReceipt, SessionDocument, SubagentReturnInput, SubagentReturnReceipt,
-    ToolCompletion, ToolCompletionReceipt, ToolPreparation, TurnCompletionTransition, TurnOrigin,
-    TurnSuccessor,
+    QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputRemovalReceipt, SessionDocument,
+    SubagentReturnInput, SubagentReturnReceipt, ToolCompletion, ToolCompletionReceipt,
+    ToolPreparation, TurnCompletionTransition, TurnOrigin, TurnSuccessor,
 };
 use vulcan_session_core::v1::errors::DomainError;
 use vulcan_session_core::v1::event::{
@@ -1758,6 +1759,7 @@ impl SessionHandle {
 
     /// Durably transfers one exact queued input into the currently open logical Turn.
     /// 可靠地把一条精确排队输入转移进当前开放逻辑回合。
+    #[cfg(test)]
     pub(crate) fn promote_queued_input_to_pending_turn(
         &self,
         identity: QueuedInputIdentity,

@@ -468,6 +468,11 @@ impl SessionDocument {
         if already_recorded && open_turn.is_none() {
             return Ok(false);
         }
+        if open_turn.is_some() {
+            // Keep accepted supplements in their original history before closing the failed turn.
+            // 在关闭失败回合前，把已接纳的补充消息保留在它们所属的历史中。
+            self.promote_pending_in_turn_inputs_after_api(now_ms)?;
+        }
         let expiring_contexts = open_turn
             .as_ref()
             .map(|turn| super::turns::expiring_ttl_contexts(self, turn.turn_id))

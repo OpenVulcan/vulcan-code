@@ -23,6 +23,7 @@ use crate::v1::user_prompt::initial_preparation_matches;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod compaction_insertions;
+mod queued_scheduling;
 pub use compaction_insertions::CompactionInsertionDispatch;
 
 /// Validates exact ordered staged `attachment_ids` against `resource_ids`; absence never invents old asset lineage.

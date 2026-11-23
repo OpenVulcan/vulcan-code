@@ -121,133 +121,24 @@ impl SessionDocument {
             return Ok(None);
         }
         self.apply_atomic_transition(|document| {
-            document
-                .schedule_compaction_insertion_batch(&inputs, now_ms)
-                .map(Some)
-        })
-    }
-
-    /// Schedules an ordered nonempty `inputs` batch in a new business turn and stamps it at `now_ms`.
-    /// 在新业务回合中调度有序非空 `inputs` 批次，并使用 `now_ms` 记录时间。
-    /// Returns the existing queued-turn receipt and keeps every unselected queue entry in place.
-    /// 返回既有排队回合回执，并保持所有未选中队列项的顺序。
-    fn schedule_compaction_insertion_batch(
-        &mut self,
-        inputs: &[&QueuedInputIdentity],
-        now_ms: i64,
-    ) -> Result<CompactionInsertionDispatch, DomainError> {
-        // queued freezes the exact payloads and their attachment ownership before any staging.
-        // queued 在暂存前冻结精确载荷及其附件归属。
-        let queued = inputs
-            .iter()
-            .map(|identity| {
-                self.require_queued_input_index(identity)
-                    .map(|index| self.metadata.input_state.queued_inputs[index].clone())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        // bound_config preserves the last explicitly bound selection in the batch.
-        // bound_config 保留批次最后一个显式绑定的请求选择。
-        let bound_config = queued
-            .iter()
-            .rev()
-            .find_map(|item| item.bound_request_config.clone());
-        self.ensure_transition_capacity(
-            queued.len() as u64 + u64::from(bound_config.is_some()),
-            1,
-        )?;
-        // allocator, events, and metadata stage one transaction before the turn becomes visible.
-        // allocator、events 和 metadata 在回合可见前暂存同一事务。
-        let mut allocator = self.id_allocator;
-        let mut events = Vec::new();
-        let mut metadata = self.metadata.clone();
-        // turn_id belongs to the new business root, independent of the completed summary.
-        // turn_id 属于新的业务根回合，独立于已完成的摘要。
-        let turn_id = TurnId::try_new(allocator.next_local_id()?)?;
-        if let Some(config) = bound_config {
-            self.stage_bound_request_activation(
-                &mut metadata,
-                &mut allocator,
-                &mut events,
-                config,
-                Some(turn_id),
-                now_ms,
-            )?;
-        }
-        // root records the first canonical input while the remainder forms the same initial batch.
-        // root 记录首条规范输入，其余输入组成同一个初始批次。
-        let mut root = None;
-        for item in queued {
-            validate_user_input(item.text.clone(), &item.resource_ids)?;
-            // input_seq is the canonical event sequence reused by the ordinary queued dispatcher.
-            // input_seq 是普通排队分发器复用的规范事件序列。
-            let input_seq = self.stage_event(
-                &mut allocator,
-                &mut events,
-                Some(turn_id),
-                EventVisibility::Provider,
-                EventBody::UserInput(UserInputEvent {
-                    parameters: item.parameters,
-                    client_action_id: item.client_action_id.clone(),
-                    input_id: item.input_id,
-                    input_source: if root.is_none() {
-                        UserInputSource::QueuedScheduled
-                    } else {
-                        UserInputSource::PendingInTurn
-                    },
-                    text: item.text,
-                    resource_ids: item.resource_ids,
-                }),
-                now_ms,
-            )?;
-            metadata
-                .input_state
-                .pending_staging_release_actions
-                .insert(item.client_action_id.clone());
-            root.get_or_insert((item.input_id, item.client_action_id, input_seq));
-        }
-        let (input_id, client_action_id, input_seq) =
-            root.ok_or(DomainError::InvalidQueuedInputOrder {
-                field: "compaction_insertions.empty_batch",
+            // The completed summary authorizes exactly this input batch and its run-control change.
+            // 完成的摘要只授权这批输入及其运行控制变更。
+            let (turn_id, identity, input_seq) =
+                document.schedule_queued_input_batch(&inputs, now_ms)?;
+            document.set_collaboration_run_control(SetRunControlInput {
+                operation_id: CollaborationOperationId::try_new(format!(
+                    "compaction-insert-running:{}",
+                    turn_id.value()
+                ))?,
+                state: CollaborationRunControl::Running,
+                changed_at_ms: now_ms,
             })?;
-        metadata.input_state.queued_inputs.retain(|item| {
-            !inputs
-                .iter()
-                .any(|identity| identity.input_id == item.input_id)
-        });
-        metadata.open_turn_start_seq = Some(input_seq);
-        // changed identifies the exact events published with the selected queue removals.
-        // changed 标识随所选队列移除一同发布的精确事件。
-        let changed = events
-            .iter()
-            .map(ConversationEvent::seq)
-            .collect::<Vec<_>>();
-        self.id_allocator = allocator;
-        self.events.extend(events);
-        self.metadata = metadata;
-        self.active_turn = Some(ActiveTurnState {
-            turn_id,
-            origin: TurnOrigin::UserRoot,
-            start_seq: input_seq,
-            closed: false,
-        });
-        self.bump_revision(
-            &[DirtyFile::Metadata, DirtyFile::ActiveTail],
-            now_ms,
-            &changed,
-        );
-        self.set_collaboration_run_control(SetRunControlInput {
-            operation_id: CollaborationOperationId::try_new(format!(
-                "compaction-insert-running:{}",
-                turn_id.value()
-            ))?,
-            state: CollaborationRunControl::Running,
-            changed_at_ms: now_ms,
-        })?;
-        Ok(CompactionInsertionDispatch::NewTurn {
-            turn_id,
-            input_id,
-            client_action_id,
-            input_seq,
+            Ok(Some(CompactionInsertionDispatch::NewTurn {
+                turn_id,
+                input_id: identity.input_id,
+                client_action_id: identity.client_action_id,
+                input_seq,
+            }))
         })
     }
 }
