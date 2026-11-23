@@ -218,16 +218,12 @@ pub(crate) fn resolve_assistant_tail_restore(
     }
 }
 
-/// Leading title of the workspace field in the rendered environment prompt.
-/// 渲染后的环境提示词中工作区字段的前缀。
-const WORKSPACE_CONTEXT_PREFIX: &str = "Current workspace: ";
-/// Exact delimiter separating the environment's two fields.
-/// 环境上下文两个字段之间的精确分隔符。
-const EXECUTION_MODE_CONTEXT_PREFIX: &str = "\nCurrent execution mode: ";
-
 /// Renders the two environment fields inside one provider prompt segment.
 /// 在一个供应商提示词片段中渲染两个环境字段。
 pub(crate) fn render_workspace_environment_context(path: &str, mode: &str) -> String {
+    use vulcan_session_core::v1::dynamic_context::{
+        EXECUTION_MODE_CONTEXT_PREFIX, WORKSPACE_CONTEXT_PREFIX,
+    };
     // Build is the internal execution identity for the product's Work mode.
     // Build 是产品工作模式的内部执行标识。
     let mode_name = if mode.eq_ignore_ascii_case("build") {
@@ -243,13 +239,12 @@ pub(crate) fn render_workspace_environment_context(path: &str, mode: &str) -> St
 pub fn workspace_from_runtime_context(content: &str) -> Option<&str> {
     // Only accept the environment producer's complete two-line segment, never a loose mention of a path.
     // 只接受环境生产者完整的双行片段，避免把随意提及的路径识别为工作区。
-    let mut environments = content.split("\n\n").filter_map(|segment| {
-        let environment = segment.strip_prefix(WORKSPACE_CONTEXT_PREFIX)?;
-        let (workspace, mode) = environment.rsplit_once(EXECUTION_MODE_CONTEXT_PREFIX)?;
-        (!workspace.is_empty() && !mode.is_empty() && !mode.contains('\n')).then_some(workspace)
-    });
+    let mut environments = content
+        .split("\n\n")
+        .filter_map(vulcan_session_core::v1::dynamic_context::split_workspace_environment_context)
+        .map(|(workspace, _)| workspace);
     let workspace = environments.next()?;
-    environments.next().is_none().then_some(workspace)
+    (!workspace.is_empty() && environments.next().is_none()).then_some(workspace)
 }
 
 /// Minimal execution request captured from the current workbench state.
@@ -721,6 +716,9 @@ pub struct ExecutionPreparation {
     /// Producer-typed developer prompt segments frozen for this prepared request.
     /// 为当前已准备请求冻结、并由生产者强类型标注的开发者提示词片段。
     pub additional_developer_segments: Vec<AdditionalPromptSegment>,
+    /// Current model-visible skills and configured MCP server introductions for the system prompt.
+    /// 用于系统提示词的当前模型可见技能及已配置 MCP 服务器介绍。
+    pub system_skill_catalog: String,
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。
     pub skill_names: Vec<String>,

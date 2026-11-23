@@ -33,6 +33,30 @@ pub struct PromptComposerEngine {
 }
 
 impl PromptComposerEngine {
+    /// Resolves one callable tool description using the registered short guidance as a supplement.
+    /// 使用已登记的简短用法补全一项可调用工具的描述。
+    pub fn tool_description(
+        &self,
+        id: &str,
+        description: &str,
+        inline_help: Option<&str>,
+    ) -> String {
+        let help = inline_help
+            .filter(|text| !text.trim().is_empty())
+            .or_else(|| {
+                self.tool_help_registry
+                    .get(id)
+                    .map(|entry| entry.body.as_str())
+            });
+        match help
+            .map(str::trim)
+            .filter(|help| !help.is_empty() && *help != description.trim())
+        {
+            Some(help) if description.trim().is_empty() => help.to_owned(),
+            Some(help) => format!("{}\n\n{help}", description.trim_end()),
+            None => description.to_owned(),
+        }
+    }
     /// Build one prompt composer engine.
     /// 构建一个提示词组合引擎。
     pub fn new(

@@ -13,7 +13,9 @@ pub(crate) fn resolved_tool_definition_to_core_tool_schema(
     CoreProviderRequestToolSchema {
         id: definition.descriptor.id.clone(),
         name: definition.descriptor.name.clone(),
-        description: definition.descriptor.description.clone(),
+        description: super::provider_protocol_tool_definition::resolved_tool_description(
+            definition,
+        ),
         source_kind: tool_source_key(definition.descriptor.source).to_string(),
         source_label: tool_source_label(definition.descriptor.source).to_string(),
         parameters_schema: definition.parameters_schema.clone(),

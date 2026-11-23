@@ -328,6 +328,7 @@ mod tests {
             prompt_skills: Vec::new(),
             prompt_skill_user_root: None,
             additional_developer_segments: Vec::new(),
+            system_skill_catalog: String::new(),
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             tool_request_rejection_reason: None,

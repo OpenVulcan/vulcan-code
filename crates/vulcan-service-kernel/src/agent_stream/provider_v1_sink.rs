@@ -1915,27 +1915,17 @@ fn visit_initial_request_prefix(
                 None,
             );
         }
-        for source in baseline
-            .locked_sources()
-            .iter()
-            .filter(|source| source.kind != LockedSourceKind::AgentsMd && source.target == target)
-        {
-            // Project historical skill catalogs at the shared dispatch and inspector boundary.
-            // 在派发与检查器共用的边界投影历史技能目录。
-            let content = match source.kind {
-                LockedSourceKind::PromptSkillInjection => {
-                    let Some(content) =
-                        vulcan_prompt_skills::project_saved_skill_catalog(&source.content)
-                    else {
-                        continue;
-                    };
-                    content
-                }
-                _ => std::borrow::Cow::Borrowed(source.content.as_str()),
-            };
+        for source in baseline.locked_sources().iter().filter(|source| {
+            !matches!(
+                source.kind,
+                LockedSourceKind::AgentsMd | LockedSourceKind::PromptSkillInjection
+            ) && source.target == target
+                && !(source.kind == LockedSourceKind::PluginInstructions
+                    && target == LockedPromptTarget::Developer)
+        }) {
             visit(
                 role,
-                &content,
+                &source.content,
                 RequestContextPromptKind::Locked(source.kind),
                 source.source_label.as_deref(),
             );
@@ -1949,6 +1939,14 @@ fn visit_initial_request_prefix(
                     source.source_label.as_deref(),
                 );
             }
+            if !fixed.system_footer.is_empty() {
+                visit(
+                    role,
+                    &fixed.system_footer,
+                    RequestContextPromptKind::Fixed(RequestContextFixedPrompt::SystemPrompt),
+                    None,
+                );
+            }
         }
     }
 }
@@ -1960,11 +1958,13 @@ fn append_context_prefix(
     messages: &mut Vec<AiMessage>,
 ) -> Result<(), SessionRuntimeError> {
     for source in baseline.locked_sources().iter().filter(|source| {
-        source.kind != LockedSourceKind::AgentsMd
-            && !matches!(
-                source.target,
-                LockedPromptTarget::System | LockedPromptTarget::Developer
-            )
+        !matches!(
+            source.kind,
+            LockedSourceKind::AgentsMd | LockedSourceKind::PromptSkillInjection
+        ) && !matches!(
+            source.target,
+            LockedPromptTarget::System | LockedPromptTarget::Developer
+        )
     }) {
         messages.push(text_ai_message(
             locked_prompt_message_role(source)?,

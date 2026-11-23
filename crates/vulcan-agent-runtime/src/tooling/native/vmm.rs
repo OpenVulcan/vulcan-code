@@ -85,9 +85,9 @@ pub(crate) fn build_vmm_memory_write_tool(
         id: String::from("vmm_memory_write"),
         name: String::from("vmm_memory_write"),
         description: String::from(
-            "Write explicit durable memories into VulcanMemoryMesh for the current configured user and project. Use only for stable facts, durable preferences, or user-approved memory candidates.",
+            "Write explicit durable VulcanMemoryMesh memories for the current user and project. Record verified project facts, decisions, durable requirements, or memories the user asks to keep. Automatic extraction owns profile updates. Exclude transient context, secrets, speculation, and unchanged recalled memories. This writes memory rows only.",
         ),
-        help_text: Some(vmm_memory_write_usage_help_markdown().to_string()),
+        help_text: None,
         ai_visible: true,
         available_in_plan: false,
     };
@@ -111,9 +111,9 @@ pub(crate) fn build_vmm_memory_delete_tool(
         id: String::from("vmm_memory_delete"),
         name: String::from("vmm_memory_delete"),
         description: String::from(
-            "Delete explicit VulcanMemoryMesh memory ids for the current configured user and project. Use only when the user asked to remove a memory or a recalled memory is clearly wrong, stale, or harmful.",
+            "Delete explicit VulcanMemoryMesh memories requested by the user or recalled memories confirmed as wrong, stale, or harmful. Use the MEMORY_ID from recalled context or the memory_id from vmm_memory_search and provide a concise audit reason.",
         ),
-        help_text: Some(vmm_memory_delete_usage_help_markdown().to_string()),
+        help_text: None,
         ai_visible: true,
         available_in_plan: false,
     };
@@ -257,26 +257,6 @@ fn vmm_turn_details_args_schema() -> Value {
     })
 }
 
-/// Returns Markdown usage guidance for the VMM direct memory-write tool.
-/// 返回 VMM 主动写记忆工具的 Markdown 使用说明。
-fn vmm_memory_write_usage_help_markdown() -> &'static str {
-    r#"Use `vmm_memory_write` only for explicit durable memories: project facts, architecture/API decisions, long-lived requirements, verified bug/debt notes, and specific facts or preferences the user explicitly asks to persist. It writes memory rows only; it does not create a turn, timeline, or profile update by itself.
-
-Do not proactively write user or system profile information; automatic profile extraction owns that data. Information the user explicitly asks to remember may be written.
-
-Avoid writing transient current-turn context, duplicate recalled memories, secrets, credentials, or speculative claims. When a memory was retrieved from VMM, do not write it back unless the user corrects, confirms, or materially extends it.
-
-Each `items[]` entry requires:
-- `abstract`: compact search-facing summary.
-- `details`: complete durable memory body with enough context to stand alone.
-- `category`: numeric category: `0 = general`, `1 = architecture_decision`, `2 = tech_spec_api`, `3 = business_logic`, `4 = requirement_todo`, `5 = project_context`, `6 = logical_bug_debt`, `7 = security_policy`.
-
-Optional numeric fields:
-- `scopeLevel`: `0 = VMM default`, `1 = session`, `2 = project`, `3 = user`. Prefer `2` for project facts. Use `3` only for a user-scoped item the user explicitly requested to persist.
-- `priority`: `0 = VMM default`, `1 = P0/highest`, `2 = P1/ordinary durable`, `3 = P2/weak or tentative`.
-- `memoryLevel`: `0 = VMM infer/default`, `1 = L0`, `2 = L1`, `3 = L2`, `4 = L3`. Prefer `2` for ordinary durable project/user memories unless the user or VMM policy indicates otherwise."#
-}
-
 /// Builds the JSON Schema advertised to the model for `vmm_memory_write`.
 /// 为 `vmm_memory_write` 构建对模型声明的 JSON Schema。
 pub(crate) fn vmm_memory_write_args_schema() -> Value {
@@ -307,7 +287,7 @@ pub(crate) fn vmm_memory_write_args_schema() -> Value {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 3,
-                            "description": "Optional VMM scope level: 0=VMM default, 1=session, 2=project, 3=user."
+                            "description": "Optional VMM scope level: 0=VMM default, 1=session, 2=project, 3=user. Prefer project for project facts. Use user scope for items explicitly requested as user-scoped memories."
                         },
                         "priority": {
                             "type": "integer",
@@ -319,7 +299,7 @@ pub(crate) fn vmm_memory_write_args_schema() -> Value {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 4,
-                            "description": "Optional VMM memory level: 0=VMM infer/default, 1=L0, 2=L1, 3=L2, 4=L3."
+                            "description": "Optional VMM memory level: 0=VMM infer/default, 1=L0, 2=L1, 3=L2, 4=L3. Prefer L1 for ordinary durable memories unless VMM policy or the user indicates otherwise."
                         }
                     },
                     "required": ["abstract", "details", "category"],
@@ -331,14 +311,6 @@ pub(crate) fn vmm_memory_write_args_schema() -> Value {
         "required": ["items"],
         "additionalProperties": false
     })
-}
-
-/// Returns Markdown usage guidance for the VMM memory-delete tool.
-/// 返回 VMM 删除记忆工具的 Markdown 使用说明。
-fn vmm_memory_delete_usage_help_markdown() -> &'static str {
-    r#"Use `vmm_memory_delete` only for explicit durable memory ids. Valid reasons include: the user explicitly asked to remove a memory, a recalled memory is contradicted by newer user-approved information, or the memory contains wrong/stale/harmful data.
-
-Prefer deleting by `MEMORY_ID` shown in recalled VMM context or by `memory_id` returned from `vmm_memory_search`. Do not delete memories just because they are irrelevant to the current turn. Always include a concise audit reason."#
 }
 
 /// Builds the JSON Schema advertised to the model for `vmm_memory_delete`.

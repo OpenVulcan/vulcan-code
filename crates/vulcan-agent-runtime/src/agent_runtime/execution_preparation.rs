@@ -25,9 +25,7 @@ use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
 use std::sync::Arc;
 use vulcan_core::types::ConversationPayload as CoreConversationPayload;
-use vulcan_prompt_composer::{
-    AdditionalPromptSegment, PromptBaselineKind, PromptBaselineProvenance,
-};
+use vulcan_prompt_composer::AdditionalPromptSegment;
 use vulcan_prompt_skills::{
     PromptSkillsProjectConfig, PromptSkillsSessionConfig, render_prompt_skills_instructions,
     resolve_prompt_skills,
@@ -413,10 +411,9 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         .collect::<std::collections::HashMap<_, _>>();
     // Browser aliases refer to the original Core and MCP tool identities.
     // 浏览器别名指向原始 Core 与 MCP 工具身份。
-    let browser_skill_name = if let Some(runtime) = request.native_browser_runtime.as_ref()
-        && let Some(server) = plugin_catalog
-            .as_ref()
-            .and_then(|catalog| catalog.enabled_mcp_servers.get(BROWSER_MCP_ORIGIN))
+    if let Some(server) = plugin_catalog
+        .as_ref()
+        .and_then(|catalog| catalog.enabled_mcp_servers.get(BROWSER_MCP_ORIGIN))
         && let Some(route) = &server.manifest.prompt_tools
     {
         // Both providers are advertised through the same namespaced skill.
@@ -437,15 +434,14 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
                 )
             }));
         }
-        provider_tool_candidates.extend(browser_skill::candidates(
-            server,
-            runtime,
-            &tool_exposure.selectors,
-        ));
-        Some(skill)
-    } else {
-        None
-    };
+        if let Some(runtime) = request.native_browser_runtime.as_ref() {
+            provider_tool_candidates.extend(browser_skill::candidates(
+                server,
+                runtime,
+                &tool_exposure.selectors,
+            ));
+        }
+    }
     // The manager retains executable skill actions after removing their public declarations.
     // 移除公开声明后，管理器继续持有可执行的技能动作。
     let mut tools_manager = build_vulcan_tools_manager(
@@ -675,6 +671,12 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         remove_resolved_tool(&mut resolved_tools, TOOL_CALL_TOOL_ID);
     }
     prompt_skills.retain(|entry| {
+        if entry.skill.name == "apply-patch" {
+            return resolved_tools
+                .descriptors
+                .iter()
+                .any(|tool| tool.id == crate::tooling::native::APPLY_PATCH_TOOL_ID);
+        }
         !plugin_skill_actions
             .values()
             .any(|(skill, _)| *skill == entry.skill.name)
@@ -682,55 +684,52 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
                 .iter()
                 .any(|(skill, _, _)| *skill == entry.skill.name)
     });
-    if let Some(skill) = browser_skill_name
-        && skill_actions.iter().any(|(name, _, _)| *name == skill)
-    {
-        // Existing conversations can retain direct browser calls in locked context or history.
-        // 既有会话的锁定上下文或历史可能仍含直接浏览器调用。
-        // Advertise the current route through dynamic instructions only when it is callable.
-        // 仅当当前入口可调用时通过动态指引公布它。
-        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
-            "Vulcan Browser routing",
-            format!(
-                "When the user asks about or wants to use the browser, call `skill` with {{\"name\":\"{skill}\"}} first. Use `tool_call` with the short actions it lists, even if earlier messages show direct browser tool calls. The host connects to Playwright automatically when needed. An empty session MCP list says nothing about Vulcan Browser availability; do not use `mcp_connect` or `mcp_tools` to find it."
-            ),
-            "Current Vulcan Browser action binding",
-        ));
-    }
-    if !skill_actions.is_empty() {
-        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
-            "Current skill action routing",
-            "For an on-demand action, read its enabled skill with `skill` and use `tool_call` with the exact skill, action and JSON arguments it provides. This is the current route for plugin actions, implicit LuaSkills and the session MCP connection manager.",
-            "Current skill action routing",
-        ));
-    }
     // Advertise server IDs only when both discovery and invocation are available.
     // 仅在发现和调用均可用时公布服务器 ID。
     let configured_mcp_servers = configured_mcp_actions
         .iter()
         .map(|tool| tool.descriptor.origin().namespace())
         .collect::<std::collections::BTreeSet<_>>();
-    // Only described or explicitly mentioned servers belong in the proactive prompt.
-    // 只有提供使用说明或被明确引用的服务器进入主动提示。
+    // Only described servers belong in the standing catalog. User references belong to the turn.
+    // 常驻目录只介绍带使用说明的服务器。用户引用属于当前回合。
     let servers = configured_mcp_servers
-        .into_iter()
+        .iter()
         .filter_map(|id| {
-            let server = config.mcp.servers.get(id)?;
-            let usage_hint = server.access.usage_hint();
-            let mentioned = tool_exposure.referenced_mcp_servers.contains(id);
-            (usage_hint.is_some() || mentioned).then(|| serde_json::json!({
-            "id": id, "name": server.name, "usage_hint": usage_hint, "mentioned_by_user": mentioned,
-        }))
+            let server = config.mcp.servers.get(*id)?;
+            let usage_hint = server.access.usage_hint()?;
+            Some(serde_json::json!({"id": id, "name": server.name, "usage_hint": usage_hint}))
         })
         .collect::<Vec<_>>();
+    let mut system_skill_catalog = if resolved_tools
+        .descriptors
+        .iter()
+        .any(|tool| tool.id == "skill")
+    {
+        build_system_skill_catalog(request.prompt_purpose, &prompt_skills).unwrap_or_default()
+    } else {
+        String::new()
+    };
     if !servers.is_empty() {
+        if !system_skill_catalog.is_empty() {
+            system_skill_catalog.push_str("\n\n");
+        }
+        system_skill_catalog.push_str(&format!(
+            "## On-demand MCP servers\nUse these servers when their usage hints match the task. Use `mcp_tools` and `mcp_call` with the listed server ID.\n{}",
+            serde_json::Value::Array(servers),
+        ));
+    }
+    let referenced_implicit = configured_mcp_servers
+        .into_iter()
+        .filter(|id| tool_exposure.referenced_mcp_servers.contains(*id))
+        .collect::<Vec<_>>();
+    if !referenced_implicit.is_empty() {
         additional_developer_segments.push(AdditionalPromptSegment::dynamic(
-            "Configured MCP servers",
+            "Implicit MCP shortcuts",
             format!(
-                "MCP servers available on demand in this project: {}. For servers marked mentioned_by_user, inspect their tools for this task. Otherwise use usage_hint to decide relevance. Use `mcp_tools` with the exact `server_name` to list only that server's tools, then add `tool` to read one schema. For duplicate names, use `server_id`. Call the tool with `mcp_call` using the returned `server_id` and exact `tool` name.",
-                serde_json::Value::Array(servers),
+                "The user selected these on-demand MCP servers: {}. Use `mcp_tools` with their exact server IDs for this task.",
+                serde_json::json!(referenced_implicit),
             ),
-            "Configured MCP discovery",
+            "User MCP references",
         ));
     }
     // Explicit shortcuts refer to tools that survived final filtering and are already registered.
@@ -772,19 +771,8 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
     }
     tools_manager.set_skill_actions(skill_actions);
     tools_manager.set_configured_mcp_actions(configured_mcp_actions);
-    if let Some(segment) = build_skill_developer_segment(request.prompt_purpose, &prompt_skills) {
-        additional_developer_segments.push(AdditionalPromptSegment::locked(
-            "Prompt Skill Injection",
-            segment,
-            "Enabled prompt-skill instructions",
-            PromptBaselineProvenance::new(
-                PromptBaselineKind::PromptSkillInjection,
-                "enabled-prompt-skills",
-            ),
-        ));
-    }
     append_vulcan_plugin_prompt_contributions(
-        &mut additional_developer_segments,
+        &mut system_skill_catalog,
         foundation.vulcan_plugin_catalog().as_deref(),
         &resolved_tools.descriptors,
     );
@@ -845,6 +833,7 @@ pub(crate) fn prepare_execution_with_provider_blueprint(
         prompt_purpose: request.prompt_purpose,
         prompt_skills,
         prompt_skill_user_root,
+        system_skill_catalog,
         additional_developer_segments,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors,
@@ -926,10 +915,10 @@ fn prompt_skill_is_visible_for_policy(skill_name: &str, policy: &CapabilityPolic
     }
 }
 
-/// Appends plugin-level instructions only when every declared tool dependency remains visible.
-/// 仅在所有声明的工具依赖仍然可见时追加插件级说明。
+/// Appends live plugin introductions to the system catalog when their tool dependencies are visible.
+/// 当工具依赖可见时，将实时插件介绍追加到系统目录。
 fn append_vulcan_plugin_prompt_contributions(
-    developer_segments: &mut Vec<AdditionalPromptSegment>,
+    system_catalog: &mut String,
     catalog: Option<&vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     visible_tools: &[vulcan_tools_manager::VulcanToolDescriptor],
 ) {
@@ -955,24 +944,16 @@ fn append_vulcan_plugin_prompt_contributions(
         })
         .collect::<Vec<_>>();
     for (contribution, body) in plugin_instructions {
-        developer_segments.push(AdditionalPromptSegment::locked(
-            format!(
-                "Plugin Instructions: {}/{}",
-                contribution.plugin_id, contribution.id
-            ),
-            body,
-            format!("Plugin {}/{}", contribution.plugin_id, contribution.id),
-            PromptBaselineProvenance::new(
-                PromptBaselineKind::PluginInstructions,
-                format!("{}/{}", contribution.plugin_id, contribution.id),
-            ),
-        ));
+        if !system_catalog.is_empty() {
+            system_catalog.push_str("\n\n");
+        }
+        system_catalog.push_str(&format!("## Plugin {}\n{body}", contribution.plugin_id));
     }
 }
 
-/// Builds the AI-visible prompt-skill developer segment only for user-turn-like requests.
-/// 仅为类似用户回合的请求构建 AI 可见的提示词技能开发者片段。
-fn build_skill_developer_segment(
+/// Builds the live system skill catalog for a user-turn-like request purpose and its resolved skills.
+/// 为类似用户回合的请求用途及其已解析技能生成实时系统技能目录。
+fn build_system_skill_catalog(
     purpose: ExecutionPromptPurpose,
     prompt_skills: &[vulcan_prompt_skills::ResolvedPromptSkill],
 ) -> Option<String> {

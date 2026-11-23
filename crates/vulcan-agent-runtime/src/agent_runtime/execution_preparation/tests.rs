@@ -28,7 +28,6 @@ use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_hooks::{SystemPromptHookBlock, SystemPromptHookPhase};
 use vulcan_plugin_runtime::{VulcanPluginCatalogSnapshot, VulcanPluginPromptContribution};
-use vulcan_prompt_composer::PromptBaselineKind;
 use vulcan_session_core::{
     CapabilityPolicyMode, CapabilityPolicySnapshot, ExecutionRuntimePolicy, ExecutionScope,
     SessionNodeId, ToolExposureSnapshot,
@@ -119,17 +118,17 @@ fn subagent_policy_controls_registration_and_model_availability() {
     }
 }
 
-/// Plugin prompt contributions retain one producer identity per contribution.
-/// 插件提示词贡献为每条贡献保留独立的生产者身份。
+/// Only enabled plugin introductions with callable dependencies enter the current system catalog.
+/// 只有依赖可调用的已启用插件介绍进入当前系统目录。
 #[test]
-fn plugin_prompt_contributions_keep_distinct_typed_identity() {
+fn plugin_prompt_contributions_respect_callable_dependencies() {
     let mut catalog = VulcanPluginCatalogSnapshot::empty(PathBuf::from("plugins"));
     catalog.prompt_contributions = vec![
         VulcanPluginPromptContribution {
             plugin_id: String::from("plugin.alpha"),
             id: String::from("rules"),
             body: String::from("Alpha rules."),
-            required_tools: Vec::new(),
+            required_tools: vec!["fixture-tool".into()],
         },
         VulcanPluginPromptContribution {
             plugin_id: String::from("plugin.beta"),
@@ -138,30 +137,10 @@ fn plugin_prompt_contributions_keep_distinct_typed_identity() {
             required_tools: Vec::new(),
         },
     ];
-    let mut segments = Vec::new();
-
-    append_vulcan_plugin_prompt_contributions(&mut segments, Some(&catalog), &[]);
-
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].body, "Alpha rules.");
-    assert_eq!(segments[1].body, "Beta workflow.");
-    assert_eq!(
-        segments[0]
-            .baseline_provenance
-            .as_ref()
-            .map(|provenance| (provenance.kind, provenance.source_id.as_str())),
-        Some((PromptBaselineKind::PluginInstructions, "plugin.alpha/rules"))
-    );
-    assert_eq!(
-        segments[1]
-            .baseline_provenance
-            .as_ref()
-            .map(|provenance| (provenance.kind, provenance.source_id.as_str())),
-        Some((
-            PromptBaselineKind::PluginInstructions,
-            "plugin.beta/workflow"
-        ))
-    );
+    let mut system_catalog = String::new();
+    append_vulcan_plugin_prompt_contributions(&mut system_catalog, Some(&catalog), &[]);
+    assert!(!system_catalog.contains("plugin.alpha"));
+    assert!(system_catalog.contains("plugin.beta"));
 }
 
 /// Verifies request-scoped agent routing makes preparation use the requested agent instead of the global active worker.
@@ -1109,23 +1088,16 @@ fn browser_uses_packaged_skill_actions_without_mcp_discovery() {
             .is_none()
     );
 
-    // Continued sessions consume dynamic instructions even when their original prefix is frozen.
-    // 续聊即便保留原来锁定的提示词前缀，也会收到动态指引。
+    // The browser route is advertised by the current system skill catalog.
+    // 浏览器入口通过当前系统技能目录公布。
     let layers = build_runtime_prompt_layers_for_agent(&prepared.preparation, None).unwrap();
-    assert!(layers.dynamic_prompt_layers.developer.contains(skill));
-    assert!(layers.dynamic_prompt_layers.developer.contains("tool_call"));
     assert!(
         layers
-            .dynamic_prompt_layers
-            .developer
-            .contains("mcp_connect")
-    );
-    assert!(
-        !layers
             .fixed_instruction_layers
-            .developer
-            .contains("tool_call")
+            .system_footer
+            .contains(skill)
     );
+    assert!(!layers.dynamic_prompt_layers.developer.contains(skill));
 
     // A request that filters the dispatcher must not advertise an unusable browser route.
     // 请求过滤调度入口后，不能公布不可执行的浏览器入口。
@@ -1138,8 +1110,8 @@ fn browser_uses_packaged_skill_actions_without_mcp_discovery() {
         build_runtime_prompt_layers_for_agent(&restricted.preparation, None).unwrap();
     assert!(
         !restricted_layers
-            .dynamic_prompt_layers
-            .developer
+            .fixed_instruction_layers
+            .system_footer
             .contains(skill)
     );
     assert!(
@@ -1243,12 +1215,7 @@ async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
     // Model discovery comes from the normal generated skills inventory.
     // 模型通过正常生成的技能列表发现能力。
     let docs = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
-    assert!(
-        docs.preparation
-            .additional_developer_segments
-            .iter()
-            .any(|segment| segment.body.contains(skill))
-    );
+    assert!(docs.preparation.system_skill_catalog.contains(skill));
     // Each preparation is projected with the same function used by the Provider transport.
     // 每份准备结果都使用 Provider 传输路径的同一函数进行投影。
     let runtime = [ordinary, docs].map(|prepared| {
@@ -1408,13 +1375,7 @@ async fn context7_is_discovered_and_dispatched_as_a_prompt_skill() {
             .skill_action(skill, action)
             .is_none()
     }));
-    assert!(
-        !hidden
-            .preparation
-            .additional_developer_segments
-            .iter()
-            .any(|segment| segment.body.contains(skill))
-    );
+    assert!(!hidden.preparation.system_skill_catalog.contains(skill));
 }
 
 /// Builds a runtime foundation with one explicit public-AI route and in-memory model catalog.
@@ -1838,16 +1799,10 @@ entries:
         prepare_execution_with_tool_snapshot(&foundation, Some(handle), &config, &request).unwrap();
     // The ordinary request exposes one discovery description and no tool-specific schema or guide text.
     // 普通请求只暴露一份发现说明，不携带工具专属 Schema 或指南正文。
-    let developer = prepared
-        .preparation
-        .additional_developer_segments
-        .iter()
-        .map(|segment| segment.body.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(developer.matches("office_fixture_discovery").count(), 1);
-    assert!(!developer.contains("fixture_guide_body"));
-    assert!(!developer.contains("SKILL.md"));
+    let catalog = &prepared.preparation.system_skill_catalog;
+    assert_eq!(catalog.matches("office_fixture_discovery").count(), 1);
+    assert!(!catalog.contains("fixture_guide_body"));
+    assert!(!catalog.contains("SKILL.md"));
     let definitions = &prepared.tool_snapshot.resolved_tool_definitions;
     assert!(
         !definitions
@@ -2052,22 +2007,29 @@ async fn configured_mcp_respects_project_scope_and_implicit_exposure() {
     request.project_id = Some("project-b".into());
     let denied =
         prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
-    for (round, advertised) in [
-        (&allowed, true),
-        (&ordinary, false),
-        (&at_reference, false),
-        (&plugin_reference, false),
-        (&mentioned, true),
-        (&denied, false),
+    for (round, in_catalog, user_reference) in [
+        (&allowed, true, false),
+        (&ordinary, false, false),
+        (&at_reference, false, false),
+        (&plugin_reference, false, false),
+        (&mentioned, false, true),
+        (&denied, false, false),
     ] {
+        assert_eq!(
+            round
+                .preparation
+                .system_skill_catalog
+                .contains("Fixture MCP"),
+            in_catalog
+        );
         assert_eq!(
             round
                 .preparation
                 .additional_developer_segments
                 .iter()
-                .any(|segment| segment.body.contains("fixture")
-                    && segment.body.contains("server_id")),
-            advertised
+                .any(|segment| segment.source_label == "User MCP references"
+                    && segment.body.contains("fixture")),
+            user_reference
         );
         let provider = prepare_host_tool_runtime_context(
             round.tool_snapshot.tools_manager.clone(),
@@ -2086,16 +2048,8 @@ async fn configured_mcp_respects_project_scope_and_implicit_exposure() {
     assert!(
         allowed
             .preparation
-            .additional_developer_segments
-            .iter()
-            .any(|segment| segment.body.contains("Use for fixture documentation."))
-    );
-    assert!(
-        mentioned
-            .preparation
-            .additional_developer_segments
-            .iter()
-            .any(|segment| segment.body.contains("\"mentioned_by_user\":true"))
+            .system_skill_catalog
+            .contains("Use for fixture documentation.")
     );
 
     // Execute synthetic provider calls through the production bridge and durable receipts.

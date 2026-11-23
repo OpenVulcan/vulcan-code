@@ -258,6 +258,7 @@ fn build_request_context_breakdown(
     } else {
         breakdown.system_prompt_units = text_character_units(&[
             snapshot.prompt_layers.system.as_str(),
+            snapshot.prompt_layers.system_footer.as_str(),
             snapshot.prompt_layers.developer.as_str(),
         ])?;
         breakdown.system_tool_units =
@@ -1000,6 +1001,7 @@ mod tests {
             developer: String::from("developer"),
             tool_guidance: String::from("tool guidance"),
             runtime_context: String::from("runtime context"),
+            ..Default::default()
         };
         request.tool_schemas = ["native", "mcp", "luaskills"]
             .into_iter()

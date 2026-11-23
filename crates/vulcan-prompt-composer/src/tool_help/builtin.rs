@@ -4,18 +4,7 @@ use crate::tool_help::registry::ToolHelpEntry;
 /// 返回内置工具帮助条目。
 pub fn built_in_tool_help_entries() -> Vec<ToolHelpEntry> {
     vec![
-        ToolHelpEntry::new(
-            "ask",
-            "Ask the user one focused clarification only when necessary and prefer concise questions.",
-        ),
-        ToolHelpEntry::new(
-            "shell_command",
-            "Use shell_command for concrete local inspection, validation, and deterministic environment checks.",
-        ),
-        ToolHelpEntry::new(
-            "terminal_session",
-            "Before using terminal_session, call skill(\"terminal-session\") and follow that skill for persistent terminals, shortcuts, TUI screens, and incremental output.",
-        ),
+        ToolHelpEntry::new("ask", "Keep each clarification focused and concise."),
         ToolHelpEntry::new(
             "spawn_agent",
             "Delegate only when isolation or parallelism materially helps. Only the root conversation may delegate, and child agents cannot create another orchestration level. Give each child one bounded responsibility and enough context to work independently. Query agent_orchestration_info before choosing a profile or model, then coordinate the child and collect its result with wait_agents_result.",
@@ -26,15 +15,11 @@ pub fn built_in_tool_help_entries() -> Vec<ToolHelpEntry> {
         ),
         ToolHelpEntry::new(
             "send_message",
-            "Continue related work with the existing child instead of spawning a replacement. Queue normal follow-ups; interrupt only when the current work is obsolete and the replacement instruction must run next. If no replacement instruction is ready, use interrupt_agent instead.",
-        ),
-        ToolHelpEntry::new(
-            "wait_agents_result",
-            "Use the shared inbox to receive agent questions, answers, notifications and task results without selecting a target or revision. Messages are appended through host-tagged context after the wait. A timeout ends only this wait. no_pending_work means no related live work remains; stopped or abandoned outcomes are terminal, not reasons to wait again. Use read_session or list_agents only for diagnostics, never to reconstruct a result.",
+            "Reuse the existing child for related work. Use interrupt_agent if the active run must stop without new instructions.",
         ),
         ToolHelpEntry::new(
             "interrupt_agent",
-            "Choose this when work must stop but no replacement task should be scheduled yet. When the replacement instruction is already known, prefer send_message in interrupt mode so stopping and rescheduling stay one operation.",
+            "Use send_message in interrupt mode to steer ongoing work at its next API request.",
         ),
         ToolHelpEntry::new(
             "close_agent",

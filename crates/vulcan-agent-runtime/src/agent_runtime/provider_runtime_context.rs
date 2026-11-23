@@ -34,7 +34,7 @@ use vulcan_prompt_composer::{
     EnvironmentContextSnapshot, ModelDescriptor, PersonalitySelection, ProjectRulesFileCache,
     ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
     PromptBaselineKind, PromptBaselineProvenance, PromptSegment, PromptTarget,
-    ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot,
     build_context_compaction_developer_segment,
 };
 use vulcan_session_core::v1::child_execution::ChildExecutionProfile;
@@ -197,11 +197,23 @@ impl RuntimePromptLayers {
         // Carry product and agent foundations separately so existing V1 sessions can use them
         // without editing the persisted generation lock or freezing the editable base prompt.
         // 单独传递产品及代理基础指令，使现有 V1 会话能使用它们，同时保留已持久化的代际锁和基础提示词设置的生效时机。
-        let fixed_instruction_layers = render_fixed_instruction_layers(output);
+        let mut fixed_instruction_layers = render_fixed_instruction_layers(output);
+        append_prompt_text(
+            &mut fixed_instruction_layers.system_footer,
+            &preparation.system_skill_catalog,
+        );
+        if prompt_uses_workspace(preparation) {
+            append_prompt_text(
+                &mut fixed_instruction_layers.system_footer,
+                &render_workspace_system_context(&preparation.workspace_path),
+            );
+        }
+        provider_layers.system_footer = fixed_instruction_layers.system_footer.clone();
         // fallback_text contains only the producer-declared stable baseline; dynamic material is emitted as User events by the non-V1 transport.
         // fallback_text 只包含生产者声明的稳定基线；动态内容由非 V1 传输层作为 User 事件发送。
-        let stable_provider_layers =
+        let mut stable_provider_layers =
             render_locked_runtime_prompt_layers(output, &preparation.system_prompt_hook_blocks);
+        stable_provider_layers.system_footer = fixed_instruction_layers.system_footer.clone();
         let fallback_text = if stable_provider_layers.is_empty() {
             build_legacy_runtime_system_preamble(preparation)?
         } else {
@@ -722,19 +734,7 @@ fn build_runtime_prompt_assembly_input(
         // Session goals are delivered through append-only user turns so goal creation never rewrites the provider prefix.
         // 会话目标通过追加式用户回合投递，确保目标创建不会改写 Provider 前缀。
         task_goal: None,
-        tool_catalog: ToolCatalogSnapshot::new(
-            preparation
-                .tool_descriptors
-                .iter()
-                .map(|tool| ToolDescriptor {
-                    id: tool.id.clone(),
-                    title: tool.name.clone(),
-                    description: tool.description.clone(),
-                    help_text: tool.help_text.clone(),
-                    schema_fingerprint: None,
-                })
-                .collect(),
-        ),
+        tool_catalog: ToolCatalogSnapshot::new(Vec::new()),
         subagent: subagent_prompt_context.map(|context| SubagentSnapshot {
             identity: context.identity.clone(),
             task: context.delegated_task.clone(),
@@ -991,7 +991,33 @@ pub fn compose_conversation_prompt_preview(
         Some(baseline) => baseline,
         None => project_locked_runtime_baseline(&output, &[])?,
     };
-    Ok((render_fixed_instruction_layers(&output), baseline))
+    let mut fixed = render_fixed_instruction_layers(&output);
+    if dedicated.is_none_or(|profile| profile.tool_access == DedicatedToolAccess::Standard)
+        && !workspace_path.is_empty()
+    {
+        fixed.system_footer = render_workspace_system_context(workspace_path);
+    }
+    Ok((fixed, baseline))
+}
+
+/// Quotes the captured path as data at the end of the system prompt.
+/// 在系统提示词末尾将捕获到的路径作为数据引用。
+fn render_workspace_system_context(workspace_path: &str) -> String {
+    format!(
+        "{}{}",
+        vulcan_session_core::v1::dynamic_context::WORKSPACE_CONTEXT_PREFIX,
+        serde_json::json!(workspace_path),
+    )
+}
+
+/// Determines whether the prepared execution exposes its workspace to the model.
+/// 判断已准备的执行是否向模型公开工作区。
+fn prompt_uses_workspace(preparation: &ExecutionPreparation) -> bool {
+    !preparation.workspace_path.is_empty()
+        && preparation
+            .dedicated_session
+            .as_ref()
+            .is_none_or(|profile| profile.tool_access == DedicatedToolAccess::Standard)
 }
 
 /// Renders one prompt-composer output into structured provider prompt layers.
@@ -1000,8 +1026,9 @@ fn render_runtime_prompt_layers(output: &PromptAssemblyOutput) -> CoreProviderPr
     CoreProviderPromptLayers {
         system: render_system_instruction_segments(output.system_segments.iter()),
         developer: output.render_developer_text(),
-        tool_guidance: output.render_tool_metadata_text(),
+        tool_guidance: String::new(),
         runtime_context: output.render_user_text(),
+        ..Default::default()
     }
 }
 
@@ -1031,10 +1058,11 @@ fn render_locked_runtime_prompt_layers(
                 .filter(|segment| segment.baseline_provenance.is_some()),
         ),
         developer: render_locked_prompt_segments(&output.developer_segments),
-        tool_guidance: render_locked_prompt_segments(&output.tool_metadata_segments),
+        tool_guidance: String::new(),
         // User-targeted host baseline text is emitted as a User event by non-V1 transport.
         // 面向 User 的宿主基线文本由非 V1 传输层作为 User 事件发送。
         runtime_context: String::new(),
+        ..Default::default()
     };
     let baseline_hook_region = render_system_prompt_hook_region(
         &hook_blocks
@@ -1143,8 +1171,9 @@ fn render_request_dynamic_prompt_layers(
     let mut layers = CoreProviderPromptLayers {
         system: render_dynamic_prompt_segments(&output.system_segments),
         developer: render_dynamic_prompt_segments(&output.developer_segments),
-        tool_guidance: render_dynamic_prompt_segments(&output.tool_metadata_segments),
+        tool_guidance: String::new(),
         runtime_context: render_dynamic_prompt_segments(&output.user_segments),
+        ..Default::default()
     };
     let hook_region = render_system_prompt_hook_region(
         &hook_blocks
@@ -2681,10 +2710,10 @@ mod tests {
         );
     }
 
-    /// Verifies tool registration help reaches the runtime tool-guidance layer.
-    /// 验证工具注册说明会进入运行时工具指导层。
+    /// Verifies the standing footer carries the active catalog and workspace, and the request emits no separate tool help.
+    /// 验证常驻尾部携带当前目录和工作区，且请求不再发送独立工具帮助。
     #[test]
-    fn runtime_prompt_layers_include_registered_tool_help_text() {
+    fn runtime_prompt_layers_move_catalog_and_workspace_to_system_footer() {
         let mut preparation = build_test_preparation(
             String::from("D:/missing"),
             PersistedPromptConfiguration::default(),
@@ -2700,16 +2729,16 @@ mod tests {
                 String::from("custom_tool"),
             ),
         )];
+        preparation.system_skill_catalog = "fixture plugin catalog".into();
 
         let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
             .expect("runtime prompt layers should build");
 
-        assert!(
-            layers
-                .provider_layers
-                .tool_guidance
-                .contains("Use category 5 for project context.")
-        );
+        assert!(layers.provider_layers.tool_guidance.is_empty());
+        assert!(layers.dynamic_prompt_layers.tool_guidance.is_empty());
+        let footer = &layers.fixed_instruction_layers.system_footer;
+        assert!(footer.starts_with(&preparation.system_skill_catalog));
+        assert!(footer.ends_with(&serde_json::json!(preparation.workspace_path).to_string()));
     }
 
     /// Verifies request-scoped system hook blocks are appended to the system layer.
@@ -3047,6 +3076,7 @@ mod tests {
             prompt_skills: Vec::new(),
             prompt_skill_user_root: None,
             additional_developer_segments: Vec::new(),
+            system_skill_catalog: String::new(),
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             tool_request_rejection_reason: None,

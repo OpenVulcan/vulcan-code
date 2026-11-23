@@ -281,9 +281,9 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
         task_goal: Some(TaskGoalSnapshot::new("Inspect prompt system")),
         tool_catalog: ToolCatalogSnapshot::new(vec![
             ToolDescriptor {
-                id: String::from("shell_command"),
-                title: String::from("Shell"),
-                description: String::from("Run one shell command"),
+                id: String::from("spawn_agent"),
+                title: String::from("Spawn Agent"),
+                description: String::from("Create a child agent"),
                 help_text: None,
                 schema_fingerprint: Some(String::from("schema-1")),
             },
@@ -333,7 +333,7 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
         first
             .tool_metadata_segments
             .iter()
-            .any(|segment| segment.node_id == "tool_help_shell_command")
+            .any(|segment| segment.node_id == "tool_help_spawn_agent")
     );
     assert!(
         first
@@ -356,7 +356,7 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
     assert!(
         second
             .render_tool_metadata_text()
-            .contains("Use shell_command for concrete local inspection")
+            .contains("wait_agents_result")
     );
     assert!(
         second
@@ -376,7 +376,6 @@ fn child_agent_tools_receive_single_level_orchestration_help() {
         "spawn_agent",
         "agent_orchestration_info",
         "send_message",
-        "wait_agents_result",
         "interrupt_agent",
         "close_agent",
         "list_agents",
@@ -400,9 +399,7 @@ fn child_agent_tools_receive_single_level_orchestration_help() {
     }
     assert!(rendered_help.contains("Only the root conversation may delegate"));
     assert!(rendered_help.contains("child agents cannot create another orchestration level"));
-    assert!(rendered_help.contains(
-        "Use the shared inbox to receive agent questions, answers, notifications and task results"
-    ));
+    assert!(!rendered_help.contains("## Tool Help: `wait_agents_result`"));
     assert!(rendered_help.contains("Use this for diagnostics and status inspection"));
     assert!(rendered_help.contains("Closing is cleanup, not result collection"));
     for description_fragment in [
@@ -421,6 +418,24 @@ fn child_agent_tools_receive_single_level_orchestration_help() {
     }
     assert!(!rendered_help.contains("subtree"));
     assert!(!rendered_help.contains("descendant"));
+}
+
+/// Tool descriptions contain each selected supplement once and keep inline help precedence.
+/// 工具描述只包含一份补充说明，并保留内联帮助优先级。
+#[test]
+fn tool_description_resolves_one_supplement_and_elides_exact_duplicates() {
+    let engine = PromptComposerEngine::with_builtins();
+    let built_in = engine.tool_description("spawn_agent", "DESCRIPTION", None);
+    assert!(built_in.starts_with("DESCRIPTION\n\n"));
+    assert_ne!(built_in, "DESCRIPTION");
+    assert_eq!(
+        engine.tool_description("spawn_agent", "DESCRIPTION", Some("INLINE")),
+        "DESCRIPTION\n\nINLINE",
+    );
+    assert_eq!(
+        engine.tool_description("spawn_agent", "DESCRIPTION", Some("DESCRIPTION")),
+        "DESCRIPTION",
+    );
 }
 
 /// Verifies overlapping tool catalogs reuse per-tool cached segments across different bundles.

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-pub use vulcan_ai_contract::{APPLY_PATCH_LANGUAGE_NAME, APPLY_PATCH_LARK_GRAMMAR};
+pub use vulcan_ai_contract::APPLY_PATCH_LANGUAGE_NAME;
 use vulcan_host_tools::file_runtime::{MAX_EDIT_REQUEST_BYTES, execute_apply_patch};
 use vulcan_host_tools::text_document::normalize_line_endings;
 use vulcan_tools_manager::{
@@ -35,16 +35,13 @@ const APPLY_PATCH_PREVIEW_LINES: usize = 4096;
 /// 为每个模型路由构建原生 Apply Patch 工具。
 pub(crate) fn build_apply_patch_tool() -> Arc<NativeToolDefinition> {
     let description = format!(
-        "Apply one atomic multi-file change using the {APPLY_PATCH_LANGUAGE_NAME}. Use this tool for multiple edits, multiple files, file creation, deletion, or moves when you can produce the format exactly; use file_edit for a simple exact replacement or when unsure about this format. The input starts with `*** Begin Patch`, contains one or more `*** Add File: path`, `*** Delete File: path`, or `*** Update File: path` operations, and ends with `*** End Patch`. Add-file content lines start with `+`. Update hunks use an optional `@@ exact anchor line`, then prefix unchanged context with a space, deletions with `-`, and insertions with `+`. `*** Move to: destination` may follow an Update File header. Do not use Markdown fences or standard `---`/`+++` unified-diff headers. Minimal update example:\n*** Begin Patch\n*** Update File: src/example.rs\n@@ fn greet() {{\n-    println!(\"old\");\n+    println!(\"new\");\n*** End Patch\nAll files are preflighted before any write; a syntax, context, encoding, stale-file, or destination error writes nothing."
-    );
-    let help_text = format!(
-        "Use one `patch` string containing the complete {APPLY_PATCH_LANGUAGE_NAME}. Example:\n\n*** Begin Patch\n*** Update File: src/example.rs\n@@ fn greet() {{\n-    println!(\"old\");\n+    println!(\"new\");\n*** End Patch\n\nThe exact grammar is:\n```lark\n{APPLY_PATCH_LARK_GRAMMAR}\n```\nRelative paths resolve against the current workspace. Absolute paths and parent-relative paths may target any local filesystem location. The tool preserves existing text encoding, BOM, permissions, and untouched line endings."
+        "Apply one atomic multi-file change using the {APPLY_PATCH_LANGUAGE_NAME}. Use this tool for multiple edits, file creation, deletion, or moves. Use file_edit for a simple exact replacement. Read the apply-patch skill for examples and multi-file workflow. The tool preflights every file and preserves existing encoding, BOM, permissions, and untouched line endings."
     );
     let descriptor = NativeToolDescriptor {
         id: String::from(APPLY_PATCH_TOOL_ID),
         name: String::from("Apply Patch"),
         description,
-        help_text: Some(help_text),
+        help_text: None,
         ai_visible: true,
         available_in_plan: false,
     };
@@ -123,7 +120,7 @@ fn apply_patch_args_schema() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_EDIT_REQUEST_BYTES,
-                "description": format!("Required. A complete {APPLY_PATCH_LANGUAGE_NAME}. Start with `*** Begin Patch`, end with `*** End Patch`, use Add/Delete/Update File headers, prefix add lines with `+`, and prefix update context/delete/insert lines with space/`-`/`+`. An optional `@@ exact logical line` anchors the following hunk. The runtime applies all files atomically.")
+                "description": format!("Required. A complete {APPLY_PATCH_LANGUAGE_NAME} string without a Markdown fence or unified-diff headers. Start with `*** Begin Patch`, end with `*** End Patch`, use Add/Delete/Update File headers, and prefix add lines with `+` and update context/delete/insert lines with space/`-`/`+`. An optional `@@ exact logical line` anchors the following hunk. `*** Move to: destination` can follow an Update File header. Relative paths resolve against the workspace.")
             }
         },
         "required": ["patch"]

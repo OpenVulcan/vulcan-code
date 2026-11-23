@@ -21,10 +21,10 @@ fn baseline_with_text(text: &str) -> LockedBaselineProjection {
     .unwrap()
 }
 
-/// Checks that dispatch and preview both hide the file field of a persisted skill catalog.
-/// 验证派发与预览都隐藏持久化技能目录中的文件字段。
+/// Checks that a previously locked catalog is replaced by the current system catalog.
+/// 验证旧锁定目录由当前系统技能目录替代。
 #[test]
-fn provider_projects_legacy_skill_catalog_without_file_paths() {
+fn provider_projects_current_skill_catalog_instead_of_saved_catalog() {
     // Use the historical wire format and a path that can be checked independently of the wording.
     // 使用历史线路格式，并通过样例路径独立于文案验证结果。
     let legacy = concat!(
@@ -50,14 +50,19 @@ fn provider_projects_legacy_skill_catalog_without_file_paths() {
     .unwrap();
     // Both readers use this baseline, which still contains the original bytes.
     // 两个读取方使用同一基线，基线仍持有原始字节。
-    let fixed = ProviderPromptLayers::default();
+    let fixed = ProviderPromptLayers {
+        system_footer: "current-skill-catalog".into(),
+        ..Default::default()
+    };
     let mut messages = Vec::new();
     let mut prompt_parts = Vec::new();
     append_provider_request_prefix(&fixed, &baseline, &mut messages, &mut prompt_parts).unwrap();
     let (preview, _) = preview_request_prefix(&fixed, &baseline).unwrap();
 
     assert_eq!(preview, messages);
-    assert!(prompt_parts.iter().any(|text| text.contains("fixture")));
+    assert!(prompt_parts.iter().any(|text| text == &fixed.system_footer));
+    assert!(prompt_parts.iter().all(|text| !text.contains("fixture")));
+    assert_eq!(messages.last().unwrap().role, MessageRole::System);
     assert!(
         prompt_parts
             .iter()
@@ -69,6 +74,116 @@ fn provider_projects_legacy_skill_catalog_without_file_paths() {
             .iter()
             .any(|source| source.content == legacy)
     );
+}
+
+/// Exercises first dispatch and cold-reloaded history through the physical permit and Chat encoder.
+/// 通过物理许可及 Chat 编码器验证首次派发与冷加载历史。
+#[tokio::test]
+async fn new_and_reloaded_sessions_dispatch_without_standalone_tool_guidance() {
+    use vulcan_session_core::v1::dynamic_context::{
+        DYNAMIC_CONTEXT_DEVELOPER_KEY, DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY, DynamicContextInput,
+    };
+    use vulcan_session_core::v1::event::SystemContextScope;
+
+    for legacy in [false, true] {
+        let (_directory, handle) = published_stored_open_turn();
+        let handle = if legacy {
+            install_baseline(&handle, baseline_with_text(HOST_MESSAGE_GUIDANCE));
+            // Store the retired producer and one mixed historical developer update before reloading.
+            // 冷加载前保存已退役生产者及一条混合历史开发者更新。
+            handle.mutate_durable(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::MetadataChanged,
+                |document| document.synchronize_dynamic_context(vec![
+                    DynamicContextInput::new(DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY, Some("retired-help-fixture".into()), SystemContextScope::Session, None),
+                    DynamicContextInput::new(DYNAMIC_CONTEXT_DEVELOPER_KEY, Some(concat!(
+                        "For an on-demand action, read its enabled skill with `skill` and use `tool_call` with the exact skill, action and JSON arguments it provides. This is the current route for plugin actions, implicit LuaSkills and the session MCP connection manager.",
+                        "\n\nWhen the user asks about or wants to use the browser, call `skill` with {\"name\":\"vulcan-browser:browser-workflow\"} first. Use `tool_call` with the short actions it lists, even if earlier messages show direct browser tool calls. The host connects to Playwright automatically when needed. An empty session MCP list says nothing about Vulcan Browser availability; do not use `mcp_connect` or `mcp_tools` to find it.",
+                        "\n\nkeep-unrelated-developer-fixture",
+                    ).into()), SystemContextScope::Session, None),
+                ], 5),
+            ).unwrap();
+            let locator = handle.storage_locator().unwrap();
+            let loaded =
+                vulcan_workspace_store::workspace_store::load_session_v1_full(&locator).unwrap();
+            SessionHandle::new(handle.session_id(), locator, loaded.document)
+        } else {
+            handle
+        };
+        let state =
+            crate::tests::test_support::test_service_state_with_parent_session(SessionId::new_v4());
+        state
+            .session_runtime_registry
+            .register(Arc::clone(&handle))
+            .unwrap();
+        let state = Arc::new(std::sync::Mutex::new(state));
+        let mut candidate = candidate_for(&handle);
+        candidate.fixed_instruction_layers.system_footer =
+            "<skills_instructions>- test-browser:workflow</skills_instructions>\n\nCurrent workspace: \"/workspace-fixture\"".into();
+        candidate.dynamic_prompt_layers.runtime_context =
+            "Current workspace: /workspace-fixture\nCurrent execution mode: Work".into();
+        let facts = ProviderV1RequestFacts {
+            request: ApiRequestSnapshot::new("provider-1", "model-1"),
+            prepared_at_ms: 10,
+            ..request_facts()
+        };
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        let PreparedPhysicalApi::SessionV1 {
+            exact_request,
+            request_context_prefix,
+            ..
+        } = sink
+            .prepare_request(&state, facts, candidate)
+            .await
+            .unwrap()
+        else {
+            panic!("fixture must enter the physical dispatch path");
+        };
+        let request = vulcan_llm_core::ProtocolRegistry::first_batch()
+            .unwrap()
+            .require(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID)
+            .unwrap()
+            .encode(&exact_request)
+            .unwrap();
+        let messages = request.body["messages"].as_array().unwrap();
+        let first_user = messages
+            .iter()
+            .position(|message| message["role"] == "user")
+            .unwrap();
+        let system_catalog = messages
+            .iter()
+            .position(|message| {
+                message["content"]
+                    .as_str()
+                    .is_some_and(|body| body.contains("test-browser:workflow"))
+            })
+            .unwrap();
+        assert!(system_catalog < first_user);
+        assert_eq!(messages[system_catalog]["role"], "system");
+        assert!(
+            exact_request
+                .messages
+                .iter()
+                .rposition(|message| message.role == MessageRole::System)
+                .is_some_and(|index| index == system_catalog)
+        );
+        let body = request.body.to_string();
+        assert_eq!(body.matches("/workspace-fixture").count(), 1);
+        assert!(!body.contains(DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY));
+        assert!(!body.contains("retired-help-fixture"));
+        assert!(!body.contains("vulcan-browser:browser-workflow"));
+        assert_eq!(body.contains("keep-unrelated-developer-fixture"), legacy);
+        assert!(messages.iter().skip(first_user + 1).any(|message| {
+            message["role"] == "user"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|body| body.contains("Current execution mode: Work"))
+        }));
+        assert!(!request_context_prefix.is_empty());
+    }
 }
 
 /// Builds a valid candidate for `handle` through the real physical reconstruction; dispatches nothing.

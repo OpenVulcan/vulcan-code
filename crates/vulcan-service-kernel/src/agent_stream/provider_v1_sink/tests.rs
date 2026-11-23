@@ -740,6 +740,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
             developer: String::from("dynamic-developer"),
             tool_guidance: String::from("dynamic-tool-guidance"),
             runtime_context: String::from("dynamic-runtime-context"),
+            ..Default::default()
         },
         fixed_instruction_layers: ProviderPromptLayers {
             system: String::from("fixed-base-system\n\nfixed-agent-system"),
@@ -4435,6 +4436,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
         developer: String::from("local-summary-developer"),
         tool_guidance: String::from("local-summary-tools"),
         runtime_context: String::from("local-summary-context"),
+        ..Default::default()
     };
     summary_candidate.request_snapshot.prompt =
         String::from("Summarize <history> & preserve pending questions.");

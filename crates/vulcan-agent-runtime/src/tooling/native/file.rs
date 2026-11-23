@@ -27,9 +27,7 @@ pub(crate) fn build_file_tool() -> Arc<NativeToolDefinition> {
         description: String::from(
             "List directory entries, inspect metadata, move one path, or delete one regular file. Use file_read to read text, file_write to create or replace complete text, file_edit for localized exact replacement, and apply_patch for patch-shaped edits. This tool does not search file contents and does not recursively delete directories.",
         ),
-        help_text: Some(String::from(
-            "Provide exactly one path. list performs bounded directory discovery; stat returns metadata; delete removes one regular file; move renames one path to a destination that must not exist. Action-specific fields are rejected when used with another action. read and write are not accepted actions; invoke file_read or file_write instead.",
-        )),
+        help_text: None,
         ai_visible: true,
         available_in_plan: true,
     };

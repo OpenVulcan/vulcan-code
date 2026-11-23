@@ -33,9 +33,20 @@ pub(crate) fn resolved_tool_definition_to_provider_tool_definition(
 ) -> ProviderToolDefinition {
     ProviderToolDefinition {
         name: definition.descriptor.id.clone(),
-        description: definition.descriptor.description.clone(),
+        description: resolved_tool_description(definition),
         source_kind: tool_source_key(definition.descriptor.source).to_string(),
         source_label: tool_source_label(definition.descriptor.source).to_string(),
         parameters: definition.parameters_schema.clone(),
     }
+}
+
+/// Returns the single model-visible description shared by wire and request preview.
+/// 返回线协议与请求预览共用的唯一模型可见工具描述。
+pub(crate) fn resolved_tool_description(definition: &ResolvedToolDefinition) -> String {
+    let descriptor = &definition.descriptor;
+    super::prompt_composer_runtime::runtime_prompt_composer_engine().tool_description(
+        &descriptor.id,
+        &descriptor.description,
+        descriptor.help_text.as_deref(),
+    )
 }

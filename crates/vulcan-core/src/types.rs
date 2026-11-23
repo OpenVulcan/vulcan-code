@@ -1215,6 +1215,10 @@ pub struct ProviderPromptLayers {
     /// 系统级指令。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub system: String,
+    /// Live skills and workspace context placed after the locked system sources.
+    /// 放在锁定系统来源之后的实时技能与工作区上下文。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub system_footer: String,
     /// Developer-level instructions.
     /// 开发者级指令。
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1243,6 +1247,7 @@ impl ProviderPromptLayers {
     /// 返回所有提示词层是否均为空。
     pub fn is_empty(&self) -> bool {
         self.system.trim().is_empty()
+            && self.system_footer.trim().is_empty()
             && self.developer.trim().is_empty()
             && self.tool_guidance.trim().is_empty()
             && self.runtime_context.trim().is_empty()
@@ -1253,6 +1258,7 @@ impl ProviderPromptLayers {
     pub fn render_fallback_system_prompt(&self) -> String {
         let mut sections = Vec::new();
         push_prompt_layer_section(&mut sections, None, &self.system);
+        push_prompt_layer_section(&mut sections, None, &self.system_footer);
         push_prompt_layer_section(
             &mut sections,
             Some("Developer Instructions"),

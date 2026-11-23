@@ -21,11 +21,9 @@ pub(crate) fn build_file_read_tool() -> Arc<NativeToolDefinition> {
         id: String::from(FILE_READ_TOOL_ID),
         name: String::from("File Read"),
         description: String::from(
-            "Read text from one file, optionally limited to a logical line range. Returns Markdown with real source line prefixes such as L12:. This tool never writes files. Use file for directory listing or metadata, file_edit for localized changes, and file_write for complete text replacement.",
+            "Read text from one file, optionally limited to a logical line range. Returns Markdown with real source line prefixes such as L12:. Confirm unverified source encoding before editing. Use file for directory listing or metadata, file_edit for localized changes, and file_write for complete text replacement.",
         ),
-        help_text: Some(String::from(
-            "Provide path without action. Truncated reads include the next start_line. Optional encoding selects source decoding and validates byte sequences and BOM compatibility; it is a declared codec, not independent proof of the original encoding. Unverified automatic decoding must be confirmed before editing.",
-        )),
+        help_text: None,
         ai_visible: true,
         available_in_plan: true,
     };
@@ -55,7 +53,7 @@ fn file_read_args_schema() -> Value {
             },
             "encoding": {
                 "type": "string", "minLength": 1,
-                "description": "Optional source decoding, such as utf-8, utf-16le, gbk, big5, or shift_jis. Validates BOM compatibility and byte sequences. Omit for automatic detection."
+                "description": "Optional declared source codec, such as utf-8, utf-16le, gbk, big5, or shift_jis. Validates BOM compatibility and byte sequences. Omit for automatic detection."
             }
         },
         "required": ["path"]

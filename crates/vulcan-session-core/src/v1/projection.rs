@@ -304,20 +304,23 @@ fn render_subagent_result_message(
 fn project_context_event(
     event: &ConversationEvent,
     context: &SystemContextEvent,
-) -> Result<SourcedProjectedItem, DomainError> {
+    fingerprint: bool,
+) -> Result<Option<SourcedProjectedItem>, DomainError> {
     validate_system_context_event(context)?;
     let kind = match context.operation {
         SystemContextOperation::Upsert => HostMessageKind::ContextUpdate,
         SystemContextOperation::Remove => HostMessageKind::ContextExpired,
     };
-    let text = render_context_message(
-        event.seq,
-        &context.context_key,
-        context.scope,
-        kind,
-        &context.content,
-    )?;
-    Ok(SourcedProjectedItem {
+    let body = if fingerprint {
+        Some(std::borrow::Cow::Borrowed(context.content.as_str()))
+    } else {
+        super::dynamic_context::provider_context_body(&context.context_key, &context.content)
+    };
+    let Some(body) = body else {
+        return Ok(None);
+    };
+    let text = render_context_message(event.seq, &context.context_key, context.scope, kind, &body)?;
+    Ok(Some(SourcedProjectedItem {
         user_prompt_parameters: None,
         source_from_seq: event.seq,
         source_to_seq: event.seq,
@@ -325,22 +328,27 @@ fn project_context_event(
             text,
             resource_ids: Vec::new(),
         },
-    })
+    }))
 }
 
 /// Projects one still-active compaction backfill into a deterministic User update.
 /// 将一条仍然有效的压缩回填投影为确定性的 User 更新。
 fn project_backfill_context(
     state: &ActiveSystemState,
-) -> Result<SourcedProjectedItem, DomainError> {
+) -> Result<Option<SourcedProjectedItem>, DomainError> {
+    let Some(body) =
+        super::dynamic_context::provider_context_body(&state.context_key, &state.content)
+    else {
+        return Ok(None);
+    };
     let text = render_context_message(
         state.source_seq,
         &state.context_key,
         state.scope,
         HostMessageKind::ContextUpdate,
-        &state.content,
+        &body,
     )?;
-    Ok(SourcedProjectedItem {
+    Ok(Some(SourcedProjectedItem {
         user_prompt_parameters: None,
         source_from_seq: state.source_seq,
         source_to_seq: state.source_seq,
@@ -348,7 +356,7 @@ fn project_backfill_context(
             text,
             resource_ids: Vec::new(),
         },
-    })
+    }))
 }
 
 /// Rebuilds the exact active system state at one inclusive seq boundary.
@@ -662,7 +670,7 @@ fn project_items_with_policy(
     backfill_states.sort_by_key(|state| state.source_seq.value());
     let items: Vec<SourcedProjectedItem> = backfill_states
         .iter()
-        .map(project_backfill_context)
+        .filter_map(|state| project_backfill_context(state).transpose())
         .collect::<Result<_, _>>()?;
     let mut fold = ProjectionFold {
         boundary,
@@ -749,7 +757,10 @@ impl ProjectionFold<'_> {
                 }) {
                     return Ok(());
                 }
-                let projected = project_context_event(event, context)?;
+                let Some(projected) = project_context_event(event, context, self.fingerprint)?
+                else {
+                    return Ok(());
+                };
                 if self.pending.is_empty() {
                     self.items.push(projected);
                 } else {
@@ -2074,6 +2085,44 @@ mod tests_projection {
         // 边界前事件被过滤：没有回追时什么都不出现。
         let empty_items = project_document(&document, Some(boundary), &[]).unwrap();
         assert_eq!(empty_items.len(), 0);
+    }
+
+    /// A retired tool instruction is never backfilled, even when it was active at the compaction frontier.
+    /// 即使退役的工具指引在压缩前沿仍生效，也不会被回填。
+    #[test]
+    fn retired_tool_guidance_is_not_backfilled_after_compaction() {
+        use crate::v1::dynamic_context::DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY;
+
+        let mut document = SessionDocument::new("retired-help", "project", "title", 1);
+        document
+            .append_system_context(
+                None,
+                DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY,
+                SystemContextOperation::Upsert,
+                SystemContextScope::Session,
+                None,
+                None,
+                "retired-help-fixture",
+                2,
+            )
+            .unwrap();
+        document
+            .submit_root_input_fixture(
+                "retired-help-fixture belongs to the user here",
+                Vec::new(),
+                3,
+            )
+            .unwrap();
+        let retained = document.events().last().unwrap().seq();
+        let items = project_context_generation_items_with_sources(
+            document.events(),
+            retained,
+            Some(retained),
+        )
+        .unwrap();
+        assert!(items.iter().all(|item| item.source_from_seq >= retained));
+        assert!(items.iter().any(|item| matches!(&item.item,
+            ProjectedItem::UserInput { text, .. } if text.starts_with("retired-help-fixture"))));
     }
 
     /// TTL consumes once per logical Turn, survives compaction backfill, and expires deterministically.

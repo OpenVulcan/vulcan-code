@@ -15,6 +15,82 @@ pub const DYNAMIC_CONTEXT_DEVELOPER_KEY: &str = "dynamic.developer";
 /// The stable key for dynamic tool guidance content.
 /// 动态工具指导内容使用的稳定键。
 pub const DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY: &str = "dynamic.tool_guidance";
+
+/// Leading label of the workspace line in durable runtime context.
+/// 可靠运行时上下文中工作区行的前缀。
+pub const WORKSPACE_CONTEXT_PREFIX: &str = "Current workspace: ";
+/// Exact label separating the historical workspace and execution-mode fields.
+/// 隔开历史工作区和执行模式字段的精确标签。
+pub const EXECUTION_MODE_CONTEXT_PREFIX: &str = "\nCurrent execution mode: ";
+
+/// Decodes one durable environment segment for workspace tracking and request projection.
+/// 解码单个可靠环境片段，供工作区追踪和请求投影使用。
+pub fn split_workspace_environment_context(segment: &str) -> Option<(&str, &str)> {
+    let (workspace, mode) = segment
+        .strip_prefix(WORKSPACE_CONTEXT_PREFIX)?
+        .rsplit_once(EXECUTION_MODE_CONTEXT_PREFIX)?;
+    (!mode.is_empty() && !mode.contains('\n')).then_some((workspace, mode))
+}
+
+/// Projects current context text while leaving stored events and replay fingerprints intact.
+/// 投影当前上下文正文，同时保留已存事件与重放指纹。
+pub(crate) fn provider_context_body<'a>(
+    key: &str,
+    body: &'a str,
+) -> Option<std::borrow::Cow<'a, str>> {
+    match key {
+        DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY => None,
+        DYNAMIC_CONTEXT_RUNTIME_KEY => {
+            let mut changed = false;
+            let content = body
+                .split("\n\n")
+                .map(|segment| {
+                    if let Some((_, mode)) = split_workspace_environment_context(segment) {
+                        changed = true;
+                        format!("{}{mode}", EXECUTION_MODE_CONTEXT_PREFIX.trim_start())
+                    } else {
+                        segment.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            Some(if changed {
+                std::borrow::Cow::Owned(content)
+            } else {
+                std::borrow::Cow::Borrowed(body)
+            })
+        }
+        DYNAMIC_CONTEXT_DEVELOPER_KEY => {
+            let segments = body
+                .split("\n\n")
+                .filter(|segment| !retired_discovery_segment(segment))
+                .collect::<Vec<_>>();
+            (!segments.is_empty()).then(|| std::borrow::Cow::Owned(segments.join("\n\n")))
+        }
+        _ => Some(std::borrow::Cow::Borrowed(body)),
+    }
+}
+
+/// Recognizes prior host-owned discovery paragraphs by the grammar their producers wrote.
+/// 按旧生产者写入的格式识别此前由宿主生成的发现说明段落。
+fn retired_discovery_segment(segment: &str) -> bool {
+    const SKILL_ROUTING: &str = "For an on-demand action, read its enabled skill with `skill` and use `tool_call` with the exact skill, action and JSON arguments it provides. This is the current route for plugin actions, implicit LuaSkills and the session MCP connection manager.";
+    const BROWSER_PREFIX: &str =
+        "When the user asks about or wants to use the browser, call `skill` with ";
+    const BROWSER_SUFFIX: &str = " first. Use `tool_call` with the short actions it lists, even if earlier messages show direct browser tool calls. The host connects to Playwright automatically when needed. An empty session MCP list says nothing about Vulcan Browser availability; do not use `mcp_connect` or `mcp_tools` to find it.";
+    const MCP_PREFIX: &str = "MCP servers available on demand in this project: ";
+    const MCP_SUFFIX: &str = ". For servers marked mentioned_by_user, inspect their tools for this task. Otherwise use usage_hint to decide relevance. Use `mcp_tools` with the exact `server_name` to list only that server's tools, then add `tool` to read one schema. For duplicate names, use `server_id`. Call the tool with `mcp_call` using the returned `server_id` and exact `tool` name.";
+    segment == SKILL_ROUTING
+        || segment
+            .strip_prefix(BROWSER_PREFIX)
+            .and_then(|body| body.strip_suffix(BROWSER_SUFFIX))
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .is_some_and(|value| value.get("name").is_some_and(serde_json::Value::is_string))
+        || segment
+            .strip_prefix(MCP_PREFIX)
+            .and_then(|body| body.strip_suffix(MCP_SUFFIX))
+            .is_some_and(|json| serde_json::from_str::<Vec<serde_json::Value>>(json).is_ok())
+}
 /// The stable key for dynamic runtime/user-context content.
 /// 动态运行时/用户上下文内容使用的稳定键。
 pub const DYNAMIC_CONTEXT_RUNTIME_KEY: &str = "dynamic.runtime_context";

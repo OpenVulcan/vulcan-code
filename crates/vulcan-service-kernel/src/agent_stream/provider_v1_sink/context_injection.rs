@@ -6,8 +6,7 @@ use vulcan_core::types::ProviderContextInjection;
 use vulcan_core::types::{ConversationMessage, ConversationPayload, ConversationSnapshot};
 use vulcan_session_core::v1::dynamic_context::{
     DYNAMIC_CONTEXT_DEVELOPER_KEY, DYNAMIC_CONTEXT_PERSISTENT_KEY, DYNAMIC_CONTEXT_RUNTIME_KEY,
-    DYNAMIC_CONTEXT_SYSTEM_KEY, DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY, DynamicContextInput,
-    DynamicContextOccurrence,
+    DYNAMIC_CONTEXT_SYSTEM_KEY, DynamicContextInput, DynamicContextOccurrence,
 };
 use vulcan_session_core::v1::event::SystemContextScope;
 
@@ -516,12 +515,6 @@ pub(super) fn dynamic_context_inputs(
             None,
         ),
         (
-            DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY,
-            normalized_raw_content(&layers.tool_guidance),
-            SystemContextScope::Session,
-            None,
-        ),
-        (
             DYNAMIC_CONTEXT_RUNTIME_KEY,
             normalized_raw_content(&layers.runtime_context),
             SystemContextScope::Session,
@@ -842,6 +835,7 @@ mod tests {
             developer: String::from("developer"),
             tool_guidance: String::from("tools"),
             runtime_context: String::from("runtime"),
+            ..Default::default()
         };
         let injection = ProviderContextInjection {
             persistent_blocks: vec![String::from("profile"), String::from(" rules ")],
@@ -864,21 +858,28 @@ mod tests {
 
         let inputs = dynamic_context_inputs(&layers, Some(&injection)).expect("typed inputs");
 
-        assert_eq!(inputs.len(), 6);
-        assert_eq!(inputs[0].producer_key, DYNAMIC_CONTEXT_SYSTEM_KEY);
-        assert_eq!(inputs[0].raw_content.as_deref(), Some("system"));
-        assert_eq!(inputs[1].producer_key, DYNAMIC_CONTEXT_DEVELOPER_KEY);
-        assert_eq!(inputs[2].producer_key, DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY);
-        assert_eq!(inputs[3].producer_key, DYNAMIC_CONTEXT_RUNTIME_KEY);
-        assert_eq!(inputs[4].producer_key, DYNAMIC_CONTEXT_PERSISTENT_KEY);
-        assert_eq!(inputs[4].raw_content.as_deref(), Some("profile\n\nrules"));
-        assert_eq!(inputs[5].producer_key, "context_injection:profile:hash-1");
-        assert_eq!(inputs[5].raw_content.as_deref(), Some("transient"));
-        assert!(inputs[..5].iter().all(|input| {
-            input.scope == SystemContextScope::Session && input.ttl_turns.is_none()
-        }));
-        assert_eq!(inputs[5].scope, SystemContextScope::Turn);
-        assert_eq!(inputs[5].ttl_turns, Some(1));
+        assert_eq!(inputs.len(), 5);
+        for (key, content) in [
+            (DYNAMIC_CONTEXT_SYSTEM_KEY, "system"),
+            (DYNAMIC_CONTEXT_DEVELOPER_KEY, "developer"),
+            (DYNAMIC_CONTEXT_RUNTIME_KEY, "runtime"),
+            (DYNAMIC_CONTEXT_PERSISTENT_KEY, "profile\n\nrules"),
+        ] {
+            let input = inputs
+                .iter()
+                .find(|input| input.producer_key == key)
+                .unwrap();
+            assert_eq!(input.raw_content.as_deref(), Some(content));
+            assert_eq!(input.scope, SystemContextScope::Session);
+            assert_eq!(input.ttl_turns, None);
+        }
+        let transient = inputs
+            .iter()
+            .find(|input| input.producer_key == "context_injection:profile:hash-1")
+            .unwrap();
+        assert_eq!(transient.raw_content.as_deref(), Some("transient"));
+        assert_eq!(transient.scope, SystemContextScope::Turn);
+        assert_eq!(transient.ttl_turns, Some(1));
     }
 
     /// Preserves one typed expiration marker as a raw durable input with a stable producer key.

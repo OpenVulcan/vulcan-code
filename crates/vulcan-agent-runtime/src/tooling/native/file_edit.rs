@@ -38,11 +38,9 @@ pub(crate) fn build_file_edit_tool() -> Arc<NativeToolDefinition> {
         id: String::from(FILE_EDIT_TOOL_ID),
         name: String::from("File Edit"),
         description: String::from(
-            "Replace one exact text substring in one existing file. Provide path, old_string, and new_string. Line-ending spelling is normalized for matching, so CRLF, LFCR, CR, and LF are equivalent logical boundaries. By default old_string must occur exactly once; set replace_all=true only when every non-overlapping occurrence should change. The file's encoding, BOM, untouched line endings, and permissions are preserved, and no bytes are written when matching or encoding fails.",
+            "Replace exact text in one existing file. Read the file first and confirm unverified encoding with file_read. The tool preserves encoding, BOM, untouched line endings, and permissions. Use file_write for a complete replacement, file for move/delete, and apply_patch for patch-shaped or multi-file changes.",
         ),
-        help_text: Some(String::from(
-            "Read the current file first, then copy a distinctive exact old_string with enough surrounding text to make it unique. new_string is the complete replacement for that substring and may be empty. If automatic encoding detection is unverified, confirm it with file_read using encoding and pass that encoding here. Do not send line-number ranges, arrays, anchors, operation IDs, dry_run, or expected_version. Use file_write for complete text replacement, file for move/delete and apply_patch for patch-shaped or multi-file edits.",
-        )),
+        help_text: None,
         ai_visible: true,
         available_in_plan: false,
     };

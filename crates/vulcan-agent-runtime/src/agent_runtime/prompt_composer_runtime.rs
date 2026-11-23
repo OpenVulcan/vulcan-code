@@ -856,7 +856,7 @@ mod tests {
                     id: String::from("shell_command"),
                     title: String::from("Shell Command"),
                     description: String::from("Run a shell command"),
-                    help_text: None,
+                    help_text: Some(String::from("fixture tooling instructions")),
                     schema_fingerprint: Some(String::from("schema-1")),
                 }]),
                 subagent: None,
@@ -909,11 +909,7 @@ mod tests {
                 .iter()
                 .any(|segment| segment.source_label.contains("test-provider.txt"))
         );
-        assert!(
-            report
-                .markdown
-                .contains("Use shell_command for concrete local inspection")
-        );
+        assert!(report.markdown.contains("fixture tooling instructions"));
     }
 
     /// Verifies prompt report previews compact whitespace and keep the existing truncation rule.

@@ -22,11 +22,9 @@ pub(crate) fn build_file_write_tool() -> Arc<NativeToolDefinition> {
         id: String::from(FILE_WRITE_TOOL_ID),
         name: String::from("File Write"),
         description: String::from(
-            "Create one text file or overwrite an existing file with the complete supplied content. Existing content is replaced in full, not appended or locally edited. For localized changes to an existing file, prefer file_edit or apply_patch. Preserves existing encoding, BOM, preferred line endings and permissions unless explicitly overridden.",
+            "Create one text file or replace its entire content. Read an existing file before overwriting it. Use file_edit or apply_patch for partial changes and file for moves or deletion. Preserves existing encoding, BOM, preferred line endings, and permissions unless explicitly overridden.",
         ),
-        help_text: Some(String::from(
-            "Provide path and the complete content without action. Prefer emitting path before content so progress can show the filename immediately. Empty content creates or truncates to an empty file. Read an existing file with file_read before replacing it. source_encoding confirms existing source decoding; encoding independently selects the output encoding. Uncertain source detection blocks writes until source_encoding is provided. Omit encoding to preserve the confirmed source encoding. For new files, use encoding only; the default is UTF-8 with LF. Use file for move or delete.",
-        )),
+        help_text: None,
         ai_visible: true,
         available_in_plan: false,
     };
@@ -59,7 +57,7 @@ fn file_write_args_schema() -> Value {
             },
             "source_encoding": {
                 "type": "string", "minLength": 1,
-                "description": "Existing files only. Confirm source decoding when automatic detection is uncertain or the file uses BOM-less Unicode. encoding independently selects the output encoding."
+                "description": "Existing files only. Required when source decoding is uncertain or the file uses BOM-less Unicode. encoding independently selects the output encoding."
             },
             "bom": {
                 "type": "string", "enum": ["preserve", "present", "absent"], "default": "preserve",
