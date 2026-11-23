@@ -64,7 +64,7 @@ mod compaction_continuation;
 mod request_context_preview;
 use request_context_preview::assemble_sourced_request_history;
 pub(crate) use request_context_preview::{
-    latest_context_assistant_response, preview_session_tool_definitions, simulate_request_context,
+    latest_context_assistant_response, preview_session_tools, simulate_request_context,
 };
 mod lifetime_usage;
 mod request_preparation;

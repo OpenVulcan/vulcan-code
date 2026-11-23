@@ -1188,14 +1188,27 @@ fn execution_prompt_preview(request: &ExecutionPreparationRequest) -> String {
 #[cfg(test)]
 #[path = "execution_preparation/tests.rs"]
 pub(in crate::agent_runtime) mod tests;
-/// Resolves model-visible host tool definitions for a local inspection.
-/// 为本地检查解析模型可见的宿主工具定义。
+
+/// Holds tool schemas and the system skill catalog from one read-only request preparation.
+/// 保存同一次只读请求准备产生的工具 Schema 和系统技能目录。
+#[derive(Debug, Default)]
+pub struct RequestToolPreview {
+    /// Model-visible function definitions used by the local request inspector.
+    /// 本地请求检查器使用的模型可见函数定义。
+    pub tool_definitions: Vec<serde_json::Value>,
+    /// Discovery text for the enabled skills and plugins in the same request.
+    /// 同一请求中已启用技能与插件的发现说明。
+    pub system_skill_catalog: String,
+}
+
+/// Resolves model-visible host tools and their discovery catalog for local inspection.
+/// 为本地检查解析模型可见的宿主工具与发现目录。
 ///
 /// The caller supplies the current foundation, configuration and session settings. A pending
 /// model selection resolves against the current catalog without using the previous route lease.
 /// 调用方提供当前运行基础、配置和会话设置。待生效模型从当前目录解析，不使用旧路由租约。
-/// Returns the normal host tool names, descriptions and schemas, or a preparation error.
-/// 返回常规宿主工具名称、说明和 Schema，或准备错误。
+/// Returns the prepared tool schemas and catalog, or a preparation error.
+/// 返回已准备的工具 Schema 与目录，或准备错误。
 pub fn preview_request_tools(
     mut foundation: RuntimeFoundation,
     public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
@@ -1204,7 +1217,7 @@ pub fn preview_request_tools(
     mut request: ExecutionPreparationRequest,
     pending_model: bool,
     child: Option<&vulcan_session_core::v1::child_execution::ChildExecutionProfile>,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<RequestToolPreview, String> {
     use crate::agent_runtime::provider::{
         provider_blueprint_from_selection, resolve_unleased_public_ai_selection,
         validate_session_lease_target,
@@ -1268,16 +1281,19 @@ pub fn preview_request_tools(
         &request.execution_mode,
         foundation.task_runtime(),
     );
-    Ok(tools
-        .provider_tool_definitions
-        .into_iter()
-        .map(|tool| {
-            serde_json::json!({
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
+    Ok(RequestToolPreview {
+        tool_definitions: tools
+            .provider_tool_definitions
+            .into_iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                })
             })
-        })
-        .collect())
+            .collect(),
+        system_skill_catalog: prepared.preparation.system_skill_catalog,
+    })
 }

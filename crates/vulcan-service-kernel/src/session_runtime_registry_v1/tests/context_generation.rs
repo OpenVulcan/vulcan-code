@@ -2,6 +2,7 @@
 //! 可靠上下文代次与摘要规划使用不同的指令前沿。
 
 use super::*;
+use vulcan_agent_runtime::agent_runtime::execution_preparation::RequestToolPreview;
 use vulcan_session_core::v1::event::{SystemContextOperation, SystemContextScope};
 
 /// Publishes one typed memory update or removal through the real durable owner.
@@ -167,7 +168,7 @@ async fn economy_cold_simulation_matches_provider_after_batch_retirement() {
         &locator,
         temporary.path().to_str().unwrap(),
         &config,
-        |_| Ok(Vec::new()),
+        |_| Ok(RequestToolPreview::default()),
     )
     .unwrap();
     let rows = preview["nodes"].to_string();
@@ -176,10 +177,10 @@ async fn economy_cold_simulation_matches_provider_after_batch_retirement() {
     );
 }
 
-/// Verifies an unused session previews current project rules in the initial system prompt without dispatch.
-/// 验证未使用的会话无需派发即可在初始系统提示词中预览当前项目规则。
+/// Verifies an unused session previews project rules and the current discovery catalog without dispatch.
+/// 验证未使用的会话无需派发即可预览项目规则与当前发现目录。
 #[test]
-fn request_context_simulation_projects_fresh_project_rules() {
+fn request_context_simulation_projects_project_rules_and_current_skill_catalog() {
     // Store the project and session in the same isolated fixture root.
     // 在同一个隔离夹具根目录保存项目和会话。
     let temporary = tempfile::tempdir().unwrap();
@@ -198,29 +199,33 @@ fn request_context_simulation_projects_fresh_project_rules() {
             &Default::default(),
             &Default::default(),
         );
-    let preview = simulate_request_context(
-        &locator,
-        temporary.path().to_str().unwrap(),
-        &agent_config,
-        |_| {
-            Ok(vec![serde_json::json!({
+    // Supply a resolved plugin catalog beside the function schema from the same preparation.
+    // 将已解析的插件目录和同次准备产生的函数 Schema 一起提供。
+    let workspace = temporary.path().to_str().unwrap();
+    let quoted_workspace = serde_json::json!(workspace).to_string();
+    let plugin_skill = "fixture-plugin:review";
+    let preview = simulate_request_context(&locator, workspace, &agent_config, |_| {
+        Ok(RequestToolPreview {
+            tool_definitions: vec![serde_json::json!({
                 "type": "function",
                 "name": "fixture_tool",
                 "parameters": {"type": "object"},
-            })])
-        },
-    )
+            })],
+            system_skill_catalog: format!(
+                "<skills_instructions>\n- {plugin_skill}: Review fixtures.\n</skills_instructions>"
+            ),
+        })
+    })
     .unwrap();
-    assert!(preview["nodes"].as_array().unwrap().iter().any(|row| {
+    let rows = preview["nodes"].as_array().unwrap();
+    assert!(rows.iter().any(|row| {
         row["field"] == "tools"
             && serde_json::from_str::<serde_json::Value>(row["content"].as_str().unwrap())
                 .is_ok_and(|tool| {
                     tool["name"] == "fixture_tool" && tool["parameters"]["type"] == "object"
                 })
     }));
-    let rules = preview["nodes"]
-        .as_array()
-        .unwrap()
+    let rules = rows
         .iter()
         .find(|row| {
             row["text"]
@@ -229,6 +234,23 @@ fn request_context_simulation_projects_fresh_project_rules() {
         })
         .expect("the local AGENTS.md is previewed");
     assert_eq!(rules["role"], "system");
+    // The live catalog shares one system footer with the exact workspace path.
+    // 实时目录与准确的工作区路径共用一条系统尾部消息。
+    let footer = rows
+        .iter()
+        .find(|row| {
+            row["text"]
+                .as_str()
+                .is_some_and(|body| body.contains(plugin_skill))
+        })
+        .expect("the resolved plugin skill is visible in the system preview");
+    assert_eq!(footer["role"], "system");
+    assert!(
+        footer["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(&quoted_workspace)
+    );
     assert!(
         preview["promptOrigins"]
             .as_array()
@@ -239,6 +261,20 @@ fn request_context_simulation_projects_fresh_project_rules() {
             })
     );
     assert!(preview.get("dispatch").is_none());
+    // Route failure keeps the workspace inspectable without advertising a stale skill inventory.
+    // 路由解析失败时仍可检查工作区，且不会公布过时的技能目录。
+    let unavailable = simulate_request_context(&locator, workspace, &agent_config, |_| {
+        Err(String::from("fixture model unavailable"))
+    })
+    .unwrap();
+    assert_eq!(unavailable["toolsUnavailable"], true);
+    assert!(unavailable["nodes"].as_array().unwrap().iter().any(|row| {
+        row["role"] == "system"
+            && row["text"]
+                .as_str()
+                .is_some_and(|body| body.ends_with(&quoted_workspace))
+    }));
+    assert!(!unavailable["nodes"].to_string().contains(plugin_skill));
     assert!(
         load_session_v1_full(&locator)
             .unwrap()
@@ -443,7 +479,7 @@ fn durable_context_generation_preserves_prefix_after_expiry_and_cold_load() {
         &locator,
         temporary.path().to_str().unwrap(),
         &agent_config,
-        |_| Ok(Vec::new()),
+        |_| Ok(RequestToolPreview::default()),
     )
     .unwrap();
     let rows = preview["nodes"].as_array().unwrap();

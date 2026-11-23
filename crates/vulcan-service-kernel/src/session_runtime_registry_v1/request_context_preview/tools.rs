@@ -3,25 +3,25 @@
 
 use crate::state::AgentRuntimeBridge;
 use crate::{ServiceEventEmitter, SharedServiceBridgeState};
-use serde_json::Value;
 use std::sync::Arc;
 use vulcan_agent_runtime::agent_runtime::{
     DedicatedExecutionProfile, ExecutionKnowledgeAccessContext, ExecutionPreparationRequest,
-    execution_preparation::preview_request_tools, runtime::RuntimeFoundation,
+    execution_preparation::{RequestToolPreview, preview_request_tools},
+    runtime::RuntimeFoundation,
 };
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, SessionNodeId};
 use vulcan_workbench_model::{SessionId, SessionRuntimeStateEntry};
 use vulcan_workspace_store::workspace_store::LoadedSessionV1;
 
-/// Builds the locally available model-visible tool schema catalog for an indexed session.
-/// 为已索引会话构建本地可解析的模型可见工具 Schema 目录。
+/// Builds the locally available model-visible tool schemas and skill catalog for an indexed session.
+/// 为已索引会话构建本地可解析的模型可见工具 Schema 和技能目录。
 ///
 /// The loaded session owns the configuration; host state provides the published runtime
 /// generation and local tool bindings. The caller passes the session's authorized library view.
 /// 已加载会话持有配置，宿主状态提供已发布的运行代次及本地工具绑定。调用者提供会话的授权知识库视图。
-/// Returns tool definitions suitable for inspection before provider-specific wire encoding.
-/// 返回用于检查的工具定义，处于供应商专用线协议编码之前。
-pub(crate) fn preview_session_tool_definitions(
+/// Returns the inspection data before provider-specific wire encoding or a preparation error.
+/// 返回供应商专用线协议编码之前的检查数据，或准备错误。
+pub(crate) fn preview_session_tools(
     loaded: &LoadedSessionV1,
     session_id: SessionId,
     workspace_path: &str,
@@ -29,7 +29,7 @@ pub(crate) fn preview_session_tool_definitions(
     state: &SharedServiceBridgeState,
     runtime: &AgentRuntimeBridge,
     knowledge_access: Option<ExecutionKnowledgeAccessContext>,
-) -> Result<Vec<Value>, String> {
+) -> Result<RequestToolPreview, String> {
     // Resolve session-specific choices from the same durable document as the simulated messages.
     // 从模拟消息所用的同一份可靠会话文档解析会话选择。
     let metadata = &loaded.document.metadata;

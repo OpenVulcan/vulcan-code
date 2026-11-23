@@ -1,7 +1,7 @@
 use crate::tooling::native::{
-    APPLY_PATCH_LANGUAGE_NAME, APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_READ_TOOL_ID,
-    FILE_TOOL_ID, FILE_WRITE_TOOL_ID, build_apply_patch_tool, build_file_edit_tool,
-    build_file_read_tool, build_file_tool, build_file_write_tool,
+    APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_READ_TOOL_ID, FILE_TOOL_ID, FILE_WRITE_TOOL_ID,
+    NativeToolExecutionRequest, build_apply_patch_tool, build_file_edit_tool, build_file_read_tool,
+    build_file_tool, build_file_write_tool, build_prompt_skill_detail_tool,
 };
 use serde_json::json;
 use vulcan_change_set::{
@@ -450,11 +450,11 @@ fn native_file_tools_expose_contracts() {
             .get("final_newline")
             .is_none()
     );
-    assert!(
-        edit.descriptor
-            .description
-            .contains("CRLF, LFCR, CR, and LF")
+    assert_eq!(
+        edit.args_schema["properties"]["old_string"]["type"],
+        "string"
     );
+    assert_eq!(edit.args_schema["properties"]["old_string"]["minLength"], 1);
     assert!(edit.request_streaming.is_some());
     assert_eq!(
         edit.args_schema["properties"]["replace_all"]["default"],
@@ -465,38 +465,84 @@ fn native_file_tools_expose_contracts() {
     assert_eq!(patch.descriptor.id, APPLY_PATCH_TOOL_ID);
     assert!(patch.descriptor.ai_visible);
     assert!(!patch.descriptor.available_in_plan);
+    assert_eq!(patch.args_schema["additionalProperties"], false);
     assert_eq!(patch.args_schema["required"], json!(["patch"]));
-    assert!(
-        patch.args_schema["properties"]["patch"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains(APPLY_PATCH_LANGUAGE_NAME)
+    assert_eq!(patch.args_schema["properties"]["patch"]["type"], "string");
+    assert_eq!(patch.args_schema["properties"]["patch"]["minLength"], 1);
+    assert_eq!(
+        patch.args_schema["properties"]["patch"]["maxLength"],
+        vulcan_host_tools::file_runtime::MAX_EDIT_REQUEST_BYTES
     );
     assert!(patch.request_streaming.is_some());
-    assert!(patch.descriptor.description.contains("*** Begin Patch"));
+}
+
+/// Exercises logical line matching through the native file_edit entry point.
+/// 通过原生 file_edit 入口验证逻辑换行匹配。
+#[tokio::test]
+async fn native_file_edit_matches_mixed_line_endings() {
+    // Keep mixed delimiters inside the match and preserve the delimiters outside it.
+    // 在匹配范围内混用分隔符，并保留范围外的分隔符。
+    let workspace = tempfile::tempdir().unwrap();
+    let path = workspace.path().join("mixed.txt");
+    std::fs::write(&path, b"header\r\nalpha\n\rbeta\rgamma\nomega\r\nfooter").unwrap();
+    build_file_edit_tool()
+        .invoke(test_native_request_with_workspace(
+            json!({
+                "path": "mixed.txt",
+                "old_string": "alpha\nbeta\ngamma\nomega",
+                "new_string": "joined",
+            }),
+            workspace.path().to_path_buf(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), b"header\r\njoined\r\nfooter");
+}
+
+/// Verifies the shipped Apply Patch guide can be loaded by the native skill tool.
+/// 验证随包发布的 Apply Patch 指南可由原生 skill 工具读取。
+#[tokio::test]
+async fn native_apply_patch_guide_is_readable() {
+    // Install into an isolated root to exercise the packaged asset and the normal catalog loader.
+    // 安装到隔离根目录，以覆盖打包资源和常规目录载入器。
+    let workspace = tempfile::tempdir().unwrap();
+    let system_root = workspace.path().join("system");
+    let install_report =
+        vulcan_prompt_skills::install_embedded_system_prompt_skills_to_root(system_root.clone())
+            .unwrap();
     assert!(
-        patch
-            .descriptor
-            .description
-            .contains("*** Update File: src/example.rs")
+        install_report
+            .skill_names
+            .iter()
+            .any(|name| name == "apply-patch"),
+        "the embedded catalog includes the Apply Patch guide"
     );
-    assert!(
-        patch
-            .descriptor
-            .description
-            .contains("Do not use Markdown fences")
+    let catalog = vulcan_prompt_skills::load_prompt_skills_from_roots(
+        system_root,
+        workspace.path().join("user"),
     );
+    let guide = catalog
+        .skills
+        .into_iter()
+        .find(|skill| skill.name == "apply-patch")
+        .expect("packaged Apply Patch guide must load");
+    let guide_body = guide.body.trim().to_owned();
+    assert!(!guide_body.is_empty());
+    let request = NativeToolExecutionRequest {
+        enabled_prompt_skill_names: vec![guide.name.clone()],
+        prepared_prompt_skills: vec![guide],
+        ..test_native_request_with_workspace(
+            json!({"name": "apply-patch"}),
+            workspace.path().to_path_buf(),
+        )
+    };
+    let result = build_prompt_skill_detail_tool()
+        .invoke(request)
+        .await
+        .unwrap();
     assert!(
-        patch
-            .descriptor
-            .description
-            .contains("*** Move to: destination")
-    );
-    assert!(
-        patch
-            .descriptor
-            .description
-            .contains("@@ exact anchor line")
+        result.model_output.as_str().unwrap().contains(&guide_body),
+        "the tool returns the separately loaded guide body"
     );
 }
 

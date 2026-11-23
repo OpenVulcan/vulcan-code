@@ -8,7 +8,8 @@ use super::{
 };
 use serde_json::{Value, json};
 use vulcan_agent_runtime::agent_runtime::{
-    config::AgentRuntimeConfig, provider_runtime_context::compose_conversation_prompt_preview,
+    config::AgentRuntimeConfig, execution_preparation::RequestToolPreview,
+    provider_runtime_context::compose_conversation_prompt_preview,
 };
 use vulcan_session_core::v1::event::{AssistantSemanticStatus, ConversationEvent, EventBody};
 use vulcan_workspace_store::workspace_store::{
@@ -17,7 +18,7 @@ use vulcan_workspace_store::workspace_store::{
 };
 
 mod tools;
-pub(crate) use tools::preview_session_tool_definitions;
+pub(crate) use tools::preview_session_tools;
 
 /// Returns the finalized visible assistant text belonging to `api_call_id` in the resident event tail.
 /// 返回常驻事件尾段中属于 `api_call_id` 的已完成可见 assistant 正文。
@@ -95,6 +96,8 @@ pub(super) fn assemble_sourced_request_history(
 /// 读取 `locator` 的最新已发布 V1 代际，返回逻辑上下文模拟结果。
 /// `workspace_path` and `agent_config` resolve the local prompt sources used for a conversation.
 /// `workspace_path` 与 `agent_config` 解析会话使用的本地提示词来源。
+/// `preview_tools` resolves the schemas and the skill catalog against the same loaded configuration.
+/// `preview_tools` 基于同一份已加载配置解析工具 Schema 和技能目录。
 /// This entry stops before dispatch preparation, which would acquire credentials and commit an API admission.
 /// 此入口止于派发准备之前；后者会取得凭据并提交 API 准入。
 pub(crate) fn simulate_request_context(
@@ -103,7 +106,7 @@ pub(crate) fn simulate_request_context(
     agent_config: &AgentRuntimeConfig,
     preview_tools: impl FnOnce(
         &vulcan_workspace_store::workspace_store::LoadedSessionV1,
-    ) -> Result<Vec<Value>, String>,
+    ) -> Result<RequestToolPreview, String>,
 ) -> Result<Value, String> {
     // A single storage load binds event history, generation and frozen settings even when no live session exists.
     // 单次存储加载绑定事件历史、代际和冻结的设置，即使会话没有实时所有者。
@@ -146,11 +149,17 @@ pub(crate) fn simulate_request_context(
     let saved_baseline =
         LockedBaselineProjection::from_initialized_runtime_lock(&document.runtime_lock)
             .map_err(|error| error.to_string())?;
+    // Even when the tool route cannot resolve, the saved conversation remains inspectable.
+    // 即使工具路由无法解析，已保存的会话仍然可以检查。
+    let tool_preview = preview_tools(&loaded);
     let (fixed, baseline) = compose_conversation_prompt_preview(
         workspace_path,
         agent_config,
         document.dedicated_profile(),
         loaded.metadata.child_execution_profile.as_ref(),
+        tool_preview
+            .as_ref()
+            .map_or("", |preview| preview.system_skill_catalog.as_str()),
         saved_baseline,
     )?;
     let (messages, origins) =
@@ -171,21 +180,18 @@ pub(crate) fn simulate_request_context(
             item
         })
         .collect::<Vec<_>>();
-    // An unresolved model or tool route still leaves the saved conversation inspectable.
-    // 模型或工具路由无法解析时，已保存的会话仍然可以检查。
-    let tool_definitions = preview_tools(&loaded);
     // Keep the setup rows and tool schemas together under the common inspector bounds.
     // 将初始提示词与工具 Schema 放在同一个检查面板预算下。
     let body = json!({
         "baseline": messages,
         "conversation": conversation,
-        "tools": tool_definitions.as_ref().ok(),
+        "tools": tool_preview.as_ref().ok().map(|preview| &preview.tool_definitions),
     });
     // Tool preparation failure is distinct from an intentionally empty tool list.
     // 工具准备失败与按配置禁用所有工具是不同的状态。
     let mut rows = serde_json::to_value(render_simulated_request_context(&body, &origins))
         .map_err(|error| error.to_string())?;
-    if let Err(error) = tool_definitions {
+    if let Err(error) = tool_preview {
         tracing::warn!("Request context tool preview failed: {error}");
         rows["toolsUnavailable"] = Value::Bool(true);
     }

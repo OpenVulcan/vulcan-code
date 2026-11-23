@@ -198,16 +198,15 @@ impl RuntimePromptLayers {
         // without editing the persisted generation lock or freezing the editable base prompt.
         // 单独传递产品及代理基础指令，使现有 V1 会话能使用它们，同时保留已持久化的代际锁和基础提示词设置的生效时机。
         let mut fixed_instruction_layers = render_fixed_instruction_layers(output);
-        append_prompt_text(
-            &mut fixed_instruction_layers.system_footer,
+        fixed_instruction_layers.system_footer = render_system_footer(
             &preparation.system_skill_catalog,
+            &preparation.workspace_path,
+            preparation.prompt_purpose,
+            preparation
+                .dedicated_session
+                .as_ref()
+                .map(|profile| profile.tool_access),
         );
-        if prompt_uses_workspace(preparation) {
-            append_prompt_text(
-                &mut fixed_instruction_layers.system_footer,
-                &render_workspace_system_context(&preparation.workspace_path),
-            );
-        }
         provider_layers.system_footer = fixed_instruction_layers.system_footer.clone();
         // fallback_text contains only the producer-declared stable baseline; dynamic material is emitted as User events by the non-V1 transport.
         // fallback_text 只包含生产者声明的稳定基线；动态内容由非 V1 传输层作为 User 事件发送。
@@ -907,10 +906,12 @@ fn build_provider_prompt_snapshot(workspace_path: &str) -> Result<ProviderPrompt
     Ok(ProviderPromptSnapshot::new(resolved.text).with_source_label(resolved.source_label))
 }
 
-/// Resolves and composes the fixed prefix of a conversation using only local prompt sources.
-/// 仅用本地提示来源解析并组装会话的固定前缀。
+/// Composes the conversation prefix from local prompt sources and the prepared discovery catalog.
+/// 使用本地提示来源与已准备的发现目录组装会话前缀。
 /// `workspace_path` selects prompt overrides, `config` owns agent definitions, and both optional profiles come from the published session.
 /// `workspace_path` 决定提示词覆盖，`config` 持有代理定义，两个可选画像均来自已发布的会话。
+/// `system_skill_catalog` is the catalog resolved with the preview's tool schemas. `published_baseline` is the saved lock, if any.
+/// `system_skill_catalog` 与预览的工具 Schema 同次解析；`published_baseline` 是可选的已保存基线。
 /// Returns system and developer instruction layers in composer order, or an explicit source or composition error.
 /// 按组合器顺序返回系统与开发者指令层，或返回明确的来源或组合错误。
 pub fn compose_conversation_prompt_preview(
@@ -918,6 +919,7 @@ pub fn compose_conversation_prompt_preview(
     config: &AgentRuntimeConfig,
     dedicated: Option<&DedicatedSessionProfile>,
     child: Option<&ChildExecutionProfile>,
+    system_skill_catalog: &str,
     published_baseline: Option<LockedBaselineProjection>,
 ) -> Result<(CoreProviderPromptLayers, LockedBaselineProjection), String> {
     // Conversation requests use the active agent for roots and the captured agent selection for children.
@@ -939,8 +941,8 @@ pub fn compose_conversation_prompt_preview(
             .as_deref()
             .is_some_and(|text| !text.trim().is_empty())
     });
-    // The fixed-prefix projection requires neither a selected model route nor any live tool schemas.
-    // 固定前缀投影无需已选模型路由或实时工具 Schema。
+    // The fixed foundations can still be projected if the local tool preview failed to resolve.
+    // 即使本地工具预览无法解析，仍可投影固定基础提示词。
     let input = PromptAssemblyInput {
         mode: resolve_prompt_assembly_mode(
             child_functional,
@@ -992,32 +994,42 @@ pub fn compose_conversation_prompt_preview(
         None => project_locked_runtime_baseline(&output, &[])?,
     };
     let mut fixed = render_fixed_instruction_layers(&output);
-    if dedicated.is_none_or(|profile| profile.tool_access == DedicatedToolAccess::Standard)
-        && !workspace_path.is_empty()
-    {
-        fixed.system_footer = render_workspace_system_context(workspace_path);
-    }
+    fixed.system_footer = render_system_footer(
+        system_skill_catalog,
+        workspace_path,
+        ExecutionPromptPurpose::UserTurn,
+        dedicated.map(|profile| profile.tool_access),
+    );
     Ok((fixed, baseline))
 }
 
-/// Quotes the captured path as data at the end of the system prompt.
-/// 在系统提示词末尾将捕获到的路径作为数据引用。
-fn render_workspace_system_context(workspace_path: &str) -> String {
-    format!(
-        "{}{}",
-        vulcan_session_core::v1::dynamic_context::WORKSPACE_CONTEXT_PREFIX,
-        serde_json::json!(workspace_path),
-    )
-}
-
-/// Determines whether the prepared execution exposes its workspace to the model.
-/// 判断已准备的执行是否向模型公开工作区。
-fn prompt_uses_workspace(preparation: &ExecutionPreparation) -> bool {
-    !preparation.workspace_path.is_empty()
-        && preparation
-            .dedicated_session
-            .as_ref()
-            .is_none_or(|profile| profile.tool_access == DedicatedToolAccess::Standard)
+/// Places the resolved discovery catalog and allowed workspace at the end of the system prompt.
+/// 将已解析的发现目录和允许公开的工作区放在系统提示词末尾。
+/// The request purpose and dedicated access govern whether the local path is exposed.
+/// 是否公开本地路径由请求用途和专职会话工具权限决定。
+fn render_system_footer(
+    system_skill_catalog: &str,
+    workspace_path: &str,
+    purpose: ExecutionPromptPurpose,
+    dedicated_access: Option<DedicatedToolAccess>,
+) -> String {
+    // Only conversational prompts need a live workspace binding; minimal summaries carry their own input.
+    // 只有会话提示词需要实时工作区绑定，极简摘要请求使用各自的输入。
+    let mut footer = system_skill_catalog.to_owned();
+    if purpose.supports_user_turn_tooling()
+        && dedicated_access.is_none_or(|access| access == DedicatedToolAccess::Standard)
+        && !workspace_path.is_empty()
+    {
+        append_prompt_text(
+            &mut footer,
+            &format!(
+                "{}{}",
+                vulcan_session_core::v1::dynamic_context::WORKSPACE_CONTEXT_PREFIX,
+                serde_json::json!(workspace_path),
+            ),
+        );
+    }
+    footer
 }
 
 /// Renders one prompt-composer output into structured provider prompt layers.
@@ -2739,6 +2751,34 @@ mod tests {
         let footer = &layers.fixed_instruction_layers.system_footer;
         assert!(footer.starts_with(&preparation.system_skill_catalog));
         assert!(footer.ends_with(&serde_json::json!(preparation.workspace_path).to_string()));
+    }
+
+    /// Verifies internal summaries keep the local workspace out of the provider prompt.
+    /// 验证内部摘要不会在发给供应商的提示词中携带本地工作区。
+    #[test]
+    fn runtime_prompt_layers_omit_workspace_for_internal_summaries() {
+        // The isolated workspace exercises the exact path escaping used in the transport preamble.
+        // 隔离工作区覆盖传输前导语实际使用的路径转义方式。
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().to_str().unwrap();
+        let mut preparation = build_test_preparation(
+            workspace.to_owned(),
+            PersistedPromptConfiguration::default(),
+        );
+        let quoted_workspace = serde_json::json!(workspace).to_string();
+        for purpose in [
+            ExecutionPromptPurpose::GitCommitSummary,
+            ExecutionPromptPurpose::ContextCompaction,
+        ] {
+            preparation.prompt_purpose = purpose;
+            let layers = build_runtime_prompt_layers_for_agent(&preparation, None).unwrap();
+            assert!(layers.fixed_instruction_layers.system_footer.is_empty());
+            assert!(!layers.fallback_text.contains(workspace));
+            assert!(!layers.fallback_text.contains(&quoted_workspace));
+            assert!(layers.host_events.iter().all(|event| {
+                !event.body.contains(workspace) && !event.body.contains(&quoted_workspace)
+            }));
+        }
     }
 
     /// Verifies request-scoped system hook blocks are appended to the system layer.

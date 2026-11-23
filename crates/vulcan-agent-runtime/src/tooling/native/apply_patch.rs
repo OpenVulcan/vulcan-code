@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-pub use vulcan_ai_contract::APPLY_PATCH_LANGUAGE_NAME;
+use vulcan_ai_contract::APPLY_PATCH_LANGUAGE_NAME;
 use vulcan_host_tools::file_runtime::{MAX_EDIT_REQUEST_BYTES, execute_apply_patch};
 use vulcan_host_tools::text_document::normalize_line_endings;
 use vulcan_tools_manager::{

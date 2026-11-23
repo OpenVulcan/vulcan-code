@@ -144,7 +144,7 @@ pub(super) async fn dispatch(
                         &locator,
                         &workspace_path,
                         &agent_config,
-                        |loaded| crate::session_runtime_registry_v1::preview_session_tool_definitions(
+                        |loaded| crate::session_runtime_registry_v1::preview_session_tools(
                             loaded, session_id, &workspace_path, &app, &state, &runtime, knowledge_access?,
                         ),
                     )

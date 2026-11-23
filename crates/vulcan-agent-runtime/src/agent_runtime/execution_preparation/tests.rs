@@ -1618,8 +1618,8 @@ pub(in crate::agent_runtime) fn test_execution_preparation_request() -> Executio
         embedded_turn_usage_segments: Vec::new(),
     }
 }
-/// Verifies local preview reuses real tool admission without acquiring a model route lease.
-/// 验证本地预览复用真实工具准入，且不建立模型路由租约。
+/// Verifies local preview shares tool and plugin discovery with execution without acquiring a route lease.
+/// 验证本地预览与执行共用工具及插件发现，且不建立路由租约。
 #[test]
 fn request_context_tool_preview_matches_prepared_tools_without_leasing() {
     // Use the same configured route for both preparation paths.
@@ -1627,7 +1627,15 @@ fn request_context_tool_preview_matches_prepared_tools_without_leasing() {
     let config = test_provider_config();
     // The fixture runtime owns an in-memory provider catalog and no network dispatch.
     // 夹具运行时拥有内存供应商目录且无网络分派。
-    let foundation = test_runtime_foundation(&config);
+    let plugin_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let plugins = Arc::new(vulcan_plugin_runtime::load_vulcan_plugin_catalog(
+        &plugin_root,
+        None,
+        &Default::default(),
+        &Default::default(),
+        1,
+    ));
+    let foundation = test_runtime_foundation_with_plugins(&config, Some(Arc::clone(&plugins)));
     // Plan mode proves that preview tools are filtered by request mode.
     // 计划模式用于验证工具预览会按请求模式过滤。
     let mut request = test_execution_preparation_request();
@@ -1653,21 +1661,31 @@ fn request_context_tool_preview_matches_prepared_tools_without_leasing() {
             .unwrap()
             .is_none()
     );
-    // Prepare the fixture normally to compare its resolved schemas, not just the names.
-    // 常规准备夹具以比较实际解析的 Schema，而不只是名称。
+    // Resolve the same catalog and schemas through ordinary execution preparation.
+    // 通过常规执行准备解析同一份目录和工具 Schema。
     let prepared = prepare_execution_with_tool_snapshot(
-        &test_runtime_foundation(&config),
+        &test_runtime_foundation_with_plugins(&config, Some(plugins)),
         None,
         &config,
         &request,
     )
     .unwrap();
-    assert!(!preview.is_empty());
+    assert!(
+        preview
+            .system_skill_catalog
+            .contains("context7:library-docs")
+    );
     assert_eq!(
-        preview.len(),
+        preview.system_skill_catalog,
+        prepared.preparation.system_skill_catalog
+    );
+    assert!(!preview.tool_definitions.is_empty());
+    assert_eq!(
+        preview.tool_definitions.len(),
         prepared.tool_snapshot.resolved_tool_definitions.len()
     );
     for (tool, definition) in preview
+        .tool_definitions
         .iter()
         .zip(&prepared.tool_snapshot.resolved_tool_definitions)
     {
