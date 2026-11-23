@@ -72,6 +72,9 @@
   background: var(--vk-sunken);
 }
 .vk-mcp-checklist[data-mcp-stale-targets] { border-color: color-mix(in srgb, var(--vk-warn) 45%, var(--vk-line-soft)); }
+/* Let the tab scroll through all media groups while the pointer stays over a model. */
+/* 多模态各分组共用页签的滚动区，指针留在模型上时也能连续滚动。 */
+.vk-mcp-tab [data-mcp-media-grants] .vk-mcp-checklist,
 .vk-mcp-tool-list { max-height: none; overflow: visible; }
 
 .vk-mcp-logs-content,

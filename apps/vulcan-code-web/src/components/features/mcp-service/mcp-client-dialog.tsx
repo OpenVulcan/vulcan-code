@@ -59,10 +59,13 @@ export function McpClientDialog(props: McpClientDialogProps) {
   // New clients start without individually granted tools.
   // 新客户端初始没有独立勾选的工具。
   const [toolIds, setToolIds] = React.useState(props.client?.toolIds ?? []);
-  const [toolProjectIds, setToolProjectIds] = React.useState(props.client?.toolProjectIds ?? []);
-  // Keeps the draft selection when temporarily switching the scope in the editor.
-  // 在编辑器中临时切换范围时保留指定项目草稿。
-  const [restrictToolProjects, setRestrictToolProjects] = React.useState(toolProjectIds.length > 0);
+  // An untouched workspace scope belongs to the saved client. Only an explicit edit replaces it.
+  // 未编辑的工具项目范围由已保存的客户端持有，只有显式修改才替换它。
+  const [toolScopeDraft, setToolScopeDraft] = React.useState<{ restricted: boolean; projectIds: string[] }>();
+  // Keep the draft IDs when switching between restricted and unrestricted within this dialog.
+  // 在弹窗内切换指定与不限范围时，保留草稿中的项目 ID。
+  const toolProjectIds = toolScopeDraft?.projectIds ?? props.client?.toolProjectIds ?? [];
+  const restrictToolProjects = toolScopeDraft?.restricted ?? (toolProjectIds.length > 0);
   const [knowledgeLibraries, setKnowledgeLibraries] = React.useState(props.client?.knowledgeLibraries ?? {});
   const knowledgeLabels = { ...Object.fromEntries(Object.keys(knowledgeLibraries).map((id) => [id, id])), ...props.knowledgeCandidates };
   const [saving, setSaving] = React.useState(false);
@@ -72,8 +75,12 @@ export function McpClientDialog(props: McpClientDialogProps) {
   // 由草稿中选中的会话工具决定是否需要校验会话项目范围。
   const hasSessionTools = hasMcpSessionTools(toolIds);
   const selectedProjects = sessionProjects.mode === "selected" ? sessionProjects.projectIds : [];
-  const projectsValid = !hasSessionTools || sessionProjects.mode === "all" || selectedProjects.length > 0;
-  const toolProjectsValid = !restrictToolProjects || (toolProjectIds.length > 0 && toolProjectIds.length <= props.limits.maxProjects);
+  // A stored empty selected scope grants access to zero projects. A new scope or new session tool must be validated.
+  // 已存的空指定范围表示没有可访问的项目。新设范围或新增会话工具时才要求补选项目。
+  const preservesSessionScope = sessionProjects === props.client?.sessions.projects
+    && !hasMcpSessionTools(toolIds.filter((id) => !props.client?.toolIds?.includes(id)));
+  const projectsValid = !hasSessionTools || sessionProjects.mode === "all" || selectedProjects.length > 0 || preservesSessionScope;
+  const toolProjectsValid = !toolScopeDraft?.restricted || (toolProjectIds.length > 0 && toolProjectIds.length <= props.limits.maxProjects);
   const valid = trimmedName.length > 0 && nameFits && projectsValid && toolProjectsValid
     && selectedProjects.length <= props.limits.maxProjects && mediaTargets.length <= props.limits.maxMediaTargets;
   // staleTargets are grants whose model is no longer available; they stay until the user removes them.
@@ -107,7 +114,8 @@ export function McpClientDialog(props: McpClientDialogProps) {
     };
     const request = {
       clientId: props.client?.id, name: trimmedName, enabled, recordCalls, sessions, mediaTargets, toolIds,
-      toolProjectIds: restrictToolProjects ? toolProjectIds : [], knowledgeLibraries,
+      ...(toolScopeDraft || !props.client ? { toolProjectIds: restrictToolProjects ? toolProjectIds : [] } : {}),
+      knowledgeLibraries,
     };
     try {
       if (props.client) {
@@ -192,7 +200,7 @@ export function McpClientDialog(props: McpClientDialogProps) {
               <section className="vk-mcp-block" data-mcp-workspace-grants="">
                 <span className="vk-mcp-block-title">{t("mcpService.field.toolProjects")}</span>
                 <SegmentedControl aria-label={t("mcpService.field.toolProjects")} disabled={saving}
-                  onValueChange={(value) => setRestrictToolProjects(value === "selected")} value={restrictToolProjects ? "selected" : "unrestricted"}>
+                  onValueChange={(value) => setToolScopeDraft({ restricted: value === "selected", projectIds: toolProjectIds })} value={restrictToolProjects ? "selected" : "unrestricted"}>
                   <SegmentedControlItem value="unrestricted">{t("mcpService.field.scopeUnrestricted")}</SegmentedControlItem>
                   <SegmentedControlItem value="selected">{t("mcpService.field.scopeSelected")}</SegmentedControlItem>
                 </SegmentedControl>
@@ -202,7 +210,9 @@ export function McpClientDialog(props: McpClientDialogProps) {
                       {props.projects.map((project) => (
                         <label className="vk-mcp-check" key={project.id}>
                           <Checkbox checked={toolProjectIds.includes(project.id)} disabled={saving}
-                            onCheckedChange={(checked) => setToolProjectIds((ids) => checked === true ? [...ids, project.id] : ids.filter((id) => id !== project.id))} />
+                            onCheckedChange={(checked) => setToolScopeDraft({
+                              restricted: true, projectIds: checked === true ? [...toolProjectIds, project.id] : toolProjectIds.filter((id) => id !== project.id),
+                            })} />
                           <span>{project.name}<small>{project.path}</small></span>
                         </label>
                       ))}

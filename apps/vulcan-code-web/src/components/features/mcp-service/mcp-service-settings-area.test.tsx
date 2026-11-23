@@ -201,9 +201,65 @@ it("isolates session and media grants while toggling the file group", async () =
   expect(updateMcpClient).toHaveBeenCalledWith(expect.objectContaining({
     toolIds: ["send_message", "shell_command", "generate_media"],
     sessions: expect.objectContaining({ read: true, send: true, projects: { mode: "selected", projectIds: ["p"] } }),
-    toolProjectIds: [],
     mediaTargets: [target],
   }));
+  expect(vi.mocked(updateMcpClient).mock.lastCall![0]).not.toHaveProperty("toolProjectIds");
+});
+
+// Editing only a model must preserve a stored project restriction, including an empty session scope.
+// 仅修改模型时须保留已存的项目限制，包括空的会话项目范围。
+it.each([{ ids: [] }, { ids: ["file_read"] }, { ids: ["list_sessions", "file_read"] }])(
+  "saves a model directly from the media tab with existing grants $ids",
+  async ({ ids }) => {
+    const current = snapshot(true);
+    const client = current.clients[0];
+    client.toolIds = ids;
+    client.sessions = { ...emptySessionGrant(), read: ids.includes("list_sessions"), projects: { mode: "selected", projectIds: [] } };
+    client.toolProjectIds = ids.includes("file_read") ? ["p"] : [];
+    const target = { connectionId: "account", targetId: "image" };
+    current.mediaCandidates = [{ ...target, capability: "image_generate", model: "model", displayName: "Model", accountName: "Account" }];
+    current.toolCandidates = [...ids, "generate_media"];
+    vi.mocked(loadMcpService).mockResolvedValue(current);
+    // Reopen the dialog from the snapshot returned by a successful settings update.
+    // 从设置更新成功后返回的快照重新打开弹窗。
+    vi.mocked(updateMcpClient).mockImplementation(async (request) => ({
+      ...current, clients: [{ ...client, mediaTargets: request.mediaTargets }],
+    }));
+    await act(async () => root.render(<McpServiceSettingsArea projects={[]} />));
+    const edit = host.querySelector<HTMLButtonElement>('[aria-label="mcpService.client.edit"]')!;
+    for (const selected of [true, false]) {
+      await act(async () => edit.click());
+      await act(async () => document.querySelector<HTMLButtonElement>('[role="tab"][data-value="media"]')!.click());
+      const checkbox = document.querySelector<HTMLButtonElement>('[data-mcp-media-grants] [role="checkbox"]')!;
+      expect(checkbox.getAttribute("aria-checked")).toBe(String(!selected));
+      await act(async () => checkbox.click());
+      const save = document.querySelector<HTMLButtonElement>("[data-mcp-client-save]")!;
+      expect(save.disabled).toBe(false);
+      await act(async () => save.click());
+      expect(updateMcpClient).toHaveBeenLastCalledWith(expect.objectContaining({
+        clientId: client.id, sessions: client.sessions, toolIds: ids, mediaTargets: selected ? [target] : [],
+      }));
+      expect(vi.mocked(updateMcpClient).mock.lastCall![0]).not.toHaveProperty("toolProjectIds");
+    }
+  },
+);
+
+// New session permissions require a project within an existing empty selected scope.
+// 新增会话授权仍需在已保存的空指定范围中选择项目。
+it("requires a project before adding a session tool to a stored empty selected scope", async () => {
+  const current = snapshot(true);
+  current.clients[0].sessions.projects = { mode: "selected", projectIds: [] };
+  current.clients[0].toolIds = ["list_sessions"];
+  current.toolCandidates = ["list_sessions", "send_message"];
+  vi.mocked(loadMcpService).mockResolvedValue(current);
+  await act(async () => root.render(<McpServiceSettingsArea projects={[{ id: "p", name: "Project", path: "/p" }]} />));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="mcpService.client.edit"]')!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[role="tab"][data-value="sessions"]')!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-mcp-tool="send_message"]')!.click());
+  const save = document.querySelector<HTMLButtonElement>("[data-mcp-client-save]")!;
+  expect(save.disabled).toBe(true);
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-mcp-project-scope] [role="checkbox"]')!.click());
+  expect(save.disabled).toBe(false);
 });
 
 // A standalone client saves without session or multimodal access.
