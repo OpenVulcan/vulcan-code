@@ -28,11 +28,41 @@ enum QueuedDelivery {
     ProcessExit,
 }
 
-/// Runs three real child turns; `published_successor` reproduces historical prefix overlap before final delivery.
-/// 运行三个真实子回合；`published_successor` 在最终投递前复现历史前缀重叠。
+/// Runs the selected child recovery scenario on a thread with the production worker stack.
+/// 在具有生产工作线程栈预算的线程上运行所选子任务恢复场景。
+/// `published_successor`, `replace_listener` and `stop_parent` select recovery races.
+/// `published_successor`、`replace_listener` 和 `stop_parent` 选择不同的恢复竞态。
+/// `terminal_kind` and `delivery` select the queued terminal outcome and delivery path.
+/// `terminal_kind` 和 `delivery` 选择排队终态及其投递路径。
+/// Returns when all scenario assertions finish.
+/// 场景断言全部完成后返回。
+fn queued_child_chain(
+    published_successor: bool,
+    replace_listener: bool,
+    stop_parent: bool,
+    terminal_kind: Option<vulcan_session_boundary::SubagentMailboxEventKind>,
+    delivery: QueuedDelivery,
+) {
+    run_with_service_worker_stack(move || {
+        verify_queued_child_chain(
+            published_successor,
+            replace_listener,
+            stop_parent,
+            terminal_kind,
+            delivery,
+        )
+    });
+}
+
+/// Runs three real child turns with the recovery races and terminal delivery selected by the caller.
+/// 使用调用方选择的恢复竞态和终态投递方式运行三个真实子回合。
+/// `published_successor` recreates prefix overlap, `replace_listener` changes the listener, and `stop_parent` stops the parent.
+/// `published_successor` 复现前缀重叠，`replace_listener` 替换监听器，`stop_parent` 停止父会话。
+/// `terminal_kind` and `delivery` drive the queued successor's completion branch.
+/// `terminal_kind` 与 `delivery` 驱动排队后继的终态分支。
 /// Asserts original/final content, exact reservation settlement, cold loading and eventual parent completion.
 /// 断言原始及最终正文、精确预留结算、冷加载及父回合最终完成。
-async fn queued_child_chain(
+async fn verify_queued_child_chain(
     published_successor: bool,
     replace_listener: bool,
     stop_parent: bool,
@@ -782,102 +812,95 @@ async fn queued_child_chain(
 
 /// Consecutive queued turns cannot strand the original spawn after the final answer.
 /// 连续排队回合不能在最终回答后遗留原派生任务。
-#[tokio::test]
-async fn queued_child_successor_settles_original_before_final_publication() {
-    queued_child_chain(false, false, false, None, QueuedDelivery::Live).await;
+#[test]
+fn queued_child_successor_settles_original_before_final_publication() {
+    queued_child_chain(false, false, false, None, QueuedDelivery::Live);
 }
 
 /// Already published overlapping prefixes recover through the real final-event adapter without history edits.
 /// 已发布重叠前缀通过真实最终事件适配器恢复，且不编辑历史。
-#[tokio::test]
-async fn queued_child_successor_repairs_existing_overlap_and_parent_completion() {
-    queued_child_chain(true, false, false, None, QueuedDelivery::Live).await;
+#[test]
+fn queued_child_successor_repairs_existing_overlap_and_parent_completion() {
+    queued_child_chain(true, false, false, None, QueuedDelivery::Live);
 }
 
 /// A listener replaced during recovery must not publish stale feedback or remove its successor.
 /// 恢复期间被替换的监听器不得发布过期反馈或移除其后继。
-#[tokio::test]
-async fn queued_child_successor_rechecks_listener_after_recovery_yields() {
-    queued_child_chain(false, true, false, None, QueuedDelivery::Live).await;
+#[test]
+fn queued_child_successor_rechecks_listener_after_recovery_yields() {
+    queued_child_chain(false, true, false, None, QueuedDelivery::Live);
 }
 
 /// A stop observed while recovery waits must preserve returns without starting another parent request.
 /// 恢复等待期间观测到的停止必须保留回流，但不得启动新的父请求。
 /// Uses the real lifecycle gate rather than timing delays; returns no value.
 /// 使用真实生命周期锁而非时序延迟；不返回值。
-#[tokio::test]
-async fn queued_child_successor_preserves_parent_stop_during_recovery() {
-    queued_child_chain(false, false, true, None, QueuedDelivery::Live).await;
+#[test]
+fn queued_child_successor_preserves_parent_stop_during_recovery() {
+    queued_child_chain(false, false, true, None, QueuedDelivery::Live);
 }
 
 /// A queued Provider failure releases its own reservation and reaches the parent exactly once.
 /// 排队供应商失败释放自身预留，并且只向父会话回流一次。
 #[test]
 fn queued_child_successor_failure_publishes_durable_result() {
-    run_with_service_worker_stack(|| {
-        queued_child_chain(
-            false,
-            false,
-            false,
-            Some(vulcan_session_boundary::SubagentMailboxEventKind::Failed),
-            QueuedDelivery::Live,
-        )
-    });
+    queued_child_chain(
+        false,
+        false,
+        false,
+        Some(vulcan_session_boundary::SubagentMailboxEventKind::Failed),
+        QueuedDelivery::Live,
+    );
 }
 
 /// A queued stop seals its exact turn without treating it as successful output.
 /// 排队停止封闭其精确回合，不将其视为成功输出。
 #[test]
 fn queued_child_successor_stop_publishes_durable_result() {
-    run_with_service_worker_stack(|| {
-        queued_child_chain(
-            false,
-            false,
-            false,
-            Some(vulcan_session_boundary::SubagentMailboxEventKind::Stopped),
-            QueuedDelivery::Live,
-        )
-    });
+    queued_child_chain(
+        false,
+        false,
+        false,
+        Some(vulcan_session_boundary::SubagentMailboxEventKind::Stopped),
+        QueuedDelivery::Live,
+    );
 }
 
 /// Normal successful queues retain complete results after every execution gains durable ownership.
 /// 每次执行取得可靠归属后，正常成功队列仍保留完整结果。
-#[tokio::test]
-async fn queued_child_successor_success_retains_all_owned_results() {
+#[test]
+fn queued_child_successor_success_retains_all_owned_results() {
     queued_child_chain(
         false,
         false,
         false,
         Some(vulcan_session_boundary::SubagentMailboxEventKind::Completed),
         QueuedDelivery::Live,
-    )
-    .await;
+    );
 }
 
 /// Startup abort cannot race ahead of durable admission and lose its accepted reservation.
 /// 启动中止不能抢在可靠准入之前处理而丢失已接纳预留。
-#[tokio::test]
-async fn queued_child_successor_startup_abort_waits_for_admission() {
+#[test]
+fn queued_child_successor_startup_abort_waits_for_admission() {
     queued_child_chain(
         false,
         false,
         false,
         Some(vulcan_session_boundary::SubagentMailboxEventKind::Failed),
         QueuedDelivery::StartupAbort,
-    )
-    .await;
+    );
 }
 
 /// A process exit before profile capture turns the reserved successor into a durable failure without replay.
 /// 配置捕获前进程退出将预留后继转换为可靠失败，不重放执行。
-#[tokio::test]
-async fn queued_child_successor_unprepared_process_exit_is_recoverable() {
+#[test]
+fn queued_child_successor_unprepared_process_exit_is_recoverable() {
     queued_child_chain(
         false,
         false,
         false,
         Some(vulcan_session_boundary::SubagentMailboxEventKind::Failed),
         QueuedDelivery::ProcessExit,
-    )
-    .await;
+    );
 }
