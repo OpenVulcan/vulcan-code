@@ -23,7 +23,7 @@ use std::{
 use vulcan_provider_adapters::{
     ConnectionModelAccessPolicy, CredentialConnection, CredentialSecretEnvelope,
     CredentialSecretMaterial, CredentialSecretStore, PersistedAiConfiguration,
-    is_openai_chatgpt_plan, is_retired_codex_subscription, validate_custom_provider_identifier,
+    is_openai_chatgpt_plan, is_openai_codex_subscription, validate_custom_provider_identifier,
 };
 use vulcan_provider_config::custom_manifest::{
     CustomProviderManifestDocumentV1, document_from_configuration, install_portable_custom_provider,
@@ -184,7 +184,7 @@ pub(crate) async fn export(
             account: ArchiveAccountIdentity::from(connection),
         };
         if is_openai_chatgpt_plan(&connection.provider_id, &connection.service_entry_id)
-            || is_retired_codex_subscription(&connection.provider_id, &connection.service_entry_id)
+            || is_openai_codex_subscription(&connection.provider_id, &connection.service_entry_id)
         {
             accounts.push(record_sign_in());
             continue;
@@ -311,7 +311,7 @@ pub(crate) async fn import(
                 pending_validation,
             } => {
                 if is_openai_chatgpt_plan(&connection.provider_id, &connection.service_entry_id)
-                    || is_retired_codex_subscription(
+                    || is_openai_codex_subscription(
                         &connection.provider_id,
                         &connection.service_entry_id,
                     )

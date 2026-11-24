@@ -1,7 +1,7 @@
 import * as React from "react"
 import { CheckCircle2, CircleAlert, CircleDashed, ExternalLink, LoaderCircle, X } from "lucide-react"
 
-import { isRetiredCodexSubscription, localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
+import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
 import { cx } from "@/ui-kit/behavior/core";
@@ -28,8 +28,7 @@ export function ProviderConnectPanel(props: {
 }) {
   const { t } = useI18n()
   const { provider } = props
-  const entries = React.useMemo(() => provider.service_entries.filter((entry) =>
-    !isRetiredCodexSubscription(provider.id, entry.id)), [provider.id, provider.service_entries])
+  const entries = provider.service_entries
   const [entryId, setEntryId] = React.useState(entries[0]?.id ?? "")
   React.useEffect(() => setEntryId(entries[0]?.id ?? ""), [entries, provider.id])
   return (

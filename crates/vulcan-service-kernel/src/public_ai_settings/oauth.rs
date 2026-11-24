@@ -6,9 +6,8 @@ use vulcan_provider_adapters::{
     CredentialAuthorization, CredentialMode, CredentialSecretEnvelope, CredentialSecretMaterial,
     CredentialSecretSnapshot, CredentialSecretStore, OAuthAuthorizationChallenge,
     OAuthClientConfiguration, OAuthProviderKind, OAuthTransactionPhase, OAuthTransactionSnapshot,
-    OPENAI_CHATGPT_PLAN_BASE_URL, OPENAI_CODEX_RETIRED_MESSAGE, PersistedAiConfiguration,
-    PublicAiRuntime, credential_authorization_binding, is_openai_chatgpt_plan,
-    is_retired_codex_subscription,
+    OPENAI_CHATGPT_PLAN_BASE_URL, PersistedAiConfiguration, PublicAiRuntime,
+    credential_authorization_binding, is_openai_chatgpt_plan,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -308,9 +307,6 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
     request: PublicAiOAuthCommitRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     super::openvulcan_account::reject_generic_provider_mutation(&state, &request.provider_id)?;
-    if is_retired_codex_subscription(&request.provider_id, &request.service_entry_id) {
-        return Err(OPENAI_CODEX_RETIRED_MESSAGE.into());
-    }
     validate_non_empty("transactionId", request.transaction_id.as_str())?;
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("displayName", request.display_name.as_str())?;
@@ -406,12 +402,6 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
                 ));
             }
         }
-        let (previous, replacement) = super::credential_repair::replace_credential_material(
-            secret_store.as_ref(),
-            current.secret_reference.as_str(),
-            material,
-        )
-        .await?;
         let connection_id = connection_id.to_string();
         let update_request = PublicAiConnectionUpdateRequest {
             connection_id: connection_id.clone(),
@@ -424,22 +414,21 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
             remove_management_key: false,
             service_origin_override: current.service_origin_override.clone(),
         };
+        // Confirm the existing service binding before installing the returned OAuth material.
+        // 在写入返回的 OAuth 凭据前确认现有服务绑定。
         let mut validation_configuration = current_configuration.clone();
-        if let Err(error) = apply_connection_update(
+        apply_connection_update(
             runtime.as_ref(),
             &mut validation_configuration,
             &update_request,
             connection_id.as_str(),
-        ) {
-            rollback_oauth_reauthorization_secret(
-                secret_store.as_ref(),
-                current.secret_reference.as_str(),
-                previous.as_ref(),
-                &replacement,
-            )
-            .await?;
-            return Err(error);
-        }
+        )?;
+        let (previous, replacement) = super::credential_repair::replace_credential_material(
+            secret_store.as_ref(),
+            current.secret_reference.as_str(),
+            material,
+        )
+        .await?;
         if let Err(error) = refresh_reauthorized_connection_catalog(
             runtime.as_ref(),
             &validation_configuration,

@@ -796,11 +796,13 @@ rtk git diff --check
 - CommandCode 用量窗口必须按稳定 ID 映射本地化标签，并复用 Kimi 的“套餐/余额 + 额度窗口”结构；美元额度统一按货币精度展示，不能把上游高精度小数直接暴露给用户。
 - 会话账号选择器必须把 `command_code_usage` 识别为额度窗口能力，使已刷新账号在会话区域显示剩余值；设置页和会话区必须消费同一份规范化用量快照，不能分别实现供应商专属结构。
 
-### 11.4 OpenAI ChatGPT 套餐
+### 11.4 OpenAI 登录入口
 
-旧版 Codex 套餐连接保留在设置中并标为已废弃。用户通过「使用 ChatGPT 继续」建立新的官方套餐连接。
+OpenAI 提供三个独立入口。OpenAI API 使用 API Key。Codex 套餐使用 Codex 账号授权与续期，
+按账号读取模型目录及用量。Codex 模型请求以 HTTP SSE 发送到 `/backend-api/codex/responses`。
+ChatGPT 套餐使用「使用 ChatGPT 继续」为 Vulcan Code 单独授权。更换登录方式时创建对应入口的账号。
 
-- 授权使用本机安装 ID、动态签发的客户端 ID 和回环 OAuth 回调。账号归属来自验证签名后的 ID token。
+- ChatGPT 套餐授权使用本机安装 ID、动态签发的客户端 ID 和回环 OAuth 回调。账号归属来自验证签名后的 ID token。
 - 套餐目录以当前账号会话访问 `GET https://api.openai.com/v1/models` 得到的可见模型为准。推理使用同一凭据调用 `POST /v1/responses`，采用 HTTP 流、完整输入和本地工具命名空间。
 - 套餐连接用于 Vulcan Code 内的交互会话。当前预览关闭 OpenAI 原生生图工具和 Images API，账号授权与用量在 ChatGPT 设置中管理。
 - 接口或授权流程变化时回查 [OpenAI 官方接入文档](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)。

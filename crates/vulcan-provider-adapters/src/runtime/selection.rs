@@ -417,12 +417,6 @@ impl PublicAiRuntime {
         required_internal_operation: Option<AiOperation>,
         catalog_snapshot: Arc<ResolvedProviderGeneration>,
     ) -> Result<ResolvedPublicAiSelection, String> {
-        if crate::is_retired_codex_subscription(
-            &connection.provider_id,
-            &connection.service_entry_id,
-        ) {
-            return Err(crate::OPENAI_CODEX_RETIRED_MESSAGE.into());
-        }
         if required_internal_operation.is_some()
             && crate::is_openai_chatgpt_plan(&connection.provider_id, &connection.service_entry_id)
         {

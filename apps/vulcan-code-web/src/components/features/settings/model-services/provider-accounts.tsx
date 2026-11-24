@@ -6,7 +6,7 @@ import {
   PublicAiConnectionDialog,
   PublicAiDeleteConnectionDialog,
 } from "@/components/features/settings/provider-list-settings"
-import { isRetiredCodexSubscription, localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
+import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { PageEmptyState } from "@/components/page"
 import { credentialUsageIsNonPlanAccount, useCredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
 import { Button, IconButton } from "@/ui-kit/primitives/button"
@@ -19,8 +19,7 @@ import {
 import { Switch } from "@/ui-kit/primitives/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
-import { errorMessage } from "@/lib/display-format"
-import { fetchPublicAiModelCandidates, queryPublicAiConnectionUsage, savePublicAiConnectionEnabled } from "@/service/settings-actions-service"
+import { queryPublicAiConnectionUsage, savePublicAiConnectionEnabled } from "@/service/settings-actions-service"
 import type {
   PublicAiAccountUsage,
   PublicAiConnection,
@@ -173,27 +172,21 @@ function AccountCard(props: AccountCardProps) {
     : { title: connection.service_entry_id, tags: [] as string[] }
   const toolsOnly = entry?.kind === "provider_tools"
   const isDefault = snapshot.providerDefaults[provider.id] === connection.id
-  const retired = isRetiredCodexSubscription(provider.id, connection.service_entry_id)
-  const health = retired ? "warn" : healthOf(props.alerts, connection.enabled)
+  const health = healthOf(props.alerts, connection.enabled)
   const catalogError = props.alerts.find((alert) => alert.kind === "catalog_error")?.detail
   const modelCount = snapshot.catalogs[connection.id]?.models.length ?? 0
+  // The ChatGPT Plan account manages its quota in ChatGPT.
+  // ChatGPT 套餐账号在 ChatGPT 内管理额度。
+  const showUsage = provider.id !== "openai" || connection.service_entry_id !== "chatgpt-plan"
   // Use the active connection's projected usage capability and required credential.
   // 使用生效连接投影的用量能力及所需凭据。
-  const usageSupported = connection.usage_capability !== "unsupported"
+  const usageSupported = showUsage && connection.usage_capability !== "unsupported"
     && (!connection.usage_requires_management_key || connection.has_management_key)
-  // The ChatGPT OAuth entry manages authorization on the provider's usage page.
-  // ChatGPT OAuth 入口在供应商用量页面管理授权。
-  const chatGptPlan = provider.id === "openai" && connection.service_entry_id === "chatgpt-plan"
   // Share the translated names between hover hints and accessible button labels.
   // 悬停提示与按钮的无障碍名称共用翻译文案。
   const editLabel = t("settings.credentials.edit")
   const manageLabel = t("settings.credentialModels.manage")
   const refreshUsageLabel = t("settings.credentials.refreshUsage")
-  // Keep the plan's official usage link and model connection check in the same card.
-  // 将套餐的官方用量入口与模型连接检查放在同一张卡片内。
-  const usageActions = chatGptPlan ? (
-    <ChatGptPlanUsageActions busy={props.busy} connection={connection} usageSupported={usageSupported} />
-  ) : null
   return (
     <article className="vk-ms-account" data-state={health}>
       <header className="vk-ms-account-top">
@@ -207,25 +200,22 @@ function AccountCard(props: AccountCardProps) {
         <span className="vk-ms-chip">{presentation.title}</span>
         {presentation.tags.map((tag) => <span className="vk-ms-chip" key={tag}>{tag}</span>)}
       </div>
-      {retired
-        ? <p className="vk-form-note" role="status">{t("settings.credentials.retiredCodexMigration")}</p>
-        : (
-          <AccountUsage
-            actions={usageActions}
-            connection={connection}
-            profile={profile}
-            signupUrl={providerSignupUrl(provider)}
-            usage={props.usage}
-          />
-        )}
-      {!retired && catalogError ? <p className="vk-ms-account-error" title={catalogError}>{catalogError}</p> : null}
+      {showUsage ? (
+        <AccountUsage
+          connection={connection}
+          profile={profile}
+          signupUrl={providerSignupUrl(provider)}
+          usage={props.usage}
+        />
+      ) : null}
+      {catalogError ? <p className="vk-ms-account-error" title={catalogError}>{catalogError}</p> : null}
       <footer className="vk-ms-account-foot">
         <span className="vk-ms-status" data-state={health}>
           <i aria-hidden="true" />
-          {retired ? t("settings.credentials.retiredCodexStatus") : healthLabel(health, props.alerts, t)}
+          {healthLabel(health, props.alerts, t)}
           {!toolsOnly && connection.enabled ? ` · ${t("settings.modelServices.connect.enabled").replace("{count}", String(modelCount))}` : null}
         </span>
-        {!retired ? <div className="vk-ms-account-actions">
+        <div className="vk-ms-account-actions">
           <div className="vk-ms-account-shortcuts">
             {/* The wrapper keeps hover hints available while the button is disabled. */}
             {/* 按钮禁用时，外层元素仍可显示悬停提示。 */}
@@ -290,83 +280,9 @@ function AccountCard(props: AccountCardProps) {
               onCheckedChange={props.onEnabledChange}
             />
           </span>
-        </div> : null}
+        </div>
       </footer>
     </article>
-  )
-}
-
-// Shows ChatGPT usage management and returns a read-only model connection check for the selected account.
-// 显示 ChatGPT 用量管理入口，并提供对所选账号模型连接的只读检查。
-// The connection owns the credential identity, busy tracks settings writes, and usageSupported controls whether an in-app quota path exists.
-// connection 提供凭据身份，busy 表示设置正在写入，usageSupported 表示是否存在应用内额度查询入口。
-function ChatGptPlanUsageActions({ busy, connection, usageSupported }: Pick<AccountCardProps, "busy" | "connection"> & {
-  // Indicates that the effective credential can query quota in the app.
-  // 表示生效凭据可以在应用内查询额度。
-  usageSupported: boolean
-}) {
-  const { t } = useI18n()
-  // Own the request until the card is removed, and reject duplicate clicks while it runs.
-  // 在卡片移除前持有请求，并阻止请求期间重复点击。
-  const pending = React.useRef<AbortController | null>(null)
-  // Record the last remote check outcome for this card only.
-  // 仅在当前卡片记录最近一次远端检查的结果。
-  const [result, setResult] = React.useState<{ state: "checking" | "reachable" } | { state: "failed"; detail: string } | null>(null)
-  React.useEffect(() => () => pending.current?.abort(), [])
-
-  // Match the Core discovery gate for the current credential.
-  // 遵循 Core 对当前凭据的发现准入条件。
-  const disabled = busy || !connection.enabled || connection.pending_validation
-  // Project the request lifetime into the check button's feedback.
-  // 将请求运行状态投影到检查按钮的反馈。
-  const checking = result?.state === "checking"
-  // Checks the account's isolated remote catalog and records a result when the card still owns the request.
-  // 检查账号的隔离远程目录，在卡片仍持有请求时记录结果。
-  const checkConnection = async () => {
-    if (disabled || pending.current) return
-    // Scope cancellation and feedback to this specific provider request.
-    // 将取消与反馈限定在本次供应商请求内。
-    const controller = new AbortController()
-    pending.current = controller
-    setResult({ state: "checking" })
-    try {
-      // This reads GET /v1/models through Core without publishing the observed catalog.
-      // 经 Core 读取 GET /v1/models，且不发布本次观测的目录。
-      await fetchPublicAiModelCandidates(connection.id, controller.signal)
-      if (!controller.signal.aborted) setResult({ state: "reachable" })
-    } catch (reason) {
-      if (!controller.signal.aborted) setResult({ state: "failed", detail: errorMessage(reason) })
-    } finally {
-      pending.current = null
-    }
-  }
-
-  return (
-    <>
-      <div className="vk-ms-usage-note vk-ms-usage-actions">
-        <a href="https://chatgpt.com/settings/usage" rel="noreferrer" target="_blank">
-          {t("settings.credentials.chatGptPlanUsage")}
-          <ExternalLink aria-hidden="true" className="vk-icon" />
-        </a>
-        {!usageSupported ? (
-          <Button aria-busy={checking} disabled={disabled || checking} onClick={checkConnection} size="xs" type="button" variant="ghost">
-            <RefreshCw aria-hidden="true" className={checking ? "vk-spin" : undefined} />
-            {t("settings.credentials.checkChatGptPlanConnection")}
-          </Button>
-        ) : null}
-      </div>
-      {!usageSupported ? <p className="vk-ms-usage-note">{t("settings.credentials.chatGptPlanUsageOnWeb")}</p> : null}
-      {!usageSupported && connection.enabled && result?.state === "reachable" ? (
-        <p className="vk-ms-usage-note" data-slot="chatgpt-plan-connection-checked" role="status">
-          {t("settings.credentials.chatGptPlanConnectionChecked")}
-        </p>
-      ) : null}
-      {!usageSupported && connection.enabled && result?.state === "failed" ? (
-        <p className="vk-ms-account-error" role="alert" title={result.detail}>
-          {t("settings.credentials.chatGptPlanConnectionCheckFailed")} · {result.detail}
-        </p>
-      ) : null}
-    </>
   )
 }
 
@@ -408,9 +324,6 @@ function AccountMenu({ busy, connection, onDelete }: Pick<AccountCardProps, "bus
 // AccountUsage is the card's usage slot: plan and balance facts, then quota windows or where to look instead.
 // AccountUsage 是卡片的用量区：先列套餐与余额，再显示额度窗口或应去何处查看。
 function AccountUsage(props: {
-  // Optional authorization and refresh actions owned by the account's service entry.
-  // 账号服务入口提供的可选授权与刷新操作。
-  actions: React.ReactNode
   connection: PublicAiConnection
   profile: PublicAiCredentialProfile | undefined
   usage: PublicAiAccountUsage | undefined
@@ -429,7 +342,7 @@ function AccountUsage(props: {
         <span>{model.planLabel}<b>{model.planValue}</b></span>
         {!unsupported ? <span>{model.balanceLabel}<b>{model.balanceValue}</b></span> : null}
       </div>
-      {unsupported && !props.actions ? (
+      {unsupported ? (
         <p className="vk-ms-usage-note">
           {t("composer.accountCard.usageUnsupported")}
           {props.signupUrl ? (
@@ -443,7 +356,6 @@ function AccountUsage(props: {
       {!unsupported && (!balanceOnly || props.usage?.availability === "temporarily_unavailable") ? (
         <div className="vk-ms-usage-quota">{overview.quotaContent}</div>
       ) : null}
-      {props.actions}
     </div>
   )
 }

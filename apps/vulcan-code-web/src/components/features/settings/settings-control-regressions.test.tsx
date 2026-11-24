@@ -323,9 +323,9 @@ it("refreshes usage in the supported account's footer after the edit and model s
   expect(refresh.disabled).toBe(false);
 });
 
-// Verifies that a plan card reports the result of a fresh, isolated account connection check.
-// 验证套餐卡片显示一次全新、隔离的账号连接检查结果。
-it("checks the ChatGPT plan connection without issuing a quota query", async () => {
+// Verifies that ChatGPT Plan retains account controls and leaves quota management to ChatGPT.
+// 验证 ChatGPT 套餐保留账号操作，并在 ChatGPT 内管理额度。
+it("omits the usage panel and actions for ChatGPT Plan accounts", async () => {
   // Use the fixture's enabled account and its exact registered entry for the ChatGPT plan card.
   // 使用夹具中已启用的账号及其注册入口作为 ChatGPT 套餐卡。
   const snapshot = publicAiSettingsWithInvalidDefaultFixture();
@@ -342,54 +342,18 @@ it("checks the ChatGPT plan connection without issuing a quota query", async () 
   service.load.mockResolvedValue(snapshot);
   await render(<ModelServicesArea />);
 
-  // Both controls belong to the usage block, and there is no duplicate external link.
-  // 两项操作均在用量区内，且外部链接只显示一次。
+  // Check the connected account card rather than the provider's signup links.
+  // 检查已接入账号卡本身，避开供应商注册链接。
   const card = host.querySelector(".vk-ms-account")!;
-  const usage = card.querySelector(".vk-ms-usage")!;
-  const authorization = card.querySelectorAll('a[href="https://chatgpt.com/settings/usage"]');
-  const check = button(readLocaleMessage("en-US", "settings.credentials.checkChatGptPlanConnection"));
+  // Usage is absent while standard account actions remain available.
+  // 用量区不显示，常规账号操作仍可使用。
   const usageLabel = readLocaleMessage("en-US", "settings.credentials.refreshUsage");
-  expect(authorization).toHaveLength(1);
-  expect(usage.contains(authorization[0])).toBe(true);
-  expect(usage.contains(check)).toBe(true);
-  expect(usage.textContent).not.toContain(readLocaleMessage("en-US", "composer.accountCard.usageUnsupported"));
+  expect(card.querySelector(".vk-ms-usage")).toBeNull();
+  expect(card.querySelector('a[href="https://chatgpt.com/settings/usage"]')).toBeNull();
   expect(card.querySelector(`[aria-label="${usageLabel}"]`)).toBeNull();
-
-  // An empty candidate result still proves Core consulted the selected account's model catalog.
-  // 候选结果为空也能证明 Core 已读取所选账号的模型目录。
-  const observation = { providerId: provider.id, serviceEntryId: entry.id, candidates: [] };
-  // Keep discovery active to verify visible progress and duplicate-click protection.
-  // 让发现请求保持运行，以验证可见进度及重复点击保护。
-  let finishCheck!: () => void;
-  service.catalogFetch.mockImplementationOnce(() => new Promise((resolve) => {
-    finishCheck = () => resolve(observation);
-  }));
-  // The check never needs a second local settings snapshot.
-  // 检查无需再次读取本地设置快照。
-  const loadCount = service.load.mock.calls.length;
-  await act(async () => { check.click(); check.click(); });
-  expect(service.catalogFetch).toHaveBeenCalledExactlyOnceWith(connection.id, expect.any(AbortSignal));
-  expect(check.disabled).toBe(true);
-  expect(check.getAttribute("aria-busy")).toBe("true");
-  await act(async () => finishCheck());
-  expect(usage.querySelector('[data-slot="chatgpt-plan-connection-checked"][role="status"]')).not.toBeNull();
-  expect(check.disabled).toBe(false);
-  expect(service.load).toHaveBeenCalledTimes(loadCount);
+  expect(card.querySelector('[role="switch"]')).not.toBeNull();
+  expect(service.catalogFetch).not.toHaveBeenCalled();
   expect(service.usageQuery).not.toHaveBeenCalled();
-  expect(card.querySelector(`[aria-label="${usageLabel}"]`)).toBeNull();
-
-  // A remote rejection replaces the previous success with an inline diagnostic and allows retry.
-  // 远端拒绝后用卡片内诊断替换上次成功结果，并允许重试。
-  const denial = "Fixture rejected the account credential";
-  service.catalogFetch.mockRejectedValueOnce(new Error(denial));
-  await act(async () => check.click());
-  expect(usage.querySelector('[data-slot="chatgpt-plan-connection-checked"]')).toBeNull();
-  expect(usage.querySelector('[role="alert"]')?.getAttribute("title")).toBe(denial);
-  expect(check.disabled).toBe(false);
-  service.catalogFetch.mockResolvedValueOnce(observation);
-  await act(async () => check.click());
-  expect(usage.querySelector('[role="alert"]')).toBeNull();
-  expect(usage.querySelector('[data-slot="chatgpt-plan-connection-checked"]')).not.toBeNull();
 });
 
 it("keeps a deleting account dialog open and editable after a rejected deletion", async () => {
@@ -457,35 +421,90 @@ it("locks reordering and account creation during a priority write and reloads af
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Synthetic priority write failed");
 });
 
-// Existing Codex records explain the migration, while the plan is the new selectable entry.
-// 已有 Codex 记录说明迁移方式，套餐作为可选择的新入口。
-it("shows the retirement notice and prevents adding a legacy Codex connection", async () => {
+// Exercises OpenAI's three entry choices, native sign-in, and saved Codex account actions.
+// 覆盖 OpenAI 三种入口选择、原生登录与已保存 Codex 账号的操作。
+it("offers the three OpenAI service entries and restores Codex login and usage", async () => {
+  // Build a settings response with the three independently declared credential profiles.
+  // 构造包含三个独立声明凭据档的设置响应。
   const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   const [provider] = snapshot.providers;
   const [connection] = snapshot.connections;
   const [entry] = provider.service_entries;
+  const [tokenProfile] = entry.credential_profiles;
   provider.id = "openai";
   provider.display_name = "OpenAI";
+  // Each choice carries the credential mode and authorization owned by its service entry.
+  // 每个选项携带所属服务入口的凭据方式和授权声明。
   provider.service_entries = [
-    { ...entry, id: "codex-subscription", display_name: "Legacy Codex" },
-    { ...entry, id: "chatgpt-plan", display_name: "ChatGPT Plan" },
+    { ...entry, id: "public-api", display_name: "OpenAI API" },
+    { ...entry, id: "codex-subscription", display_name: "Codex Subscription", credential_profiles: [{
+      ...tokenProfile, id: "codex-oauth", credential_mode: "auth", billing_kind: "provider_managed",
+      authorization: { kind: "registered_oauth", provider: "open_ai_codex" }, account_usage_query: "open_ai_codex_usage",
+    }] },
+    { ...entry, id: "chatgpt-plan", display_name: "ChatGPT Plan", credential_profiles: [{
+      ...tokenProfile, id: "chatgpt-oauth", credential_mode: "auth", billing_kind: "provider_managed",
+      authorization: { kind: "registered_oauth", provider: "open_ai_chat_gpt" },
+    }] },
   ];
-  connection.provider_id = "openai";
-  connection.service_entry_id = "codex-subscription";
-  connection.enabled = false;
+  Object.assign(connection, {
+    provider_id: "openai", service_entry_id: "codex-subscription", credential_profile_id: "codex-oauth",
+    credential_mode: "auth", billing_kind: "provider_managed", usage_capability: "open_ai_codex_usage",
+  });
   snapshot.providers = [provider];
   snapshot.connections = [connection];
+  // The restored card reads quota for its own credential.
+  // 恢复后的账号卡使用自己的凭据查询用量。
+  const usage: PublicAiAccountUsage = {
+    credential_id: connection.credential_id,
+    availability: "supported",
+    quota_windows: [{
+      id: "main:primary", display_name: "Fixture quota", duration_seconds: 18000,
+      remaining_percent: "73", unit: "percent", available: true, unlimited: false,
+    }],
+  };
   service.load.mockResolvedValue(snapshot);
+  service.usageQuery.mockResolvedValueOnce(usage);
   await render(<ModelServicesArea />);
-  const account = document.querySelector(".vk-ms-account")!;
-  expect(account.querySelector('[role="status"]')?.textContent)
-    .toBe(readLocaleMessage("en-US", "settings.credentials.retiredCodexMigration"));
-  expect(account.querySelector('[role="switch"]')).toBeNull();
+  expect(document.querySelector('.vk-ms-account [role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => button(readLocaleMessage("en-US", "settings.credentials.refreshUsage")).click());
+  expect(service.usageQuery).toHaveBeenCalledExactlyOnceWith(connection.id);
+  expect(host.querySelector('.vk-ms-account [role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("73");
+  // Every presented choice leads to its exact service identifier.
+  // 每个可见入口均指向其精确的服务标识。
   const connect = vi.fn();
   await render(<ProviderConnectPanel busy={false} onConnect={connect} provider={provider} />);
-  expect(document.querySelectorAll('[role="radio"]')).toHaveLength(1);
-  await act(async () => button(readLocaleMessage("en-US", "settings.modelServices.connectPanel.connect")).click());
-  expect(connect).toHaveBeenCalledExactlyOnceWith("chatgpt-plan");
+  // Find entry controls by their rendered names rather than their order.
+  // 根据渲染名称定位入口，避免依赖顺序。
+  const radios = [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+  expect(radios).toHaveLength(3);
+  for (const [id, label] of [
+    ["public-api", "OpenAI API"],
+    ["codex-subscription", readLocaleMessage("en-US", "settings.serviceEntry.title.codexSubscription")],
+    ["chatgpt-plan", readLocaleMessage("en-US", "settings.serviceEntry.title.chatGptPlan")],
+  ]) {
+    // Select the current entry and verify the exact identifier passed to the credential dialog.
+    // 选择当前入口并核对传入凭据弹窗的精确标识。
+    const radio = radios.find((candidate) => candidate.querySelector("strong")?.textContent === label);
+    expect(radio, label).toBeDefined();
+    await act(async () => radio!.click());
+    await act(async () => button(readLocaleMessage("en-US", "settings.modelServices.connectPanel.connect")).click());
+    expect(connect).toHaveBeenLastCalledWith(id);
+  }
+  // Opening the real dialog on Codex starts its OAuth profile rather than a neighboring mode.
+  // 在真实弹窗中打开 Codex 时，启动其专属 OAuth 凭据档。
+  const transaction = { transactionId: "synthetic-codex", authorizationBinding: "codex-fixture", phase: "waiting_for_callback", expiresAtUnixMs: 1 };
+  service.oauthStart.mockResolvedValueOnce({ transaction, authorizationUrl: "https://fixture.invalid", flowKind: "loopback_callback" });
+  service.oauthStatus.mockResolvedValue({ ...transaction, phase: "succeeded" });
+  service.oauthCommit.mockResolvedValueOnce(snapshot);
+  await render(<PublicAiConnectionDialog connection={null} initialProviderId="openai" initialEntryId="codex-subscription" lockedProviderId="openai" onOpenChange={vi.fn()} onSaved={vi.fn()} open providers={snapshot.providers} />);
+  await type(document.querySelector<HTMLInputElement>('input:not([type="hidden"])')!, "Codex test account");
+  await act(async () => button(readLocaleMessage("en-US", "settings.credentials.openBrowserAuthorize")).click());
+  expect(service.oauthStart).toHaveBeenCalledExactlyOnceWith({
+    providerId: "openai", serviceEntryId: "codex-subscription", credentialProfileId: "codex-oauth", client: {},
+  });
+  await vi.waitFor(() => expect(service.oauthCommit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    transactionId: transaction.transactionId, providerId: "openai", serviceEntryId: "codex-subscription", credentialProfileId: "codex-oauth",
+  })));
 });
 
 // Locates a checkbox by its visible credential name or group action.

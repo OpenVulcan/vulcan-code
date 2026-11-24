@@ -336,8 +336,15 @@ pub(super) async fn add_public_ai_connection_with_secret(
         ));
     }
     let service_entry_kind = entry.kind;
-    if vulcan_provider_adapters::is_retired_codex_subscription(&provider.id, &entry.id) {
-        return Err(vulcan_provider_adapters::OPENAI_CODEX_RETIRED_MESSAGE.into());
+    if vulcan_provider_adapters::is_openai_codex_subscription(&provider.id, &entry.id)
+        != matches!(
+            secret.material,
+            CredentialSecretMaterial::OpenAiCodexOAuth { .. }
+        )
+    {
+        return Err(String::from(
+            "Codex credentials require the corresponding OpenAI service entry.",
+        ));
     }
     if vulcan_provider_adapters::is_openai_chatgpt_plan(&provider.id, &entry.id)
         != matches!(
@@ -840,6 +847,16 @@ pub(crate) async fn service_update_public_ai_connection(
         || current.credential_mode != request.credential_mode
         || current.service_origin_override != request.service_origin_override
         || request.secret.is_some();
+    // Validate the requested service binding before replacing any live credential.
+    // 在更换任何生效凭据前校验请求的服务绑定。
+    let connection_id = request.connection_id.clone();
+    let mut validation_configuration = current_configuration.clone();
+    apply_connection_update(
+        runtime.as_ref(),
+        &mut validation_configuration,
+        &request,
+        connection_id.as_str(),
+    )?;
     let secret_store = runtime.credential_secret_store();
     let replaced_secret = if let Some(secret) = request.secret.as_deref() {
         validate_non_empty("secret", secret)?;
@@ -879,23 +896,6 @@ pub(crate) async fn service_update_public_ai_connection(
             return Err(compensated_operation_error(error, rollback, Ok(())));
         }
     };
-    let connection_id = request.connection_id.clone();
-    let mut validation_configuration = current_configuration.clone();
-    if let Err(error) = apply_connection_update(
-        runtime.as_ref(),
-        &mut validation_configuration,
-        &request,
-        connection_id.as_str(),
-    ) {
-        rollback_replaced_secret(
-            secret_store.as_ref(),
-            current.secret_reference.as_str(),
-            replaced_secret.as_ref(),
-        )
-        .await?;
-        rollback_management_secret_mutation(secret_store.as_ref(), &management_mutation).await?;
-        return Err(error);
-    }
     if let Some(connection) = validation_configuration
         .connection_graph
         .connections
@@ -1062,24 +1062,11 @@ pub(super) fn apply_connection_update(
         .get(connection_id)
         .cloned()
         .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
-    if vulcan_provider_adapters::is_retired_codex_subscription(
-        &latest.provider_id,
-        &latest.service_entry_id,
-    ) || vulcan_provider_adapters::is_retired_codex_subscription(
-        &latest.provider_id,
-        &request.service_entry_id,
-    ) {
-        return Err(vulcan_provider_adapters::OPENAI_CODEX_RETIRED_MESSAGE.into());
-    }
-    if vulcan_provider_adapters::is_openai_chatgpt_plan(
-        &latest.provider_id,
-        &latest.service_entry_id,
-    ) != vulcan_provider_adapters::is_openai_chatgpt_plan(
-        &latest.provider_id,
-        &request.service_entry_id,
-    ) {
+    // Each OpenAI entry binds a different credential and endpoint at creation.
+    // 每个 OpenAI 入口在创建时绑定各自的凭据和端点。
+    if latest.provider_id == "openai" && latest.service_entry_id != request.service_entry_id {
         return Err(String::from(
-            "Create a new connection when changing to or from ChatGPT Plan.",
+            "Create a new connection when changing the OpenAI sign-in method.",
         ));
     }
     let providers = runtime.effective_providers(configuration)?;

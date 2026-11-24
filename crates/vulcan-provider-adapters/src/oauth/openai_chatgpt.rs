@@ -21,10 +21,6 @@ pub const OPENAI_CHATGPT_PLAN_ENTRY_ID: &str = "chatgpt-plan";
 /// Resource audience and API base for the issued subscription credential.
 /// 套餐凭据的资源受众及 API 基地址。
 pub const OPENAI_CHATGPT_PLAN_BASE_URL: &str = "https://api.openai.com/v1";
-/// Actionable diagnostic for the retired native Codex login.
-/// 旧版 Codex 登录废弃后的操作提示。
-pub const OPENAI_CODEX_RETIRED_MESSAGE: &str =
-    "The legacy Codex subscription is retired. Create a new ChatGPT Plan connection.";
 /// Issuer and fixed public endpoints published in its OIDC configuration.
 /// OpenID 配置中发布的签发者及固定公共端点。
 const ISSUER: &str = "https://auth.openai.com";
@@ -59,12 +55,6 @@ fn oauth_client() -> Result<&'static Client, String> {
 /// 返回供应商及服务入口是否指向官方 ChatGPT 套餐。
 pub fn is_openai_chatgpt_plan(provider_id: &str, entry_id: &str) -> bool {
     provider_id == "openai" && entry_id == OPENAI_CHATGPT_PLAN_ENTRY_ID
-}
-
-/// Returns whether the provider and entry identify the retired Codex product.
-/// 返回供应商及服务入口是否指向已废弃的 Codex 产品。
-pub fn is_retired_codex_subscription(provider_id: &str, entry_id: &str) -> bool {
-    provider_id == "openai" && entry_id == "codex-subscription"
 }
 
 /// Holds a single callback's proofs and, for reauthorization, its expected account.

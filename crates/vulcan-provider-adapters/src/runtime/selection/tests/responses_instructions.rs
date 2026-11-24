@@ -6,8 +6,9 @@ use crate::execution::test_support::{
 };
 use crate::runtime::test_support::{install_source_catalog, with_protocol_variants};
 use crate::{
-    CredentialSecretEnvelope, PersistedAiConfiguration, ProviderExecutionClient, PublicAiRuntime,
-    ResponsesRouteFeatures, ResponsesWebsocketPolicy, parse_openai_model_catalog,
+    CredentialSecretEnvelope, CredentialSecretMaterial, OAuthTokenSet, PersistedAiConfiguration,
+    ProviderExecutionClient, PublicAiRuntime, ResponsesRouteFeatures, ResponsesWebsocketPolicy,
+    parse_openai_model_catalog,
 };
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -41,6 +42,10 @@ async fn receive_responses_body(listener: Arc<TcpListener>) -> Value {
     // 按协议分隔符分离 HTTP 头和 JSON 正文。
     let (headers, body) = request.split_once("\r\n\r\n").unwrap();
     assert!(headers.starts_with("POST /responses HTTP/"));
+    assert!(!headers.lines().any(|line| {
+        line.split_once(':')
+            .is_some_and(|(name, _)| name.eq_ignore_ascii_case("upgrade"))
+    }));
     // The synthetic upstream completes the real transport stream without a live account.
     // 合成上游完成真实传输流，无需使用线上账号。
     let event =
@@ -204,22 +209,98 @@ async fn public_responses_instruction_placement_on_the_wire() {
     }
 }
 
-/// Checks that a saved native Codex account cannot resolve a conversation route.
-/// 验证已保存的原生 Codex 账号无法解析可执行对话路由。
-#[test]
-fn retired_codex_connection_is_visible_but_cannot_execute() {
-    let (runtime, config) = model_fixture(
+/// Verifies a saved Codex account honors its toggle and sends native GPT-6.2 requests over HTTP SSE.
+/// 验证已保存的 Codex 账号尊重启停状态，并以 HTTP SSE 发送原生 GPT-6.2 请求。
+#[tokio::test]
+async fn saved_codex_account_executes_over_http_responses() {
+    // Resolve the model through the bundled Codex entry and existing account graph.
+    // 通过随包 Codex 入口和已有账号图解析模型。
+    let model = "gpt-6.2-sol";
+    let (runtime, mut config) = model_fixture(
         "codex-subscription",
         OPENAI_CODEX_RESPONSES_PROFILE_ID,
-        &["gpt-6.2-sol"],
+        &[model],
     );
-    assert!(config.connection_graph.connections.contains_key("fixture"));
-    assert!(!config.connection_is_enabled("fixture"));
+    assert!(config.connection_is_enabled("fixture"));
+    config.set_connection_enabled("fixture", false).unwrap();
+    runtime.reapply_model_catalog_overlays(&config).unwrap();
     assert!(
         runtime
-            .resolve_connection_model_selection(&config, "fixture", "openai", "gpt-6.2-sol")
+            .resolve_connection_model_selection(&config, "fixture", "openai", model)
             .is_err()
     );
+    config.set_connection_enabled("fixture", true).unwrap();
+    runtime.reapply_model_catalog_overlays(&config).unwrap();
+    // Redirect physical traffic to a local peer while retaining the selected protocol and model.
+    // 把真实网络流量重定向至本地，同时保留所选协议及模型。
+    let mut route = runtime
+        .resolve_connection_model_selection(&config, "fixture", "openai", model)
+        .unwrap()
+        .route;
+    assert_eq!(
+        route.protocol_route.protocol_profile_id,
+        OPENAI_CODEX_RESPONSES_PROFILE_ID
+    );
+    // Frozen routes from past requests may still carry the former capability flag.
+    // 过去请求冻结的路由仍可能携带原有的能力标志。
+    route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
+        websocket: ResponsesWebsocketPolicy::Verified,
+        recovery: Default::default(),
+    });
+    // Serve one complete stream so the test observes execution, not just encoding.
+    // 提供完整响应流，使测试覆盖实际执行及编码。
+    let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+    route.protocol_route.base_url_override =
+        Some(format!("http://{}", listener.local_addr().unwrap()));
+    // Use a synthetic native OAuth session with a Codex account identifier.
+    // 使用带有 Codex 账号标识的合成原生 OAuth 会话。
+    let secret = CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenAiCodexOAuth {
+        tokens: OAuthTokenSet {
+            access_token: "fixture-access".into(),
+            refresh_token: "fixture-refresh".into(),
+            issued_at_unix_ms: 1,
+            expires_at_unix_ms: 2,
+            scopes: Default::default(),
+            account_subject: None,
+            email: None,
+        },
+        id_token: None,
+        account_id: Some("fixture-account".into()),
+    })
+    .unwrap()
+    .execution_secret()
+    .unwrap();
+    // Reuse the real encoder and execution client for the selected route.
+    // 对所选路由复用真实编码器和执行客户端。
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        Arc::new(ProtocolRegistry::first_batch().unwrap()),
+    );
+    // Supply instructions to distinguish the native Lite request from public Responses.
+    // 提供指令以验证原生 Lite 请求的编码不同于公开 Responses。
+    let mut request = minimal_request();
+    request.model_id = model.into();
+    request.cache_scope_id = Some("00000000-0000-0000-0000-000000000123".into());
+    request.messages = vec![
+        message(MessageRole::System, "fixture system"),
+        message(MessageRole::User, "fixture user"),
+    ];
+    // The peer asserts that the connection starts with an HTTP POST without a protocol upgrade.
+    // 接收端断言连接以普通 HTTP POST 开始，且不升级协议。
+    let peer = tokio::spawn(receive_responses_body(listener));
+    // Consume events through the successful terminal state.
+    // 消费事件直至成功终态。
+    let mut events = client.execute(route, request, secret, "codex-wire-fixture".into());
+    while !matches!(
+        events.next().await.expect("missing completion").unwrap(),
+        AiStreamEvent::ResponseCompleted
+    ) {}
+    // Check the selected model and native Lite instructions contract on the wire.
+    // 核对线上请求中的所选模型与原生 Lite 指令契约。
+    let body = peer.await.unwrap();
+    assert_eq!(body["model"], model);
+    assert_eq!(body["stream"], true);
+    assert!(body.get("instructions").is_none());
 }
 
 /// Verifies account-scoped model choices, GPT-6.2 prefix placement, and plan wire restrictions.

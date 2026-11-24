@@ -1,5 +1,5 @@
 import * as React from "react"
-import { isRetiredCodexSubscription, localizedServiceEntryPresentation } from "./provider-presentation"
+import { localizedServiceEntryPresentation } from "./provider-presentation"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
@@ -217,12 +217,15 @@ export function PublicAiConnectionDialog(props: {
 
   const provider = props.providers.find((item) => item.id === providerId)
     ?? (props.lockedProviderId ? undefined : props.providers[0])
-  const entries = provider?.service_entries.filter((item) =>
-    !isRetiredCodexSubscription(provider.id, item.id)
-    && (props.connection?.provider_id !== "openai"
-      || props.connection.service_entry_id !== "chatgpt-plan"
-      || item.id === "chatgpt-plan"))
-  const entry = entries?.find((item) => item.id === entryId) ?? entries?.[0]
+  const entries = provider?.service_entries
+  // A saved OpenAI account keeps the sign-in method selected at creation.
+  // 已保存的 OpenAI 账号沿用创建时选择的登录方式。
+  const openAiConnectionEntry = props.connection?.provider_id === "openai"
+    ? props.connection.service_entry_id
+    : undefined
+  const entry = openAiConnectionEntry === undefined
+    ? entries?.find((item) => item.id === entryId) ?? entries?.[0]
+    : entries?.find((item) => item.id === openAiConnectionEntry)
   const credentialProfile = entry?.credential_profiles.find((item) => item.id === credentialProfileId)
     ?? entry?.credential_profiles[0]
   const registeredOauthProvider = credentialProfile?.authorization?.kind === "registered_oauth"
@@ -537,6 +540,7 @@ export function PublicAiConnectionDialog(props: {
               <strong>{t("settings.credentials.autoRegion")}</strong>
             ) : (
               <Select
+                disabled={openAiConnectionEntry !== undefined}
                 onValueChange={(value) => {
                   setEntryId(value)
                   if (value !== entry?.id) {

@@ -12,7 +12,6 @@ import type {
   PublicAiConfigurationArchiveAccount, PublicAiConfigurationImportPreview,
   PublicAiConfigurationImportResult, PublicAiSettingsSnapshot,
 } from "@/types"
-import { isRetiredCodexSubscription } from "../provider-presentation"
 
 // Defines which operation is open and how imported settings reach the owning page.
 // 定义当前操作和将导入设置交给所在页面的方式。
@@ -66,7 +65,8 @@ export function ConfigurationArchiveDialog({ mode, settings, onClose, onImported
       providerId: connection.provider_id,
       serviceEntryId: connection.service_entry_id,
       alreadyPresent: false,
-      requiresSignIn: isRetiredCodexSubscription(connection.provider_id, connection.service_entry_id),
+      requiresSignIn: connection.provider_id === "openai"
+        && (connection.service_entry_id === "codex-subscription" || connection.service_entry_id === "chatgpt-plan"),
     }))
     : (review?.preview.accounts ?? []).map((account) => ({
       ...account,
@@ -151,8 +151,7 @@ export function ConfigurationArchiveDialog({ mode, settings, onClose, onImported
                 <div>
                   <strong>{t("settings.configurationArchive.signInRequired")}</strong>
                   <ul>{completed.signInRequired.map((account, index) => (
-                    <li key={index}>{account.displayName} · {account.providerId}{isRetiredCodexSubscription(account.providerId, account.serviceEntryId)
-                      ? ` · ${t("settings.credentials.retiredCodexMigration")}` : ""}</li>
+                    <li key={index}>{account.displayName} · {account.providerId}</li>
                   ))}</ul>
                 </div>
               ) : null}
@@ -254,8 +253,7 @@ function ArchiveCredentialSelection({
               <span className="vk-field-hint">
                 {choice.providerId} · {choice.serviceEntryId}
                 {choice.alreadyPresent ? ` · ${t("settings.configurationArchive.alreadyPresent")}` : ""}
-                {choice.requiresSignIn ? ` · ${t(isRetiredCodexSubscription(choice.providerId, choice.serviceEntryId)
-                  ? "settings.credentials.retiredCodexMigration" : "settings.configurationArchive.reauthorize")}` : ""}
+                {choice.requiresSignIn ? ` · ${t("settings.configurationArchive.reauthorize")}` : ""}
               </span>
             </span>
           </label>

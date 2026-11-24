@@ -30,10 +30,15 @@ mod openvulcan;
 mod tokenrhythm;
 mod xiaomi;
 pub use openai_chatgpt::{
-    OPENAI_CHATGPT_PLAN_BASE_URL, OPENAI_CHATGPT_PLAN_ENTRY_ID, OPENAI_CODEX_RETIRED_MESSAGE,
-    is_openai_chatgpt_plan, is_retired_codex_subscription,
+    OPENAI_CHATGPT_PLAN_BASE_URL, OPENAI_CHATGPT_PLAN_ENTRY_ID, is_openai_chatgpt_plan,
 };
 pub use openvulcan::revoke_openvulcan_authorization;
+
+/// Checks whether `provider_id` and `entry_id` identify the native Codex subscription service.
+/// 判断 `provider_id` 和 `entry_id` 是否指向原生 Codex 套餐服务。
+pub fn is_openai_codex_subscription(provider_id: &str, entry_id: &str) -> bool {
+    provider_id == "openai" && entry_id == "codex-subscription"
+}
 
 const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_CODEX_AUTHORIZATION_URL: &str = "https://auth.openai.com/oauth/authorize";
@@ -681,9 +686,6 @@ impl OAuthAuthorizationRuntime {
                 .start_openvulcan(region, authorization_binding, client.return_page_locale)
                 .await;
         }
-        if provider_kind == OAuthProviderKind::OpenAiCodex {
-            return Err(OPENAI_CODEX_RETIRED_MESSAGE.into());
-        }
         if matches!(
             provider_kind,
             OAuthProviderKind::MiniMaxGlobalTokenPlan | OAuthProviderKind::MiniMaxChinaTokenPlan
@@ -1154,8 +1156,41 @@ impl OAuthAuthorizationRuntime {
             | CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => Ok(material.clone()),
-            CredentialSecretMaterial::OpenAiCodexOAuth { .. } => {
-                Err(OPENAI_CODEX_RETIRED_MESSAGE.into())
+            CredentialSecretMaterial::OpenAiCodexOAuth {
+                tokens,
+                id_token,
+                account_id,
+            } => {
+                // Renew native Codex credentials using the client that issued their original grant.
+                // 使用原始授权的客户端续期原生 Codex 凭据。
+                let token = refresh_oauth_token(
+                    &self.client,
+                    OPENAI_CODEX_TOKEN_URL,
+                    OPENAI_CODEX_CLIENT_ID,
+                    None,
+                    tokens,
+                )
+                .await?;
+                // The refresh response may omit the ID token. Keep the original account binding in that case.
+                // 续期响应可以省略身份令牌，此时保留原有账号绑定。
+                let refreshed_id_token = token.id_token.clone().or_else(|| id_token.clone());
+                let refreshed_identity = refreshed_id_token
+                    .as_deref()
+                    .map(parse_openai_codex_identity)
+                    .transpose()?;
+                let refreshed_account_id = refreshed_identity
+                    .map(|claims| claims.authentication.chatgpt_account_id)
+                    .or_else(|| account_id.clone());
+                if refreshed_account_id.is_none() {
+                    return Err(String::from(
+                        "OpenAI Codex refresh did not preserve an account id; reauthorization is required.",
+                    ));
+                }
+                Ok(CredentialSecretMaterial::OpenAiCodexOAuth {
+                    tokens: merge_refreshed_token_set(tokens, &token)?,
+                    id_token: refreshed_id_token,
+                    account_id: refreshed_account_id,
+                })
             }
             CredentialSecretMaterial::GoogleOAuth {
                 tokens,
@@ -3702,6 +3737,67 @@ mod tests {
                 && provider_username == "Tester"
                 && credential_label == "CLI Login"
         ));
+    }
+
+    /// Verifies that a native Codex login starts a cancellable browser authorization.
+    /// 验证原生 Codex 登录能够启动并取消浏览器授权。
+    #[tokio::test]
+    async fn codex_login_starts_native_browser_authorization() {
+        // Start the real loopback flow without opening a browser or exchanging credentials.
+        // 启动真实回环流程，无需打开浏览器或交换凭据。
+        let runtime = OAuthAuthorizationRuntime::new(Client::new());
+        // Bind the transaction to the same declared identity the service uses for a new account.
+        // 将事务绑定到服务创建新账号时使用的同一声明身份。
+        let authorization = CredentialAuthorization::RegisteredOauth {
+            provider: OAuthProviderKind::OpenAiCodex,
+        };
+        // Preserve the scope across start and cancel.
+        // 在启动和取消之间保持作用域。
+        let binding = credential_authorization_binding(
+            "openai",
+            "codex-subscription",
+            "codex-oauth",
+            "https://chatgpt.com/backend-api/codex",
+            &authorization,
+        )
+        .unwrap();
+        // The challenge is the result returned from the registered Codex flow.
+        // 此挑战来自已注册的 Codex 流程。
+        let challenge = runtime
+            .start(
+                &authorization,
+                binding.clone(),
+                None,
+                "https://chatgpt.com/backend-api/codex",
+                OAuthClientConfiguration::default(),
+            )
+            .await
+            .unwrap();
+        // Cancel before assertions so the callback port can be reused even if validation fails.
+        // 在断言前取消，确保即使校验失败也能复用回调端口。
+        let cancelled = runtime
+            .cancel(&challenge.transaction.transaction_id)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.phase, OAuthTransactionPhase::Cancelled);
+        assert_eq!(challenge.transaction.authorization_binding, binding);
+        assert_eq!(
+            challenge.transaction.phase,
+            OAuthTransactionPhase::WaitingForCallback
+        );
+        // The URL must use Codex's own client registration and loopback redirect.
+        // 授权地址必须使用 Codex 自己的客户端注册与回环重定向。
+        let url = reqwest::Url::parse(&challenge.authorization_url).unwrap();
+        // Compare structured parameters independently of their serialized order.
+        // 通过结构化参数比较，避免依赖序列化顺序。
+        let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(
+            url.origin().ascii_serialization(),
+            "https://auth.openai.com"
+        );
+        assert_eq!(query["client_id"], super::OPENAI_CODEX_CLIENT_ID);
+        assert_eq!(query["redirect_uri"], super::OPENAI_CODEX_REDIRECT_URI);
+        assert_eq!(query["code_challenge_method"], "S256");
     }
 
     /// Verifies transaction bindings are stable and credential-profile scoped.
