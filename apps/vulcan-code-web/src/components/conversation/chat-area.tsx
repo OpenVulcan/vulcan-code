@@ -114,9 +114,13 @@ export function ChatArea(props: ChatAreaProps) {
   // generationSubmitting blocks duplicate dialog submissions while the durable boundary is in flight.
   // generationSubmitting 在可靠边界执行期间阻止重复提交对话框。
   const [generationSubmitting, setGenerationSubmitting] = React.useState(false);
-  // activeContinuationKey is UI-only and never becomes backend authorization.
-  // activeContinuationKey 仅供界面使用，绝不会成为后端授权信息。
+  // The composer and Continue actions share the live run state while the event window catches up to resumed work.
+  // 恢复执行后，事件窗口更新前，输入区和继续操作共用实时运行状态。
+  const isConversationRunning = conversationIsRunning(selectedConversation);
+  // activeContinuationKey identifies a visible Continue candidate only after the current execution stops.
+  // activeContinuationKey 仅在当前执行停止后标识界面可用的继续候选。
   const activeContinuationKey = selectedConversation
+    && !isConversationRunning
     && continuationCandidate?.session_id === selectedConversation.id
     ? continuationCandidate.ui_identity
     : null;
@@ -398,9 +402,6 @@ export function ChatArea(props: ChatAreaProps) {
     () => activeSurfaceConversationId ? <ConversationTailStatus conversationId={activeSurfaceConversationId} /> : null,
     [activeSurfaceConversationId],
   );
-  // The composer uses this run state for its stop action and delivery shortcuts.
-  // 输入区使用此运行状态决定停止操作和发送快捷键提示。
-  const isConversationRunning = conversationIsRunning(selectedConversation);
   // pendingPlanArtifact tracks the current submit_plan artifact that still requires a user decision.
   // pendingPlanArtifact 跟踪当前仍需要用户决策的 submit_plan 计划产物。
   const pendingPlanArtifact = React.useMemo(() => {
@@ -541,10 +542,7 @@ export function ChatArea(props: ChatAreaProps) {
     onSelectConversation: props.onSelectConversation,
     onOpenSubagentPanel: props.onOpenSubagentPanel,
   }), [props.onOpenSubagentPanel, props.onSelectConversation, props.workbench.conversations, subagentNavigation]);
-  const continuationFooterVisible = Boolean(selectedConversation
-    && continuationCandidate?.session_id === selectedConversation.id
-    && !conversationIsRunning(selectedConversation)
-    && props.onContinueConversation);
+  const continuationFooterVisible = activeContinuationKey !== null && Boolean(props.onContinueConversation);
   const continuationFeedbackKind = continuationFeedback?.key === activeContinuationKey ? continuationFeedback?.kind ?? null : null;
   const continuationFooter = React.useMemo(() => continuationFooterVisible ? (
     <ConversationContinueControl

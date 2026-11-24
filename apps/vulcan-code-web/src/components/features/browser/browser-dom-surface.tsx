@@ -19,12 +19,14 @@ const adoptedStyleRevisions = new WeakMap<Document | ShadowRoot, string>();
 // 密码占位符保留原生光标偏移，使本框架无需保留已提交字符。
 const PASSWORD_PLACEHOLDER = "•";
 
-// The parent supplies the projected revision, current control grant and ordered input queue.
-// 父组件提供投影修订、当前控制授权与有序输入队列。
+// The parent supplies the projected revision, input availability and ordered input queue.
+// 父组件提供投影修订、输入可用状态与有序输入队列。
 type SurfaceProps = {
   snapshot: BrowserDomRevision;
   title: string;
-  ownsControl: boolean;
+  // Direct input is available while this projection can accept actions.
+  // 此投影可接受操作期间允许直接输入。
+  interactive: boolean;
   heldPointer: React.RefObject<HeldBrowserPointer | null>;
   heldKeys: React.RefObject<Set<string>>;
   queueInput: (kind: string, payload: Record<string, unknown>) => Promise<boolean>;
@@ -245,9 +247,9 @@ export function BrowserDomSurface(props: SurfaceProps) {
 
   React.useLayoutEffect(() => {
     if (!frameDocument) return;
-    // Control loss discards an uncommitted password candidate before the authoritative mask is restored.
-    // 失去控制权时先丢弃未提交的密码候选词，再恢复源端掩码。
-    if (!props.ownsControl && isPasswordField(composition.current?.field)) composition.current = null;
+    // A suspended projection discards the uncommitted password candidate before restoring the source mask.
+    // 投影暂停时先丢弃未提交的密码候选词，再恢复源端掩码。
+    if (!props.interactive && isPasswordField(composition.current?.field)) composition.current = null;
     const source = new DOMParser().parseFromString(snapshot.html, "text/html");
     reconcileAdoptedStyles(frameDocument, source.head);
     // The frame's CSP is installed by srcdoc. Match it as the first head element on every patch.
@@ -275,7 +277,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
     if (viewport && (viewport.scrollX !== snapshot.windowScroll[0] || viewport.scrollY !== snapshot.windowScroll[1])) {
       viewport.scrollTo(...snapshot.windowScroll);
     }
-    if (props.ownsControl && document.activeElement === iframe.current && snapshot.focused
+    if (props.interactive && document.activeElement === iframe.current && snapshot.focused
       && !composition.current && !pending.current.size && !props.heldPointer.current) {
       const focused = elements.get(snapshot.focused) as HTMLElement | undefined;
       let currentFocus = frameDocument.activeElement;
@@ -285,11 +287,11 @@ export function BrowserDomSurface(props: SurfaceProps) {
     for (const [id, length, start, end, direction] of snapshot.passwords) {
       const field = elements.get(id);
       if (isPasswordField(field) && field !== composition.current?.field
-        && (!props.ownsControl || !pending.current.has(field))) {
+        && (!props.interactive || !pending.current.has(field))) {
         maskPassword(field, length, start, end, direction);
       }
     }
-  }, [frameDocument, snapshot, props.heldPointer, props.ownsControl, refusedEdits]);
+  }, [frameDocument, snapshot, props.heldPointer, props.interactive, refusedEdits]);
 
   React.useEffect(() => {
     if (!frameDocument) return;
@@ -304,7 +306,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
     // 每个已确认候选词或普通编辑仅回放一次，随后恢复源页面协调。
     function commit({ field, before }: Editor, text: string | null) {
       const current = latest.current;
-      if (!current.ownsControl) return;
+      if (!current.interactive) return;
       // Only fields with an explicit selection range need a copy of the previous value.
       // 仅支持显式选区的输入框需要复制先前值。
       const after = before === null ? null : fieldValue(field);
@@ -337,7 +339,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
 
     doc.addEventListener("compositionstart", event => {
       const field = editable(event.composedPath()[0]);
-      if (field && latest.current.ownsControl) {
+      if (field && latest.current.interactive) {
         composition.current = { field, before: supportsRange(field) ? fieldValue(field) : null };
       }
     }, options);
@@ -351,7 +353,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
       }
     }, options);
     doc.addEventListener("beforeinput", event => {
-      if (!latest.current.ownsControl) { event.preventDefault(); return; }
+      if (!latest.current.interactive) { event.preventDefault(); return; }
       const field = editable(event.composedPath()[0]);
       if (field && supportsRange(field) && !composition.current && !event.isComposing) beforeValues.set(field, fieldValue(field));
     }, options);
@@ -367,7 +369,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
 
     doc.addEventListener("pointerdown", event => {
       const current = latest.current;
-      if (!current.ownsControl || !event.isPrimary || current.heldPointer.current) return;
+      if (!current.interactive || !event.isPrimary || current.heldPointer.current) return;
       const element = event.composedPath()[0] as Element;
       // Only fields need native pointer defaults for focus and selection. Other drags run in Core.
       // 只有表单字段需要原生指针默认行为来获得焦点与选区，其他拖动由 Core 执行。
@@ -381,7 +383,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
     doc.addEventListener("pointermove", event => {
       const current = latest.current;
       const held = current.heldPointer.current;
-      if (!current.ownsControl || (held && held.pointerId !== event.pointerId)) return;
+      if (!current.interactive || (held && held.pointerId !== event.pointerId)) return;
       const coordinates = { x: event.clientX, y: event.clientY };
       if (held) current.heldPointer.current = { ...held, ...coordinates };
       current.queuePointerMove({ type: "move", ...coordinates });
@@ -390,7 +392,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
       // Leaving the frame clears the source hover chain. Capture keeps active drags in the frame.
       // 离开框架时清除源页面的悬停链，主动拖动则依靠指针捕获保持在框架内。
       const current = latest.current;
-      if (current.ownsControl && !current.heldPointer.current && event.relatedTarget === null) {
+      if (current.interactive && !current.heldPointer.current && event.relatedTarget === null) {
         current.queuePointerMove({ type: "leave" });
       }
     }, options);
@@ -415,14 +417,14 @@ export function BrowserDomSurface(props: SurfaceProps) {
     doc.addEventListener("wheel", event => {
       event.preventDefault();
       const current = latest.current;
-      if (!current.ownsControl) return;
+      if (!current.interactive) return;
       const factor = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? current.snapshot.height : 1;
       void current.queueInput("wheel", { x: event.clientX, y: event.clientY,
         deltaX: event.deltaX * factor, deltaY: event.deltaY * factor });
     }, { ...options, passive: false });
     doc.addEventListener("keydown", event => {
       const current = latest.current;
-      if (!current.ownsControl) { event.preventDefault(); return; }
+      if (!current.interactive) { event.preventDefault(); return; }
       if (composition.current || event.isComposing || event.key === "Process") return;
       const field = editable(event.composedPath()[0]);
       // Keep native selection commands in both browsers when the commit uses the source selection.
@@ -465,7 +467,7 @@ export function BrowserDomSurface(props: SurfaceProps) {
   return (
     <div ref={stage} className="vk-browser-dom-surface">
       <iframe ref={iframe} title={props.title} sandbox="allow-same-origin" srcDoc={FRAME_DOCUMENT}
-        tabIndex={props.ownsControl ? 0 : -1}
+        tabIndex={props.interactive ? 0 : -1}
         onLoad={() => setFrameDocument(iframe.current?.contentDocument ?? null)}
         style={{ width: snapshot.width, height: snapshot.height, transform: `translate(-50%, -50%) scale(${scale})` }} />
     </div>

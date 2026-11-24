@@ -90,7 +90,7 @@ impl FakeBrowserHost {
         alive: Arc<AtomicBool>,
         fail_page_list: bool,
     ) -> Self {
-        Self::start_with_failures(handshake_delay, alive, fail_page_list, false)
+        Self::start_with_failures(handshake_delay, alive, fail_page_list, false, None)
     }
 
     /// Starts a fake host with precisely selected protocol failures.
@@ -99,6 +99,8 @@ impl FakeBrowserHost {
     /// `fail_input_release_after_first` refuses ownership cleanup after initial acquisition.
     /// `handshake_delay` 延迟 hello，`fail_page_list` 拒绝页面枚举，
     /// `fail_input_release_after_first` 在首次获取租约后拒绝归属清理。
+    /// `automation_busy` controls whether the relay still awaits a live operation.
+    /// `automation_busy` 控制中继是否仍在等待活动操作。
     /// Returns the listener endpoint used by the production discovery path.
     /// 返回供生产发现路径使用的监听端点。
     fn start_with_failures(
@@ -106,6 +108,7 @@ impl FakeBrowserHost {
         alive: Arc<AtomicBool>,
         fail_page_list: bool,
         fail_input_release_after_first: bool,
+        automation_busy: Option<Arc<AtomicBool>>,
     ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake host");
         let address = listener.local_addr().expect("fake host address");
@@ -115,6 +118,7 @@ impl FakeBrowserHost {
                     return;
                 };
                 let alive = Arc::clone(&alive);
+                let automation_busy = automation_busy.clone();
                 thread::spawn(move || {
                     let mut decoder = BrowserHostFrameDecoder::new();
                     let mut buffer = [0_u8; 8192];
@@ -223,6 +227,25 @@ impl FakeBrowserHost {
                                         Some("input.dispatch") => json!({
                                             "targetId": value["params"]["targetId"],
                                         }),
+                                        Some("automation.close") => {
+                                            // Only idle-only revocation leaves a pending request connected.
+                                            // 仅空闲时撤销会保留仍在等待的请求连接。
+                                            let busy =
+                                                automation_busy.as_ref().is_some_and(|busy| {
+                                                    busy.load(AtomicOrdering::SeqCst)
+                                                });
+                                            match (busy, value["params"]["whenIdle"].as_bool()) {
+                                                (true, Some(true)) => {
+                                                    json!({"revoked": false, "status": "busy"})
+                                                }
+                                                (true, _) => {
+                                                    json!({"revoked": true, "status": "inFlight"})
+                                                }
+                                                (false, _) => {
+                                                    json!({"revoked": true, "status": "revoked"})
+                                                }
+                                            }
+                                        }
                                         Some("host.closeContext") => json!({ "closed": true }),
                                         Some("host.shutdown") => {
                                             alive.store(false, AtomicOrdering::SeqCst);
@@ -306,7 +329,7 @@ fn manager_with_fake_host_poll(
     handshake_delay: Duration,
     fail_page_list: bool,
 ) -> (BrowserManager, Arc<AtomicBool>, Arc<AtomicBool>) {
-    manager_with_fake_host_behavior(handshake_delay, fail_page_list, false)
+    manager_with_fake_host_behavior(handshake_delay, fail_page_list, false, None)
 }
 
 /// Builds a fake-host manager with precise page-list and input-release failures.
@@ -314,10 +337,13 @@ fn manager_with_fake_host_poll(
 /// The two failure flags map directly to the fake host operations; the returned liveness and
 /// poll-error controls expose process supervision state to each test.
 /// 两个故障标志直接对应伪宿主操作；返回的存活与检查错误控制量向测试暴露进程监督状态。
-fn manager_with_fake_host_behavior(
+/// `automation_busy` optionally controls when the test host can revoke its automation gateway.
+/// `automation_busy` 可选地控制测试宿主何时能撤销其自动化网关。
+pub(super) fn manager_with_fake_host_behavior(
     handshake_delay: Duration,
     fail_page_list: bool,
     fail_input_release_after_first: bool,
+    automation_busy: Option<Arc<AtomicBool>>,
 ) -> (BrowserManager, Arc<AtomicBool>, Arc<AtomicBool>) {
     let alive = Arc::new(AtomicBool::new(true));
     let poll_error = Arc::new(AtomicBool::new(false));
@@ -326,6 +352,7 @@ fn manager_with_fake_host_behavior(
         Arc::clone(&alive),
         fail_page_list,
         fail_input_release_after_first,
+        automation_busy,
     );
     let profiles_root =
         std::env::temp_dir().join(format!("vulcan-w06-profiles-{}", Uuid::new_v4()));
@@ -353,7 +380,7 @@ fn manager_with_fake_host_behavior(
 #[test]
 fn refused_host_input_release_blocks_lease_handoff() {
     let (manager, _alive, _poll_error) =
-        manager_with_fake_host_behavior(Duration::ZERO, false, true);
+        manager_with_fake_host_behavior(Duration::ZERO, false, true, None);
     let session = manager
         .create_owned_session("conversation-a", BrowserProfileMode::Ephemeral)
         .expect("create browser");

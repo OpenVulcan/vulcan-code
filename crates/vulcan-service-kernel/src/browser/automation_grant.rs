@@ -2,9 +2,9 @@
 //! Core 内部授权，把一个可信 AI 所有者连接到一个受监督浏览器宿主。
 
 use super::{
-    BROWSER_ERROR_AUTOMATION_CONFLICT, BROWSER_ERROR_INVALID_REQUEST, BrowserAutomationState,
-    BrowserHostRequestOutcome, BrowserLeaseState, BrowserManager, BrowserSessionProjection,
-    BrowserSessionStatus,
+    BROWSER_ERROR_AUTOMATION_BUSY, BROWSER_ERROR_AUTOMATION_CONFLICT,
+    BROWSER_ERROR_INVALID_REQUEST, BrowserAutomationState, BrowserHostRequestOutcome,
+    BrowserLeaseState, BrowserManager, BrowserSessionProjection, BrowserSessionStatus,
 };
 use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
@@ -25,6 +25,18 @@ pub(crate) struct BrowserAutomationGrant {
     /// Host-reported Unix millisecond expiry for the unused endpoint.
     /// 宿主报告的未使用端点 Unix 毫秒过期时刻。
     pub expires_at_ms: u64,
+}
+
+/// Controls whether revocation may interrupt a live Playwright request.
+/// 决定撤销是否可以中断活动的 Playwright 请求。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BrowserAutomationRevocation {
+    /// Retire immediately during cleanup, preserving uncertainty for any interrupted request.
+    /// 清理时立即撤销，并保留被中断请求的不确定状态。
+    Immediate,
+    /// Retire only if the authenticated host can do so without interrupting a live request.
+    /// 仅当鉴权宿主无需中断活动请求即可撤销时才执行。
+    WhenIdle,
 }
 
 impl BrowserManager {
@@ -197,11 +209,12 @@ impl BrowserManager {
     ///
     /// Returns the updated browser projection on confirmed revocation.
     /// 确认撤销后返回更新的浏览器投影。
-    pub(crate) fn revoke_automation_gateway(
+    pub(super) fn revoke_automation_gateway(
         &self,
         session_id: &str,
         owner_session_id: &str,
         connection_id: &str,
+        revocation: BrowserAutomationRevocation,
     ) -> Result<super::BrowserSessionProjection, String> {
         let gate = self.dispatch_gate(session_id)?;
         let _dispatch = gate
@@ -228,8 +241,20 @@ impl BrowserManager {
         match self.request_host(
             session_id,
             "automation.close",
-            json!({ "connectionId": connection_id }),
+            json!({
+                "connectionId": connection_id,
+                "whenIdle": revocation == BrowserAutomationRevocation::WhenIdle,
+            }),
         ) {
+            Ok(BrowserHostRequestOutcome::Completed(value))
+                if revocation == BrowserAutomationRevocation::WhenIdle
+                    && value.get("revoked").and_then(serde_json::Value::as_bool) == Some(false)
+                    && value.get("status").and_then(serde_json::Value::as_str) == Some("busy") =>
+            {
+                // The relay is still tracking live work. Keep the same connection eligible for a later takeover.
+                // 中继仍在跟踪活动请求，保留同一连接以便随后再次接管。
+                Err(String::from(BROWSER_ERROR_AUTOMATION_BUSY))
+            }
             Ok(BrowserHostRequestOutcome::Completed(value))
                 if value.get("revoked").and_then(serde_json::Value::as_bool) == Some(true)
                     && value.get("status").and_then(serde_json::Value::as_str)

@@ -17,6 +17,7 @@ import { THINKING_OVERLAY_EXIT_MS } from "@/components/conversation/chat-area/vi
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
+import type { ComposerSubmission } from "@/components/composer/composer-model";
 import type { TransientReasoningStatus } from "@/types";
 import { applyWorkbenchDelta } from "@/state/workbench-state";
 
@@ -199,6 +200,54 @@ describe("session runtime cue placement", () => {
   async function stream(events: ConversationEventSummary[]) {
     await React.act(async () => publishEvents(events));
   }
+
+  // The live run can resume before the event window receives the end of the interrupted state.
+  // 实时执行可能先恢复，事件窗口稍后才收到中断状态已解除的事件。
+  it.each([false, true])("routes running-turn input through submission when insert=%s", async (insert) => {
+    // The open turn retains the interrupted API that would ordinarily allow Continue.
+    // 开放回合保留原本允许继续的中断 API。
+    const turnId = 1;
+    const started: ConversationEventSummary = {
+      seq: 2, turn_id: turnId, event_revision: 1, created_at_ms: 2, updated_at_ms: 2,
+      visibility: "host_only",
+      event: { kind: "api_started", api_call_id: 1, purpose: "main_generation", request: { provider: "test", model: "test" } },
+    };
+    const terminal: ConversationEventSummary = {
+      ...started, seq: 3, updated_at_ms: 3, visibility: "ui_only",
+      event: {
+        kind: "api_stats", api_call_id: 1, purpose: "main_generation", provider: "test", model: "test",
+        usage: {}, status: "interrupted", end_reason: "user_interrupted", continuation_eligibility: "allowed",
+        timing: { completed_at_ms: 3 },
+      },
+    };
+    // The two callbacks distinguish normal admission from continuation, including the original insertion intent.
+    // 两个回调用于区分普通准入与继续，并检查原始插队意图。
+    const onSubmitPrompt = vi.fn(async () => true);
+    const onContinueConversation = vi.fn(async () => true);
+    const submission: ComposerSubmission = {
+      ...(insert ? { insertIntoCurrentTurn: true } : {}),
+      draftSlotKey: "test-draft", prompt: "Use the current project", attachments: [],
+      executionMode: "build", reasoningEffort: null, modelSelection: null, sessionSettings: null,
+    };
+    await React.act(async () => publishWindow({
+      ...eventWindow, events: [...initialEvents, started, terminal], open_turn_id: turnId, open_turn_start_seq: 1,
+    }));
+    // The composer must use the regular submit callback while the current run owns execution.
+    // 当前运行拥有执行权时，输入区必须使用普通提交回调。
+    await render({ ...chatAreaProps("toolRunning"), onSubmitPrompt, onContinueConversation });
+    const submitWhileRunning = dockRenders.at(-1)?.onSubmitPrompt as ChatAreaProps["onSubmitPrompt"];
+    await React.act(async () => { expect(await submitWhileRunning(submission)).toBe(true); });
+    expect(onSubmitPrompt).toHaveBeenCalledExactlyOnceWith(submission);
+    expect(onContinueConversation).not.toHaveBeenCalled();
+
+    // The same durable candidate can still accept a supplement once the conversation is stopped.
+    // 会话停止后，同一个可靠候选仍可接收补充消息。
+    await render({ ...chatAreaProps("stopped"), onSubmitPrompt, onContinueConversation });
+    const submitAfterStop = dockRenders.at(-1)?.onSubmitPrompt as ChatAreaProps["onSubmitPrompt"];
+    await React.act(async () => { expect(await submitAfterStop(submission)).toBe(true); });
+    expect(onContinueConversation).toHaveBeenCalledWith("test-playwright", expect.any(String), submission, undefined);
+    expect(onSubmitPrompt).toHaveBeenCalledTimes(1);
+  });
 
   it.each(["toolCalling", "requesting", "memoryRecall"])("floats the %s cue over the composer, never in the transcript", async (phase) => {
     await render(chatAreaProps(phase));

@@ -693,7 +693,7 @@ class ChromiumHost {
           const connectionId = request.params.connectionId;
           if (typeof connectionId !== 'string' || !this.playwrightProxy)
             return this.answer(request, 'A valid Core automation connection is required.', 'invalid_request');
-          return this.answer(request, await this.playwrightProxy.close(connectionId));
+          return this.answer(request, await this.playwrightProxy.close(connectionId, request.params.whenIdle === true));
         }
         case 'page.create': {
           if (this.pages.size >= MAX_PAGES) return this.answer(request, `Browser host already owns ${MAX_PAGES} pages.`, 'payload_too_large');

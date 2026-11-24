@@ -1,22 +1,32 @@
 import * as React from "react";
 
-import { requestCoreBrowser, type CoreBrowserLease } from "@/service/core-browser-service";
-import type { BrowserDomViewport } from "./browser-dom-assets";
+import { errorMessage } from "@/lib/display-format";
+import { requestCoreBrowser, type CoreBrowserLease, type CoreBrowserSession } from "@/service/core-browser-service";
+import type { BrowserDomRevision, BrowserDomViewport } from "./browser-dom-assets";
 
-// BrowserInputResult describes the Core-confirmed outcome of one input action.
-// BrowserInputResult 描述一条输入操作经 Core 确认的结果。
+// Group nearby inputs on one lease and release it when the gesture becomes idle.
+// 相邻输入共用一个租约，手势空闲时释放。
+const INPUT_IDLE_MS = 150;
+
+// Deliberate input may wait for AI, hover only uses a free browser, and releases reuse the current lease.
+// 主动输入可等待 AI，悬停只使用空闲浏览器，释放事件复用当前租约。
+type ControlAdmission = "interaction" | "idle" | "existing";
+
+// BrowserInputResult is the outcome reported by Core for one dispatched input.
+// BrowserInputResult 是 Core 返回的一条已派发输入的结果。
 interface BrowserInputResult {
   outcome: "accepted" | "applied" | "rejected" | "unknown";
   reason?: string;
 }
 
-// QueuedBrowserInput binds an input to the exact Core owner, browser, page, and control generation.
-// QueuedBrowserInput 将输入绑定到精确的 Core 归属、浏览器、页面与控制代次。
+// QueuedBrowserInput captures the exact browser, page, and geometry before admission.
+// QueuedBrowserInput 在准入前固定精确的浏览器、页面及几何。
 export interface QueuedBrowserInput {
-  ownerSessionId: string;
-  sessionId: string;
+  session: CoreBrowserSession;
   pageId: string;
-  leaseSecret: string;
+  // The source document may change while an input waits for authorization.
+  // 输入等待授权时，源文档可能发生变化。
+  documentId: string;
   pageGeneration: string;
   viewportGeneration: string;
   kind: string;
@@ -32,174 +42,288 @@ export interface HeldBrowserPointer {
   y: number;
 }
 
-// BrowserInputQueueOptions shares the panel's live selection, credential and frame references with the queue.
-// BrowserInputQueueOptions 将面板的实时选择、凭据与画面引用共享给输入队列。
-export interface BrowserInputQueueOptions {
-  // Current control grant; cleared synchronously when Core revokes it.
-  // 当前控制授权；Core 撤销时同步清空。
-  leaseRef: React.RefObject<CoreBrowserLease | null>;
-  // Last accepted frame, which defines page coordinates and input generations.
-  // 最近接受的画面，定义页面坐标与输入代次。
-  frameRef: React.RefObject<BrowserDomViewport | null>;
-  // Whether input must wait for a newer frame after navigation or resize.
-  // 导航或调整尺寸后输入是否必须等待更新画面。
-  projectionSuspended: React.RefObject<boolean>;
-  // Trusted conversation owner committed before paint.
-  // 在绘制前提交的可信会话归属。
-  ownerSessionRef: React.RefObject<string>;
-  // Selected Core browser identity committed before paint.
-  // 在绘制前提交的选定 Core 浏览器身份。
-  selectedSessionRef: React.RefObject<string | null>;
-  // Selected Core page identity committed before paint.
-  // 在绘制前提交的选定 Core 页面身份。
-  selectedPageRef: React.RefObject<string | null>;
-  // Latest coalesced drag position, also cleared by panel selection resets.
-  // 最新合并的拖拽位置，也会被面板选择重置清空。
-  pendingPointerMove: React.RefObject<QueuedBrowserInput | null>;
-  // Publishes a visible input failure.
-  // 发布可见的输入失败。
-  setError: (message: string | null) => void;
-  // Drops the control grant after Core reports it lost.
-  // Core 报告授权丢失后丢弃控制授权。
-  setLease: (lease: CoreBrowserLease | null) => void;
+// ActiveControl owns a temporary lease and the inputs confirmed by Chromium.
+// ActiveControl 持有临时租约及 Chromium 已确认的输入。
+interface ActiveControl {
+  lease: CoreBrowserLease;
+  heartbeat: number;
+  keys: Set<string>;
+  pointerDown: boolean;
 }
 
-// useBrowserInputQueue orders page input behind one promise chain and coalesces drag moves.
-// useBrowserInputQueue 将页面输入排在同一 Promise 链之后，并合并拖拽移动。
-// Parameters: options supplies live panel references. Returns: the queue entry points.
-// 参数：options 提供实时面板引用。返回值：队列入口。
+// BrowserInputQueueOptions supplies the live selection, projected geometry and gesture state.
+// BrowserInputQueueOptions 提供实时选择、投影几何和手势状态。
+interface BrowserInputQueueOptions {
+  selectedSession: CoreBrowserSession | null;
+  frameRef: React.RefObject<(BrowserDomViewport & Pick<BrowserDomRevision, "documentId">) | null>;
+  projectionSuspended: React.RefObject<boolean>;
+  ownerSessionRef: React.RefObject<string>;
+  selectedSessionRef: React.RefObject<string | null>;
+  selectedPageRef: React.RefObject<string | null>;
+  componentMounted: React.RefObject<boolean>;
+  pendingPointerMove: React.RefObject<QueuedBrowserInput | null>;
+  heldKeys: React.RefObject<Set<string>>;
+  heldPointer: React.RefObject<HeldBrowserPointer | null>;
+  setError: (message: string | null) => void;
+}
+
+// Queues human commands for the live panel and borrows control only while it dispatches them.
+// 为实时面板排队人工命令，仅在派发命令期间取得控制权。
+// The returned methods schedule input, run a toolbar action, or discard a departed selection's work.
+// 返回的方法用于调度输入、执行工具栏操作或丢弃已离开选择的工作。
 export function useBrowserInputQueue({
-  leaseRef,
-  frameRef,
-  projectionSuspended,
-  ownerSessionRef,
-  selectedSessionRef,
-  selectedPageRef,
-  pendingPointerMove,
-  setError,
-  setLease,
+  selectedSession, frameRef, projectionSuspended, ownerSessionRef, selectedSessionRef, selectedPageRef,
+  componentMounted, pendingPointerMove, heldKeys, heldPointer, setError,
 }: BrowserInputQueueOptions) {
-  // inputSequence tracks the sender sequence required by Core's input protocol.
-  // inputSequence 跟踪 Core 输入协议要求的发送方序号。
+  // These refs keep browser authority and queue order independent of visual re-renders.
+  // 这些引用让浏览器权限与队列顺序独立于视觉重渲染。
+  const holder = React.useRef<string | null>(null);
+  const active = React.useRef<ActiveControl | null>(null);
+  const tail = React.useRef<Promise<void>>(Promise.resolve());
+  const generation = React.useRef(0);
+  const idleTimer = React.useRef<number | null>(null);
   const inputSequence = React.useRef(0);
-  // inputQueue preserves down/up order across asynchronous HTTP requests.
-  // inputQueue 在异步 HTTP 请求之间保持按下和释放的顺序。
-  const inputQueue = React.useRef<Promise<boolean>>(Promise.resolve(true));
-  // pointerMoveQueued ensures at most one coalescing worker waits in the input queue.
-  // pointerMoveQueued 确保输入队列中最多只有一个移动事件合并任务。
-  const pointerMoveQueued = React.useRef(false);
+  const moveQueued = React.useRef(false);
 
-  // captureInput freezes the current owner, page, lease, and frame for one input event.
-  // captureInput 为一条输入固定当前归属、页面、租约和画面；无可用授权时返回空值。
-  function captureInput(kind: string, payload: Record<string, unknown>): QueuedBrowserInput | null {
-    const currentLease = leaseRef.current;
-    const currentFrame = frameRef.current;
-    const sessionId = selectedSessionRef.current;
-    const pageId = selectedPageRef.current;
-    if (!currentLease || !currentFrame || projectionSuspended.current || !sessionId || !pageId
-      || currentLease.session.sessionId !== sessionId || currentFrame.pageId !== pageId) return null;
-    return {
-      ownerSessionId: ownerSessionRef.current, sessionId, pageId,
-      leaseSecret: currentLease.leaseSecret,
-      pageGeneration: currentFrame.pageGeneration,
-      viewportGeneration: currentFrame.viewportGeneration,
-      kind, payload,
-    };
+  // Returns true if this view can still publish feedback for the session's owner.
+  // 若此视图仍能为该会话归属发布反馈，则返回 true。
+  function currentOwner(session: CoreBrowserSession): boolean {
+    return componentMounted.current && ownerSessionRef.current === session.ownerSessionId;
   }
 
-  // inputStillAuthorized permits only key or pointer release to finish on a previously selected page.
-  // inputStillAuthorized 只允许按键或指针释放在先前选中的页面完成；返回当前授权是否仍有效。
-  function inputStillAuthorized(input: QueuedBrowserInput): boolean {
-    // releasingInput never authorizes an old conversation or an old browser lease.
-    // releasingInput 不会授权旧会话或旧浏览器租约。
-    const releasingInput = (input.kind === "key" || input.kind === "pointer") && input.payload.type === "up";
-    return ownerSessionRef.current === input.ownerSessionId
-      && selectedSessionRef.current === input.sessionId
-      && leaseRef.current?.leaseSecret === input.leaseSecret
-      && (releasingInput || selectedPageRef.current === input.pageId);
+  // Cancels the scheduled lease release before another action joins the queue.
+  // 另一项操作进入队列前取消已安排的租约释放。
+  function cancelIdleRelease(): void {
+    if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+    idleTimer.current = null;
   }
 
-  // deliverInput sends one captured event in queue order and publishes only its still-current outcome.
-  // deliverInput 按队列顺序发送一条固定的输入，并仅发布仍属当前选择的结果。
-  async function deliverInput(input: QueuedBrowserInput): Promise<boolean> {
-    if (!inputStillAuthorized(input)) return false;
-    // sequence is assigned at dispatch time so coalesced moves leave no sender gaps.
-    // sequence 在实际派发时分配，使合并的移动事件不留下发送方序号空洞。
-    const sequence = String(++inputSequence.current);
+  // Clears only this control instance and its heartbeat.
+  // 只清除此控制实例及其心跳。
+  function forgetControl(control: ActiveControl): void {
+    if (active.current !== control) return;
+    active.current = null;
+    window.clearInterval(control.heartbeat);
+  }
+
+  // Releases the grant under the owner that acquired it, even after switching away.
+  // 即使已切换视图，也在当初获取授权的归属下释放凭据。
+  async function releaseLease({ session, leaseSecret }: CoreBrowserLease): Promise<void> {
+    await requestCoreBrowser(session.ownerSessionId, "browser.lease.release", { sessionId: session.sessionId, leaseSecret });
+  }
+
+  // Releases the active grant and reports only errors for the still-visible target.
+  // 释放活动授权，只报告仍可见目标的错误。
+  async function releaseActive(): Promise<void> {
+    const control = active.current;
+    if (!control) return;
+    forgetControl(control);
+    const { session } = control.lease;
     try {
-      const result = await requestCoreBrowser<BrowserInputResult>(input.ownerSessionId, "browser.input.dispatch", {
-        sessionId: input.sessionId,
-        pageId: input.pageId,
-        leaseSecret: input.leaseSecret,
-        pageGeneration: input.pageGeneration,
-        viewportGeneration: input.viewportGeneration,
-        sequence,
-        kind: input.kind,
-        payload: input.payload,
-      });
-      if (result.outcome !== "applied" && inputStillAuthorized(input)) {
-        setError(result.reason ?? `Input ${result.outcome}`);
-        if (result.outcome === "unknown" || result.reason === "lease_required" || result.reason === "lease_blocked") {
-          leaseRef.current = null;
-          setLease(null);
-        }
-      }
-      return result.outcome === "applied";
+      await releaseLease(control.lease);
     } catch (failure) {
-      if (inputStillAuthorized(input)) setError(String(failure));
-      // Transport failure does not prove lease loss; Core will reject stale credentials.
-      // 传输失败不能证明租约已丢失；过期凭据会由 Core 明确拒绝。
+      if (currentOwner(session) && selectedSessionRef.current === session.sessionId) setError(errorMessage(failure));
+    }
+  }
+
+  // Discards unsent actions and returns control after the write already in progress settles.
+  // 丢弃未发送操作，并在正在执行的写入结束后交还控制权。
+  function resetControl(): void {
+    generation.current += 1;
+    cancelIdleRelease();
+    pendingPointerMove.current = null;
+    heldKeys.current.clear();
+    heldPointer.current = null;
+    tail.current = tail.current.then(releaseActive);
+  }
+
+  // Returns control after the queue drains and there are no physical presses left.
+  // 队列排空且没有仍按住的输入后交还控制权。
+  function releaseAtIdle(drained: Promise<void>): void {
+    if (tail.current !== drained || !active.current || heldPointer.current || heldKeys.current.size > 0) return;
+    idleTimer.current = window.setTimeout(() => {
+      idleTimer.current = null;
+      if (tail.current === drained) tail.current = drained.then(releaseActive);
+    }, INPUT_IDLE_MS);
+  }
+
+  // Enqueues one exact action. The relevance check runs before and after lease acquisition.
+  // 排队一次精确操作。租约获取前和获取后均检查操作目标是否仍然有效。
+  // Passive motion never displaces automation, even if the UI projection is stale.
+  // 即使界面投影已过时，悬停移动也不会撤销自动化。
+  function enqueue<T>(
+    session: CoreBrowserSession,
+    stillCurrent: () => boolean,
+    operation: (control: ActiveControl) => Promise<T>,
+    admission: ControlAdmission = "interaction",
+  ): Promise<T | undefined> {
+    cancelIdleRelease();
+    const capturedGeneration = generation.current;
+    const valid = () => capturedGeneration === generation.current && currentOwner(session) && stillCurrent();
+    const result = tail.current.then(async () => {
+      if (!valid()) return;
+      const held = active.current?.lease.session;
+      if (held && (held.sessionId !== session.sessionId || held.hostGeneration !== session.hostGeneration
+        || held.ownerSessionId !== session.ownerSessionId)) await releaseActive();
+      if (!valid()) return;
+      let control = active.current;
+      if (!control) {
+        if (admission === "existing") return;
+        holder.current ??= "webui:" + crypto.randomUUID();
+        let lease: CoreBrowserLease;
+        try {
+          lease = await requestCoreBrowser<CoreBrowserLease>(session.ownerSessionId, "browser.lease.acquire", {
+            sessionId: session.sessionId, holder: holder.current, forInteraction: admission === "interaction",
+          });
+        } catch (failure) {
+          if (admission === "idle") return;
+          // A refused gesture must not replay queued input when another controller later becomes idle.
+          // 手势被拒后，不能在其他控制者随后空闲时重放其排队输入。
+          if (valid()) resetControl();
+          throw failure;
+        }
+        if (lease.session.sessionId !== session.sessionId || lease.session.ownerSessionId !== session.ownerSessionId)
+          throw new Error("Browser control returned a different session.");
+        if (!valid() || lease.session.hostGeneration !== session.hostGeneration) {
+          await releaseLease(lease);
+          if (valid()) throw new Error("Browser restarted before the interaction was admitted.");
+          return;
+        }
+        // Renew only an admitted operation or gesture. Reset removes this timer before releasing the grant.
+        // 仅为已准入的操作或手势续期。重置会在释放授权前清除此计时器。
+        const heartbeat = window.setInterval(() => {
+          void requestCoreBrowser(session.ownerSessionId, "browser.lease.heartbeat", {
+            sessionId: session.sessionId, leaseSecret: lease.leaseSecret,
+          }).catch(failure => {
+            if (active.current?.lease !== lease) return;
+            if (currentOwner(session)) setError(errorMessage(failure));
+            resetControl();
+          });
+        }, lease.heartbeatIntervalMs);
+        control = { lease, heartbeat, keys: new Set(), pointerDown: false };
+        active.current = control;
+      }
+      return operation(control);
+    });
+    const drained = result.then(() => undefined, () => undefined);
+    tail.current = drained;
+    void drained.then(() => releaseAtIdle(drained));
+    return result;
+  }
+
+  // Runs a toolbar or prompt action on the same control queue as page input.
+  // 让工具栏或提示操作与页面输入共用同一个控制队列。
+  // A successful whole-browser close consumes its lease, so only local cleanup is needed.
+  // 成功关闭整个浏览器会消费租约，只需清理本地状态。
+  function runWithControl<T>(
+    session: CoreBrowserSession, stillCurrent: () => boolean, operation: (lease: CoreBrowserLease) => Promise<T>,
+    closesSession = false,
+  ): Promise<T | undefined> {
+    return enqueue(session, stillCurrent, async control => {
+      const result = await operation(control.lease);
+      if (closesSession) forgetControl(control);
+      return result;
+    });
+  }
+
+  // Captures current projected coordinates and the mutable operation's exact identity.
+  // 捕获当前投影坐标及写入操作的精确身份。
+  function captureInput(kind: string, payload: Record<string, unknown>): QueuedBrowserInput | null {
+    const frame = frameRef.current;
+    const pageId = selectedPageRef.current;
+    if (!selectedSession || selectedSession.sessionId !== selectedSessionRef.current || !pageId || !frame
+      || frame.pageId !== pageId || projectionSuspended.current) return null;
+    return { session: selectedSession, pageId, documentId: frame.documentId, pageGeneration: frame.pageGeneration,
+      viewportGeneration: frame.viewportGeneration, kind, payload };
+  }
+
+  // Dispatches one event in queue order. Only confirmed presses can produce matching releases.
+  // 按队列顺序派发一条事件。只有确认送达的按下操作才会派发对应释放。
+  async function sendInput(input: QueuedBrowserInput, passive = false): Promise<boolean> {
+    const { session, pageId, kind, payload } = input;
+    const release = (kind === "key" || kind === "pointer") && payload.type === "up";
+    // Input captured before a wait must never be replayed on a different document or geometry.
+    // 等待前捕获的输入绝不能在其他文档或几何位置重放。
+    const isCurrent = () => {
+      if (selectedSessionRef.current !== session.sessionId) return false;
+      if (release) return true;
+      const frame = frameRef.current;
+      return !projectionSuspended.current && selectedPageRef.current === pageId && frame?.pageId === pageId
+        && frame.documentId === input.documentId && frame.pageGeneration === input.pageGeneration
+        && frame.viewportGeneration === input.viewportGeneration;
+    };
+    const key = kind === "key" && typeof payload.key === "string" ? payload.key : null;
+    try {
+      return (await enqueue(session, isCurrent, async control => {
+        if (release && (key !== null ? !control.keys.has(key) : !control.pointerDown)) return false;
+        // A broken response can leave a key or button pressed. End this gesture and release all inputs.
+        // 响应中断可能使按键或按钮保持按下。结束本次手势并释放全部输入。
+        let result: BrowserInputResult;
+        try {
+          result = await requestCoreBrowser<BrowserInputResult>(session.ownerSessionId, "browser.input.dispatch", {
+            sessionId: session.sessionId, pageId, leaseSecret: control.lease.leaseSecret,
+            pageGeneration: input.pageGeneration, viewportGeneration: input.viewportGeneration,
+            sequence: String(++inputSequence.current), kind, payload,
+          });
+        } catch (failure) {
+          if (active.current === control) resetControl();
+          throw failure;
+        }
+        if (result.outcome !== "applied") {
+          if (isCurrent() && currentOwner(session)) setError(result.reason ?? ("Input " + result.outcome));
+          if (result.outcome === "unknown" || result.reason === "lease_required" || result.reason === "lease_blocked"
+            || release) resetControl();
+          return false;
+        }
+        if (key !== null && release) control.keys.delete(key);
+        if (key !== null && payload.type === "down") control.keys.add(key);
+        if (kind === "pointer" && payload.type === "down") control.pointerDown = true;
+        if (kind === "pointer" && release) control.pointerDown = false;
+        if (!passive && isCurrent() && currentOwner(session)) setError(null);
+        return true;
+      }, release ? "existing" : passive ? "idle" : "interaction")) === true;
+    } catch (failure) {
+      if (isCurrent() && currentOwner(session)) setError(errorMessage(failure));
       return false;
     }
   }
 
-  // queueCapturedInput appends one exact event behind all earlier browser inputs.
-  // queueCapturedInput 将一条精确输入追加在此前所有浏览器输入之后。
-  function queueCapturedInput(input: QueuedBrowserInput): void {
-    inputQueue.current = inputQueue.current.then(() => deliverInput(input));
-  }
-
-  // flushPendingPointerMove schedules one latest drag position and repeats only when a newer one exists.
-  // flushPendingPointerMove 调度一个最新拖拽位置，只有出现更新位置时才继续调度。
+  // Coalesces high-frequency pointer positions before they enter the action queue.
+  // 在高频指针位置进入操作队列前合并。
   function flushPendingPointerMove(): void {
-    if (pointerMoveQueued.current || !pendingPointerMove.current) return;
-    pointerMoveQueued.current = true;
-    inputQueue.current = inputQueue.current.then(async () => {
-      // latest replaces any earlier move that has not entered Core's dispatch.
-      // latest 替换尚未进入 Core 派发的所有更早移动事件。
+    if (moveQueued.current || !pendingPointerMove.current) return;
+    moveQueued.current = true;
+    void tail.current.then(() => {
       const latest = pendingPointerMove.current;
       pendingPointerMove.current = null;
-      return latest ? deliverInput(latest) : true;
+      if (latest) return sendInput(latest, true);
     }).finally(() => {
-      pointerMoveQueued.current = false;
-      if (pendingPointerMove.current) flushPendingPointerMove();
+      moveQueued.current = false;
+      flushPendingPointerMove();
     });
   }
 
-  // queuePointerMove keeps one pending drag point instead of accumulating one HTTP request per event.
-  // queuePointerMove 仅保留一个待派发拖拽位置，避免为每次指针移动累积 HTTP 请求。
+  // Tracks drag motion and idle hover. Deliberate input can still enter while automation owns the page.
+  // 跟踪拖拽移动与空闲悬停。自动化控制页面期间，仍可准入主动输入。
   function queuePointerMove(payload: Record<string, unknown>): void {
+    if (!heldPointer.current && !active.current && selectedSession?.automationState === "attached") return;
     const input = captureInput("pointer", payload);
     if (!input) return;
     pendingPointerMove.current = input;
     flushPendingPointerMove();
   }
 
-  // queueInput preserves down/up, key, text, and wheel order around coalesced pointer moves.
-  // queueInput 在合并指针移动的同时保持按下、抬起、按键、文字和滚轮的顺序。
+  // Flushes the last drag position before the next input and returns its applied status.
+  // 在下一次输入前派发最后一个拖拽位置，返回该输入是否已生效。
   function queueInput(kind: string, payload: Record<string, unknown>): Promise<boolean> {
-    // An intervening non-move event makes the last pending move observable before that event.
-    // 插入的非移动事件必须排在最后一个待派发移动事件之后。
     const pending = pendingPointerMove.current;
     if (pending) {
       pendingPointerMove.current = null;
-      queueCapturedInput(pending);
+      void sendInput(pending, true);
     }
     const input = captureInput(kind, payload);
-    if (!input) return Promise.resolve(false);
-    queueCapturedInput(input);
-    return inputQueue.current;
+    return input ? sendInput(input) : Promise.resolve(false);
   }
 
-  return { queueInput, queuePointerMove };
+  return { queueInput, queuePointerMove, runWithControl, resetControl };
 }

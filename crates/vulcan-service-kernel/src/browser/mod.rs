@@ -113,6 +113,9 @@ pub const BROWSER_ERROR_STALE_GENERATION: &str = "stale_generation";
 /// Stable Core browser error codes served on the typed browser routes.
 /// 类型化浏览器路由提供的稳定 Core 浏览器错误码。
 pub const BROWSER_ERROR_AUTOMATION_CONFLICT: &str = "automation_conflict";
+/// Raised when a live Playwright operation must finish before human input can proceed.
+/// 活动的 Playwright 操作须先完成、人工输入暂不能进行时返回。
+pub(crate) const BROWSER_ERROR_AUTOMATION_BUSY: &str = "automation_busy";
 /// Stable Core browser error codes served on the typed browser routes.
 /// 类型化浏览器路由提供的稳定 Core 浏览器错误码。
 pub const BROWSER_ERROR_CAPABILITY_UNSUPPORTED: &str = "capability_unsupported";
@@ -4689,20 +4692,25 @@ pub async fn service_browser_lease_acquire(
     request: BrowserLeaseAcquireRequest,
 ) -> Result<BrowserLeaseAcquireResponse, String> {
     let manager = browser_manager_from_state(&state)?;
-    manager
-        .run_blocking(&request.session_id.clone(), move |manager| {
-            let (session, lease_secret) =
-                manager.acquire_lease(&request.session_id, &request.holder, None)?;
-            Ok(BrowserLeaseAcquireResponse {
-                session,
-                lease_secret,
-                heartbeat_interval_ms: browser_user_lease_heartbeat_interval_ms(),
-                control_epoch: manager
-                    .session_projection(&request.session_id)?
-                    .control_epoch,
+    // Interaction can yield an idle automation holder. Acquisition for an existing caller keeps its original scope.
+    // 交互可以让空闲的自动化持有者交出控制权。原有调用者的获取范围沿用原约定。
+    let (session, lease_secret) = if request.for_interaction {
+        manager
+            .grant_user_lease(&request.session_id, &request.holder, false)
+            .await?
+    } else {
+        manager
+            .run_blocking(&request.session_id.clone(), move |manager| {
+                manager.acquire_lease(&request.session_id, &request.holder, None)
             })
-        })
-        .await
+            .await?
+    };
+    Ok(BrowserLeaseAcquireResponse {
+        control_epoch: session.control_epoch,
+        session,
+        lease_secret,
+        heartbeat_interval_ms: browser_user_lease_heartbeat_interval_ms(),
+    })
 }
 
 /// Releases one Core browser control lease from shared service state.
@@ -4763,7 +4771,7 @@ pub async fn service_browser_lease_takeover(
 ) -> Result<BrowserLeaseTakeoverResponse, String> {
     let manager = browser_manager_from_state(&state)?;
     let (session, lease_secret) = manager
-        .takeover_after_retiring_ai(&request.session_id, &request.holder)
+        .grant_user_lease(&request.session_id, &request.holder, true)
         .await?;
     Ok(BrowserLeaseTakeoverResponse {
         session,
@@ -5752,6 +5760,10 @@ pub struct BrowserLeaseAcquireRequest {
     /// Human-readable holder identity.
     /// 人类可读的持有者身份。
     pub holder: String,
+    /// Requests temporary control for a direct human interaction with the selected browser.
+    /// 为选定浏览器的直接人工交互请求临时控制权。
+    #[serde(default)]
+    pub for_interaction: bool,
 }
 
 /// Acquired lease response carrying the one-time control secret.

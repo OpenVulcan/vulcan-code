@@ -8,7 +8,6 @@ import { formatMessage, useI18n } from "@/i18n";
 import type {
   CoreBrowserDialog,
   CoreBrowserFileChooser,
-  CoreBrowserLease,
   CoreBrowserPage,
   CoreBrowserSession,
 } from "@/service/core-browser-service";
@@ -141,7 +140,7 @@ export function BrowserPageTabs({ pages, selectedPageId, selectedSession, select
 
 // BrowserPagePrompts renders the selected page's JavaScript dialogs and file chooser requests.
 // BrowserPagePrompts 渲染选定页面的 JavaScript 对话框与文件选择请求。
-export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dialogText, setDialogText, ownsControl, answerDialog, submitFileChooser }: {
+export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dialogText, setDialogText, interactive, answerDialog, submitFileChooser }: {
   // Open dialogs across the selected browser's pages.
   // 选定浏览器各页面上打开的对话框。
   dialogs: CoreBrowserDialog[];
@@ -157,9 +156,9 @@ export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dial
   // Updates the prompt answer.
   // 更新提示答复。
   setDialogText: (value: string) => void;
-  // Whether this UI may answer on the controller's behalf.
-  // 本界面是否可以代表控制者作答。
-  ownsControl: boolean;
+  // Whether the selected browser is accepting direct input.
+  // 选中的浏览器是否可以直接接收输入。
+  interactive: boolean;
   // Accepts or dismisses one dialog.
   // 接受或关闭一个对话框。
   answerDialog: (dialog: CoreBrowserDialog, accept: boolean) => Promise<void>;
@@ -176,18 +175,18 @@ export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dial
         <div key={dialog.dialogId} role="alertdialog" className="vk-browser-prompt">
           <strong>{dialog.dialogType}</strong><span>{dialog.message}</span>
           {dialog.dialogType === "prompt" ? <input className="vk-browser-address"
-            value={dialogText} onChange={(event) => setDialogText(event.target.value)} disabled={!ownsControl} /> : null}
-          <Button type="button" size="sm" disabled={!ownsControl} onClick={() => void answerDialog(dialog, true)}>
+            value={dialogText} onChange={(event) => setDialogText(event.target.value)} disabled={!interactive} /> : null}
+          <Button type="button" size="sm" disabled={!interactive} onClick={() => void answerDialog(dialog, true)}>
             {t("browser.accept")}
           </Button>
-          <Button type="button" size="sm" variant="outline" disabled={!ownsControl}
+          <Button type="button" size="sm" variant="outline" disabled={!interactive}
             onClick={() => void answerDialog(dialog, false)}>{t("browser.dismiss")}</Button>
         </div>
       ))}
       {fileChoosers.filter((chooser) => chooser.pageId === selectedPageId).map((chooser) => (
         <label key={chooser.chooserId} className="vk-browser-prompt">
           <span>{t("browser.pageRequestsAFile")}</span>
-          <input type="file" disabled={!ownsControl} onChange={(event) => void submitFileChooser(chooser, event.target.files?.[0])} />
+          <input type="file" disabled={!interactive} onChange={(event) => void submitFileChooser(chooser, event.target.files?.[0])} />
         </label>
       ))}
     </>
@@ -196,7 +195,7 @@ export function BrowserPagePrompts({ dialogs, fileChoosers, selectedPageId, dial
 
 // BrowserCloseConfirmDialog confirms closing one exact page or browser.
 // BrowserCloseConfirmDialog 确认关闭一个精确页面或浏览器。
-export function BrowserCloseConfirmDialog({ closeRequest, setCloseRequest, closePending, closeError, closing, lease, closeSession }: {
+export function BrowserCloseConfirmDialog({ closeRequest, setCloseRequest, closePending, closeError, closing, closeSession }: {
   // Frozen close target, or null while the dialog is hidden.
   // 冻结的关闭目标；弹窗隐藏时为空。
   closeRequest: BrowserCloseRequest | null;
@@ -212,9 +211,6 @@ export function BrowserCloseConfirmDialog({ closeRequest, setCloseRequest, close
   // Whether the confirmation is waiting for Core.
   // 确认是否正在等待 Core。
   closing: boolean;
-  // This UI's control grant, used to warn about interrupting another controller.
-  // 本界面的控制授权，用于提示将中断其他控制者。
-  lease: CoreBrowserLease | null;
   // Closes the confirmed target.
   // 关闭已确认的目标。
   closeSession: () => Promise<void>;
@@ -231,8 +227,6 @@ export function BrowserCloseConfirmDialog({ closeRequest, setCloseRequest, close
             {closeRequest?.page
               ? (formatMessage(t("browser.closeUnsavedPageChanges"), { label: closeRequest.label }))
               : (formatMessage(t("browser.closeAndAllIts"), { label: closeRequest?.label }))}
-            {closeRequest?.session.leaseState === "held" && lease?.session.sessionId !== closeRequest.session.sessionId
-              ? t("browser.activeAutomationWillBe") : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {closeError ? <p role="alert" className="vk-field-error">{closeError}</p> : null}

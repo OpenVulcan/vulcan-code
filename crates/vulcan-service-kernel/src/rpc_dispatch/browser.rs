@@ -147,10 +147,23 @@ pub(super) async fn dispatch(
             crate::browser::service_browser_session_snapshot(state, parse_param(params, method)?)
                 .await,
         ),
-        "browser.lease.acquire" => rpc_json_result(
-            crate::browser::service_browser_lease_acquire(state, parse_param(params, method)?)
-                .await,
-        ),
+        "browser.lease.acquire" => {
+            // Direct interaction has user-facing feedback. Ordinary acquire retains its protocol error.
+            // 直接交互提供用户反馈，普通获取保留协议错误。
+            let request: crate::browser::BrowserLeaseAcquireRequest = parse_param(params, method)?;
+            let for_interaction = request.for_interaction;
+            rpc_json_result(
+                crate::browser::service_browser_lease_acquire(state, request)
+                    .await
+                    .map_err(|error| {
+                        if for_interaction {
+                            browser_lease_error(error)
+                        } else {
+                            WebuiServiceRpcError::Service(error)
+                        }
+                    }),
+            )
+        }
         "browser.lease.release" => rpc_json_result(
             crate::browser::service_browser_lease_release(state, parse_param(params, method)?)
                 .await,
@@ -249,6 +262,21 @@ pub(super) async fn dispatch(
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };
     Ok(ServiceRpcDispatch::Handled(result))
+}
+
+/// Maps temporary lease contention to the shared browser interaction message.
+/// 将短暂的租约争用映射为共享的浏览器交互文案。
+/// `error` is the exact Core diagnostic. Returns a localized rejection for contention.
+/// `error` 是 Core 的精确诊断。租约争用返回本地化拒绝。
+fn browser_lease_error(error: String) -> WebuiServiceRpcError {
+    match error.as_str() {
+        crate::browser::BROWSER_ERROR_AUTOMATION_BUSY
+        | crate::browser::BROWSER_ERROR_LEASE_CONFLICT
+        | crate::browser::BROWSER_ERROR_AUTOMATION_CONFLICT => {
+            vulcan_service_api::WebuiLocalizedMessage::new("browser.interactionBusy").into()
+        }
+        _ => WebuiServiceRpcError::Service(error),
+    }
 }
 
 /// Deserializes one complete strict browser request object.

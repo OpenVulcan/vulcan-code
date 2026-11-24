@@ -40,9 +40,9 @@ export interface PlaywrightProxyCloseResult {
   /** Whether the exact Core connection was revoked. */
   /** 指定的 Core 连接是否已撤销。 */
   revoked: boolean;
-  /** Whether forwarded Playwright requests were still awaiting responses. */
-  /** 已转发的 Playwright 请求是否仍在等待响应。 */
-  status: 'revoked' | 'inFlight' | 'unknown';
+  /** Whether the relay was retired, remains busy, or cannot confirm all forwarded work. */
+  /** 中继是否已撤销、仍忙碌或无法确认全部已转发工作。 */
+  status: 'revoked' | 'busy' | 'inFlight' | 'unknown';
   /** Request identifiers forwarded without an observed response. */
   /** 已转发但撤销前没有观察到响应的请求标识。 */
   inFlightRequestIds: PlaywrightRequestId[];
@@ -86,6 +86,9 @@ export class PlaywrightProxy {
   /** Exact Core connection owning the current grant. */
   /** 当前授权所属的精确 Core 连接。 */
   private connectionId: string | null = null;
+  /** Exact last grant retired by the relay, including expiry before the client connects. */
+  /** 中继最近撤销的精确授权，包括客户端连接前到期的授权。 */
+  private retiredConnectionId: string | null = null;
   /** Reserves the gateway while asynchronous pipe binding is still in progress. */
   /** 异步绑定管道期间预留网关，阻止并发授予第二个连接。 */
   private opening = false;
@@ -151,6 +154,7 @@ export class PlaywrightProxy {
       const capability = randomBytes(32).toString('base64url');
       const capabilityPath = `/devtools/browser/${capability}`;
       this.capability = Buffer.from(capabilityPath, 'utf8');
+      this.retiredConnectionId = null;
       this.connectionId = connectionId;
       this.consumed = false;
       this.expiresAt = Date.now() + PLAYWRIGHT_GRANT_TTL_MS;
@@ -204,21 +208,31 @@ export class PlaywrightProxy {
     }
   }
 
-  /** Revokes one exact connection and closes its gateway and pipe. */
-  /** 撤销一个精确连接，并关闭其网关与管道。 */
-  async close(connectionId: string): Promise<PlaywrightProxyCloseResult> {
-    if (this.connectionId !== connectionId)
+  /** Revokes the given connection, or returns busy if whenIdle requires its live requests to finish first. */
+  /** 撤销指定连接。若 whenIdle 要求先完成活动请求，则返回忙碌。 */
+  async close(connectionId: string, whenIdle = false): Promise<PlaywrightProxyCloseResult> {
+    // The exact retired grant can still be acknowledged after its unused capability expires.
+    // 未使用的能力到期后，仍可确认精确的已撤销授权。
+    const active = this.connectionId === connectionId;
+    if (!active && (this.connectionId !== null || this.retiredConnectionId !== connectionId))
       return { revoked: false, status: 'unknown', inFlightRequestIds: [] };
+    // Inspect and revoke in the same JavaScript turn. A busy relay keeps receiving its real replies.
+    // 在同一个 JavaScript 执行片段内检查并撤销。忙碌的中继继续接收真实响应。
+    const pendingRequestIds = [...this.relays].flatMap(relay => [...relay.inFlight.values()]);
+    if (whenIdle && pendingRequestIds.length > 0)
+      return { revoked: false, status: 'busy', inFlightRequestIds: pendingRequestIds };
+    // Previously forwarded requests may have lost their replies before this call.
+    // 此调用前已转发的请求可能已经失去响应。
     const inFlightRequestIds = [
       ...this.unconfirmedRequests.values(),
-      ...[...this.relays].flatMap(relay => [...relay.inFlight.values()]),
+      ...pendingRequestIds,
     ];
     const result: PlaywrightProxyCloseResult = {
       revoked: true,
       status: inFlightRequestIds.length > 0 ? 'inFlight' : 'revoked',
       inFlightRequestIds,
     };
-    this.revokeCurrent();
+    if (active) this.revokeCurrent();
     await this.unbindPromise;
     if (this.unbindFailed) result.status = 'unknown';
     return result;
@@ -420,6 +434,7 @@ export class PlaywrightProxy {
     const webSocketServer = this.webSocketServer;
     this.server = null;
     this.webSocketServer = null;
+    if (this.connectionId !== null) this.retiredConnectionId = this.connectionId;
     this.connectionId = null;
     this.capability = null;
     this.consumed = false;

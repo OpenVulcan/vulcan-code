@@ -1,6 +1,7 @@
 use super::{
+    BROWSER_ERROR_AUTOMATION_BUSY, BROWSER_ERROR_INVALID_REQUEST, BROWSER_ERROR_LEASE_CONFLICT,
     BrowserAutomationState, BrowserLeaseState, BrowserManager, BrowserProfileMode,
-    BrowserSessionProjection, BrowserSessionStatus,
+    BrowserSessionProjection, BrowserSessionStatus, automation_grant::BrowserAutomationRevocation,
 };
 use crate::state::SharedServiceBridgeState;
 use std::collections::BTreeSet;
@@ -33,6 +34,13 @@ const AI_LEASE_TTL: Duration = Duration::from_secs(600);
 /// Interval for lease renewal and closed-host detection.
 /// 续订租约与检测宿主关闭的间隔。
 const AI_LEASE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Bounds how long either controller waits for the other's active browser work.
+/// 限制双方等待对方活动浏览器操作的时间。
+const INTERACTIVE_LEASE_WAIT: Duration = Duration::from_secs(1);
+/// Checks for completion without blocking a runtime worker or admitting another controller.
+/// 等待完成时既不阻塞运行时线程，也不准入另一个控制者。
+const INTERACTIVE_LEASE_POLL: Duration = Duration::from_millis(50);
 
 /// Approved Playwright MCP tools exposed directly to the model.
 /// 直接暴露给模型的已批准 Playwright MCP 工具。
@@ -79,6 +87,9 @@ pub(super) struct BrowserAiConnection {
     /// Supervisor that keeps a live Core lease aligned with the MCP process lifetime.
     /// 使活动 Core 租约与 MCP 进程寿命保持一致的监督任务。
     heartbeat: Option<tokio::task::JoinHandle<()>>,
+    /// Live invocations hold a clone from binding preparation through the tool result.
+    /// 活动调用从绑定准备到工具结果返回期间持有此引用的副本。
+    invocations: Arc<()>,
     /// Whether MCP startup and the host gateway are confirmed usable.
     /// MCP 启动与宿主网关是否已确认可用。
     ready: bool,
@@ -291,18 +302,34 @@ impl BrowserManager {
         .await
     }
 
-    /// Revokes the selected AI controller before granting a user takeover lease.
-    /// 在向用户授予接管租约之前撤销已选中的 AI 控制者。
+    /// Retires idle AI control before granting authority for a human browser action.
+    /// 在为人工浏览器操作授予权限前撤销空闲的 AI 控制权。
     ///
     /// `browser_id` identifies the Core session and `holder` names the new UI controller.
+    /// `take_over` explicitly allows replacing a human holder, unlike direct interaction.
     /// Returns the new projection and secret only after the host confirms revocation.
-    /// `browser_id` 标识 Core 会话，`holder` 命名新的界面控制者；仅在宿主确认撤销后返回
-    /// 新投影和凭据。
-    pub(crate) async fn takeover_after_retiring_ai(
+    /// `browser_id` 标识 Core 会话，`holder` 命名新的界面控制者。
+    /// `take_over` 显式允许替换人工持有者。仅在宿主确认撤销后返回新投影和凭据。
+    pub(super) async fn grant_user_lease(
         &self,
         browser_id: &str,
         holder: &str,
+        take_over: bool,
     ) -> Result<(BrowserSessionProjection, String), String> {
+        if holder.trim().is_empty() {
+            return Err(String::from(BROWSER_ERROR_INVALID_REQUEST));
+        }
+        // Both admission paths share the AI retirement boundary, then enforce their own lease policy.
+        // 两条准入路径共用 AI 退休边界，随后分别执行自身的租约策略。
+        let requested_browser = browser_id.to_owned();
+        let requested_holder = holder.to_owned();
+        let grant = move |manager: BrowserManager| {
+            if take_over {
+                manager.takeover_lease(&requested_browser, &requested_holder, None)
+            } else {
+                manager.acquire_lease(&requested_browser, &requested_holder, None)
+            }
+        };
         let owner = self.session_projection(browser_id)?.owner_session_id;
         let slot = self
             .ai_connections
@@ -311,19 +338,12 @@ impl BrowserManager {
             .get(&owner)
             .cloned();
         let Some(slot) = slot else {
-            let browser_id_owned = String::from(browser_id);
-            let holder_owned = String::from(holder);
-            return self
-                .run_blocking(browser_id, move |manager| {
-                    manager.takeover_lease(&browser_id_owned, &holder_owned, None)
-                })
-                .await;
+            return self.run_blocking(browser_id, grant).await;
         };
         let owner_session_id = Uuid::parse_str(&owner)
             .map_err(|error| format!("invalid stored browser owner identity: {error}"))?;
         let manager = self.clone();
         let browser_id = String::from(browser_id);
-        let holder = String::from(holder);
         CoreNativeBrowserRuntime::await_owner_transition(async move {
             let _idle_slot_prune = BrowserAiIdleSlotPrune {
                 manager: &manager,
@@ -331,10 +351,50 @@ impl BrowserManager {
                 slot: &slot,
             };
             let mut connection = slot.lock().await;
-            if connection
+            if let Some(current) = connection
                 .as_ref()
-                .is_some_and(|current| current.browser_id.as_deref() == Some(browser_id.as_str()))
+                .filter(|current| current.browser_id.as_deref() == Some(browser_id.as_str()))
             {
+                if manager.session_projection(&browser_id)?.automation_state
+                    == BrowserAutomationState::Attached
+                {
+                    // Ask the live relay before stopping MCP, so its last request can finish and the page survives.
+                    // 停止 MCP 前先询问活动中继，让最后一个请求可以完成并保留页面。
+                    let connection_id = current
+                        .connection_id
+                        .clone()
+                        .ok_or_else(|| String::from("attached browser has no AI connection ID"))?;
+                    // Reserve the slot while a tool finishes. A tool can still be active between its CDP commands.
+                    // 工具完成前保留槽位。两条 CDP 命令之间，工具可能仍在执行。
+                    let deadline = tokio::time::Instant::now() + INTERACTIVE_LEASE_WAIT;
+                    loop {
+                        let retirement = if Arc::strong_count(&current.invocations) > 1 {
+                            Err(String::from(BROWSER_ERROR_AUTOMATION_BUSY))
+                        } else {
+                            let host_browser_id = browser_id.clone();
+                            let host_owner = owner.clone();
+                            let connection_id = connection_id.clone();
+                            manager
+                                .run_blocking(&browser_id, move |manager| {
+                                    manager.revoke_automation_gateway(
+                                        &host_browser_id,
+                                        &host_owner,
+                                        &connection_id,
+                                        BrowserAutomationRevocation::WhenIdle,
+                                    )
+                                })
+                                .await
+                        };
+                        if take_over
+                            || !matches!(&retirement, Err(error) if error == BROWSER_ERROR_AUTOMATION_BUSY)
+                            || tokio::time::Instant::now() >= deadline
+                        {
+                            retirement?;
+                            break;
+                        }
+                        tokio::time::sleep(INTERACTIVE_LEASE_POLL).await;
+                    }
+                }
                 let current = connection
                     .take()
                     .ok_or_else(|| String::from("browser AI connection is unavailable"))?;
@@ -346,11 +406,7 @@ impl BrowserManager {
                 )
                 .await?;
             }
-            manager
-                .run_blocking(&browser_id.clone(), move |manager| {
-                    manager.takeover_lease(&browser_id, &holder, None)
-                })
-                .await
+            manager.run_blocking(&browser_id, grant).await
         })
         .await
     }
@@ -645,7 +701,12 @@ impl CoreNativeBrowserRuntime {
             return Ok(());
         }
         if projection.automation_state == BrowserAutomationState::Attached {
-            match manager.revoke_automation_gateway(browser_id, owner, connection_id) {
+            match manager.revoke_automation_gateway(
+                browser_id,
+                owner,
+                connection_id,
+                BrowserAutomationRevocation::Immediate,
+            ) {
                 Ok(projection) => match projection.lease_state {
                     BrowserLeaseState::Held => {
                         manager.release_lease(browser_id, lease_secret)?;
@@ -836,33 +897,49 @@ impl CoreNativeBrowserRuntime {
     ) -> Result<BrowserAiConnection, String> {
         let owner = owner_session_id.to_string();
         let connection_id = Uuid::new_v4().to_string();
-        let manager = environment.manager.clone();
-        let host_browser_id = browser_id.clone();
-        let host_owner = owner.clone();
-        let host_connection_id = connection_id.clone();
-        let gateway = tokio::task::spawn_blocking(move || {
-            let (_, lease_secret) = manager.acquire_lease(
-                &host_browser_id,
-                &format!("ai:{host_owner}"),
-                Some(AI_LEASE_TTL),
-            )?;
-            match manager.open_automation_gateway(
-                &host_browser_id,
-                &host_owner,
-                &lease_secret,
-                &host_connection_id,
-            ) {
-                Ok(grant) => Ok::<_, String>(Ok((lease_secret, grant))),
-                Err(error) => Ok(Err(AutomationGatewayOpenFailure {
-                    browser_id: host_browser_id,
-                    lease_secret,
-                    connection_id: host_connection_id,
-                    error,
-                })),
+        // An AI action arriving during a short UI gesture can continue as soon as the lease is released.
+        // 在短暂界面手势期间到达的 AI 操作，可以在该租约释放后立即继续。
+        let deadline = tokio::time::Instant::now() + INTERACTIVE_LEASE_WAIT;
+        let gateway = loop {
+            let manager = environment.manager.clone();
+            let host_browser_id = browser_id.clone();
+            let host_owner = owner.clone();
+            let host_connection_id = connection_id.clone();
+            let opened = tokio::task::spawn_blocking(move || {
+                let (_, lease_secret) = manager.acquire_lease(
+                    &host_browser_id,
+                    &format!("ai:{host_owner}"),
+                    Some(AI_LEASE_TTL),
+                )?;
+                match manager.open_automation_gateway(
+                    &host_browser_id,
+                    &host_owner,
+                    &lease_secret,
+                    &host_connection_id,
+                ) {
+                    Ok(grant) => Ok::<_, String>(Ok((lease_secret, grant))),
+                    Err(error) => Ok(Err(AutomationGatewayOpenFailure {
+                        browser_id: host_browser_id,
+                        lease_secret,
+                        connection_id: host_connection_id,
+                        error,
+                    })),
+                }
+            })
+            .await
+            .map_err(|error| format!("browser grant task failed: {error}"))?;
+            if !matches!(&opened, Err(error) if error == BROWSER_ERROR_LEASE_CONFLICT)
+                || tokio::time::Instant::now() >= deadline
+                || environment
+                    .manager
+                    .session_projection(&browser_id)?
+                    .lease_state
+                    == BrowserLeaseState::Blocked
+            {
+                break opened?;
             }
-        })
-        .await
-        .map_err(|error| format!("browser grant task failed: {error}"))??;
+            tokio::time::sleep(INTERACTIVE_LEASE_POLL).await;
+        };
         let (lease_secret, grant) = match gateway {
             Ok(grant) => grant,
             Err(failure) => {
@@ -879,6 +956,7 @@ impl CoreNativeBrowserRuntime {
                     lease_secret: Some(lease_secret.clone()),
                     connection_id: Some(connection_id.clone()),
                     heartbeat: None,
+                    invocations: Arc::new(()),
                     ready: false,
                 });
                 let cleanup = Self::release_failed_gateway(
@@ -903,6 +981,7 @@ impl CoreNativeBrowserRuntime {
             lease_secret: Some(lease_secret.clone()),
             connection_id: Some(grant.connection_id.clone()),
             heartbeat: None,
+            invocations: Arc::new(()),
             ready: false,
         });
         let config = match Self::server_config(environment, &owner, &grant.endpoint) {
@@ -1024,18 +1103,19 @@ impl CoreNativeBrowserRuntime {
             lease_secret: Some(lease_secret),
             connection_id: Some(grant.connection_id),
             heartbeat: Some(heartbeat),
+            invocations: Arc::new(()),
             ready: true,
         })
     }
 
-    /// Acquires exact live bindings only when a page action is being executed.
-    /// 只在执行页面动作时取得精确实时绑定。
+    /// Acquires exact live bindings and a guard for the AI operation's lifetime.
+    /// 取得精确实时绑定及覆盖 AI 操作生命周期的保护引用。
     async fn prepare_bindings(
         &self,
         owner_session_id: SessionId,
         target: String,
         generation: u64,
-    ) -> Result<Vec<McpRuntimeToolBinding>, String> {
+    ) -> Result<(Vec<McpRuntimeToolBinding>, Arc<()>), String> {
         let environment = self.environment()?;
         if generation != environment.plugin_generation {
             return Err(String::from(
@@ -1068,7 +1148,7 @@ impl CoreNativeBrowserRuntime {
         owner_session_id: SessionId,
         target: &str,
         mut reservation: BrowserAiPreparationReservation,
-    ) -> Result<Vec<McpRuntimeToolBinding>, String> {
+    ) -> Result<(Vec<McpRuntimeToolBinding>, Arc<()>), String> {
         let owner = owner_session_id.to_string();
         // The detached task already owns this lock; Stop must wait for its conversion before retirement.
         // 分离任务已经拥有此锁；Stop 必须等此转换完成后才能退休。
@@ -1131,12 +1211,13 @@ impl CoreNativeBrowserRuntime {
             }
             return Err(error);
         }
-        Self::approved_bindings(
-            connection
-                .as_ref()
-                .ok_or_else(|| String::from("browser MCP connection is unavailable"))?,
-            owner_session_id,
-        )
+        // Clone the guard under the same slot lock used to admit human input.
+        // 在准入人工输入所用的同一个槽位锁内复制保护引用。
+        let current = connection
+            .as_ref()
+            .ok_or_else(|| String::from("browser MCP connection is unavailable"))?;
+        let bindings = Self::approved_bindings(current, owner_session_id)?;
+        Ok((bindings, Arc::clone(&current.invocations)))
     }
 
     /// Resolves a captured selection under the owning browser transition slot.
@@ -1458,9 +1539,10 @@ impl NativeBrowserRuntime for CoreNativeBrowserRuntime {
     ) -> Result<serde_json::Value, String> {
         // This binding cannot follow a replacement after the owner slot is released.
         // 此绑定在所有者槽位释放后也不能跟随替代连接。
-        let binding = self
+        let (bindings, _invocation) = self
             .prepare_bindings(owner, target.to_owned(), generation)
-            .await?
+            .await?;
+        let binding = bindings
             .into_iter()
             .find(|binding| binding.origin_tool_name() == Some(tool))
             .ok_or_else(|| format!("The live Playwright connection does not provide `{tool}`."))?;
@@ -1541,7 +1623,7 @@ impl NativeBrowserRuntime for CoreNativeBrowserRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
     use tokio::sync::oneshot;
 
     /// Rejects a delayed page action before opening an MCP partition, even after switching back.
@@ -1624,6 +1706,7 @@ mod tests {
                     lease_secret: Some(lease_secret),
                     connection_id: Some(String::from("preparation-stop-test")),
                     heartbeat: None,
+                    invocations: Arc::new(()),
                     ready: false,
                 });
                 Ok::<(), String>(())
@@ -1911,6 +1994,112 @@ mod tests {
         assert_eq!(lease_secret.len(), 36);
     }
 
+    /// Keeps the exact host and AI lease during a busy takeover, then transfers control after settlement.
+    /// 忙碌时接管保留精确宿主和 AI 租约，操作结算后转交控制权。
+    #[tokio::test]
+    async fn direct_interaction_preserves_browser_until_automation_is_idle() {
+        // The fake host reports a real pending-state refusal until the test settles its operation.
+        // 测试结算操作前，伪宿主返回等待状态拒绝。
+        let busy = Arc::new(AtomicBool::new(true));
+        let (manager, alive, _) = super::super::tests::manager_with_fake_host_behavior(
+            Duration::ZERO,
+            false,
+            false,
+            Some(Arc::clone(&busy)),
+        );
+        // Own and attach the same browser through the normal lease and MCP partition state.
+        // 通过常规租约与 MCP 分区状态持有并挂接同一个浏览器。
+        let owner = SessionId::new_v4();
+        let browser = manager
+            .create_owned_session(&owner.to_string(), BrowserProfileMode::Ephemeral)
+            .expect("create browser");
+        manager.start_host(&browser.session_id).expect("start host");
+        let (_, ai_lease) = manager
+            .acquire_lease(&browser.session_id, "ai:takeover-test", None)
+            .expect("AI lease");
+        let connection_id = String::from("takeover-test-connection");
+        manager
+            .attach_automation(&browser.session_id, &ai_lease, &connection_id)
+            .expect("attach automation");
+        let slot = CoreNativeBrowserRuntime::connection_slot(&manager, &owner.to_string())
+            .expect("owner slot");
+        *slot.lock().await = Some(BrowserAiConnection {
+            plugin_generation: 1,
+            mcp_runtime: vulcan_agent_runtime::mcp::bootstrap_mcp_runtime_access(Vec::new())
+                .await
+                .expect("MCP registry"),
+            browser_id: Some(browser.session_id.clone()),
+            lease_secret: Some(ai_lease.clone()),
+            connection_id: Some(connection_id),
+            heartbeat: None,
+            invocations: Arc::new(()),
+            ready: true,
+        });
+
+        assert_eq!(
+            manager
+                .grant_user_lease(&browser.session_id, "manual", false)
+                .await
+                .expect_err("pending operation must defer the interaction"),
+            BROWSER_ERROR_AUTOMATION_BUSY,
+        );
+        // A busy refusal keeps both the current controller and process usable.
+        // 忙碌拒绝保留当前控制者和进程的可用状态。
+        let original = manager
+            .heartbeat_lease(&browser.session_id, &ai_lease)
+            .expect("AI lease is retained");
+        assert_eq!(original.automation_state, BrowserAutomationState::Attached);
+        assert!(alive.load(Ordering::SeqCst));
+        assert!(slot.lock().await.as_ref().is_some_and(|state| state.ready));
+        busy.store(false, Ordering::SeqCst);
+
+        // The MCP invocation can outlive its final active relay request.
+        // MCP 调用可能在最后一条中继请求结束后仍未完成。
+        let invocation = Arc::clone(
+            &slot
+                .lock()
+                .await
+                .as_ref()
+                .expect("AI connection")
+                .invocations,
+        );
+        assert_eq!(
+            manager
+                .grant_user_lease(&browser.session_id, "manual", false)
+                .await
+                .expect_err("the interaction must wait for the entire tool"),
+            BROWSER_ERROR_AUTOMATION_BUSY,
+        );
+        drop(invocation);
+
+        // Once idle, only the replacement lease can control the original host.
+        // 操作结束后，只有新租约可以控制原宿主。
+        let (manual, manual_lease) = manager
+            .grant_user_lease(&browser.session_id, "manual", false)
+            .await
+            .expect("interact with the same browser");
+        assert_eq!(manual.host_generation, original.host_generation);
+        assert_eq!(manual.status, BrowserSessionStatus::Running);
+        assert_eq!(manual.automation_state, BrowserAutomationState::Detached);
+        assert!(alive.load(Ordering::SeqCst));
+        assert!(slot.lock().await.is_none());
+        assert!(
+            manager
+                .heartbeat_lease(&browser.session_id, &ai_lease)
+                .is_err()
+        );
+        assert_eq!(
+            manager
+                .grant_user_lease(&browser.session_id, "second-ui", false)
+                .await
+                .expect_err("automatic access cannot replace a human controller"),
+            super::super::BROWSER_ERROR_LEASE_CONFLICT,
+        );
+        manager
+            .close_session_with_lease(&browser.session_id, &manual_lease)
+            .expect("explicitly close with the new lease");
+    }
+
     /// Verifies failed gateway cleanup never downgrades an attached authorization to free.
     /// 验证网关清理失败时绝不会把已挂接授权错误降级为空闲。
     ///
@@ -2003,6 +2192,7 @@ mod tests {
             lease_secret: Some(lease_secret),
             connection_id: Some(String::from("crashed-connection")),
             heartbeat: None,
+            invocations: Arc::new(()),
             ready: false,
         });
         manager

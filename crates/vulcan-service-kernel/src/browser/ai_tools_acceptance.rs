@@ -1,7 +1,10 @@
 //! Real Core browser, host grant, plugin configuration, and official Playwright MCP acceptance.
 //! 真实 Core 浏览器、宿主授权、插件配置及官方 Playwright MCP 的验收。
 
-use super::{BrowserHostRuntimeConfig, BrowserManager, BrowserProfileMode};
+use super::{
+    BROWSER_ERROR_AUTOMATION_BUSY, BrowserHostRuntimeConfig, BrowserManager, BrowserProfileMode,
+    automation_grant::BrowserAutomationRevocation,
+};
 use crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
 use base64::Engine as _;
 use std::collections::BTreeSet;
@@ -609,7 +612,12 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         .shutdown_owned_stdio_partition("vulcan-browser", generation, owner)
         .expect("stop first turn MCP");
     manager
-        .revoke_automation_gateway(&first.session_id, &owner.to_string(), &first_connection)
+        .revoke_automation_gateway(
+            &first.session_id,
+            &owner.to_string(),
+            &first_connection,
+            BrowserAutomationRevocation::Immediate,
+        )
         .expect("revoke first turn without closing Chromium");
     manager
         .release_lease(&first.session_id, &first_lease)
@@ -826,7 +834,12 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
         "old snapshot reference failed for an unexpected reason: {stale_error}"
     );
     manager
-        .revoke_automation_gateway(&first.session_id, &owner.to_string(), &first_connection)
+        .revoke_automation_gateway(
+            &first.session_id,
+            &owner.to_string(),
+            &first_connection,
+            BrowserAutomationRevocation::Immediate,
+        )
         .expect("revoke first host grant");
     manager
         .release_lease(&first.session_id, &first_lease)
@@ -884,7 +897,34 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
     }
     assert_eq!(
         manager
-            .revoke_automation_gateway(&second.session_id, &owner.to_string(), &second_connection)
+            .revoke_automation_gateway(
+                &second.session_id,
+                &owner.to_string(),
+                &second_connection,
+                BrowserAutomationRevocation::WhenIdle,
+            )
+            .expect_err("manual takeover must defer an active navigation"),
+        BROWSER_ERROR_AUTOMATION_BUSY
+    );
+    assert_eq!(
+        manager
+            .session_projection(&second.session_id)
+            .expect("busy browser projection")
+            .automation_state,
+        super::BrowserAutomationState::Attached
+    );
+    assert!(
+        !stalled_call.is_finished(),
+        "a busy takeover must leave the navigation connected"
+    );
+    assert_eq!(
+        manager
+            .revoke_automation_gateway(
+                &second.session_id,
+                &owner.to_string(),
+                &second_connection,
+                BrowserAutomationRevocation::Immediate,
+            )
             .expect_err("an unconfirmed real Playwright operation must block revocation"),
         super::BROWSER_ERROR_LEASE_BLOCKED
     );
@@ -933,6 +973,7 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
             &stranger_browser.session_id,
             &stranger.to_string(),
             &stranger_connection,
+            BrowserAutomationRevocation::Immediate,
         )
         .expect("revoke stranger host grant");
     manager
@@ -1032,6 +1073,7 @@ async fn real_core_host_plugin_mcp_browser_switch_revokes_old_grant() {
             &stranger_browser.session_id,
             &stranger.to_string(),
             &resumed_connection,
+            BrowserAutomationRevocation::Immediate,
         )
         .expect("retire resumed grant");
     manager

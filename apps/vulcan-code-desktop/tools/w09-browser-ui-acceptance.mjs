@@ -1272,21 +1272,12 @@ try {
   }
   }
   await browserPanel.locator(`[data-browser-session-id="${initialBrowser.sessionId}"]`).click();
-  try {
-    await browserPanel.getByRole('button', { name: /取得控制权|Take control/ }).waitFor({ timeout: 20_000 });
-  } catch (error) {
-    // A missing control action must report the browser panel error and Core session list.
-    // 缺少控制动作时必须同时报告浏览器面板错误和 Core 会话列表。
-    console.error(JSON.stringify({
-      panelText: await browserPanel.innerText(),
-      sessions: await rpc('browser.session.list', {}, acceptedConversationId),
-    }));
-    throw error;
-  }
-  await browserPanel.getByRole('button', { name: /取得控制权|Take control/ }).click();
+  assert.equal(await browserPanel.getByRole('button', {
+    name: /^(取得控制权|明确接管|交还控制权|Take control|Take over|Release control)$/,
+  }).count(), 0);
   await browserPanel.getByRole('textbox', { name: /页面地址|Page URL/ }).fill(fixtureUrl);
-  // go is enabled only after the UI has both a lease and a selected Core page.
-  // go 仅在界面同时拥有租约和选定 Core 页面后才启用。
+  // Go starts the interaction as soon as the selected Core page is ready.
+  // 选定的 Core 页面就绪后，前往按钮即可启动交互。
   const go = browserPanel.getByRole('button', { name: /前往|Go/ });
   try {
     await until(async () => { assert.equal(await go.isEnabled(), true); return true; }, 8_000);
@@ -1757,7 +1748,7 @@ try {
   let aiAcceptance = null;
   let aiTurnRetirementAcceptance = null;
   let aiCancellationAcceptance = null;
-  let aiTakeoverAcceptance = null;
+  let aiInteractionAcceptance = null;
   let shellSecretRedactionAcceptance = null;
   let sensitiveDataAudit = null;
   let webAcceptance = null;
@@ -2381,25 +2372,23 @@ try {
       browserId: cancelledBrowser.sessionId, browserStatus: browserAfterStop.status,
       automationDetached: true, leaseReleased: true,
     };
-    // A separate model turn must be interrupted by a user's Core takeover while a real page
-    // navigation is still in flight; unknown writes require closing the browser before reuse.
-    // 独立模型回合的真实页面导航尚在途时，由用户从 Core 发起接管；
-    // 未知写入必须先关闭浏览器，不能直接重用。
+    // A human action during a real AI navigation must preserve the live browser and its request.
+    // 在 AI 真实导航期间发出的人工操作必须保留活动浏览器及其请求。
     stalledPageRequestSeen = false;
     stalledPageResponse = null;
     stalledPagePath = `/w09-stall/${randomUUID()}`;
-    const takeoverStalledUrl = new URL(stalledPagePath, fixtureUrl).href;
-    const takeoverSubmission = await rpc('service_submit_conversation_prompt', {
-      clientSubmissionId: `w09-ai-takeover-${Date.now()}`,
+    const interactionStalledUrl = new URL(stalledPagePath, fixtureUrl).href;
+    const interactionSubmission = await rpc('service_submit_conversation_prompt', {
+      clientSubmissionId: `w09-ai-interaction-${Date.now()}`,
       projectId: project.id,
       conversationId: null,
       draftSlotKey: `new:${project.id}`,
-      prompt: `W09 automated takeover test: the test controller will intentionally interrupt this turn during browser navigation. Use browser_open to create a Core browser, then use browser_navigate to ${takeoverStalledUrl}. Wait for navigation to finish before responding. Do not use shell/network tools or delegate.`,
+      prompt: `W09 browser interaction test. Use browser_open to create a Core browser, then use browser_navigate to ${interactionStalledUrl}. Wait for navigation to finish before responding. Do not use shell/network tools or delegate.`,
     });
-    const takeoverConversationId = takeoverSubmission.conversationId;
+    const interactionConversationId = interactionSubmission.conversationId;
     try {
       await until(async () => {
-        assert.equal(stalledPageRequestSeen, true, 'The takeover model has not reached the delayed page.');
+        assert.equal(stalledPageRequestSeen, true, 'The browser tool has not reached the delayed page.');
         return true;
       }, 90_000);
     } catch (error) {
@@ -2409,12 +2398,12 @@ try {
       // 模型可能在夹具收到请求前完成、拒绝或失去浏览器。仅记录本合成提示的有限答复与工具状态，
       // 以便区分模型行为与宿主故障。
       const [history, browsers] = await Promise.allSettled([
-        rpcExact('service_session_event_hydration_v1', { sessionId: takeoverConversationId }),
-        rpc('browser.session.list', {}, takeoverConversationId),
+        rpcExact('service_session_event_hydration_v1', { sessionId: interactionConversationId }),
+        rpc('browser.session.list', {}, interactionConversationId),
       ]);
       const events = history.status === 'fulfilled' ? history.value.events : [];
-      console.error('W09_TAKEOVER_WAIT_DIAGNOSTIC', JSON.stringify({
-        conversationId: takeoverConversationId,
+      console.error('W09_INTERACTION_WAIT_DIAGNOSTIC', JSON.stringify({
+        conversationId: interactionConversationId,
         openTurnId: history.status === 'fulfilled' ? history.value.open_turn_id : null,
         eventKinds: events.map((item) => item.event.kind).slice(-24),
         toolCalls: events.filter((item) => item.event.kind === 'tool_call')
@@ -2434,34 +2423,37 @@ try {
       }));
       throw error;
     }
-    const takeoverBrowser = (await rpc('browser.session.list', {}, takeoverConversationId))
+    const interactionBrowser = (await rpc('browser.session.list', {}, interactionConversationId))
       .find((session) => session.status === 'running');
-    assert.ok(takeoverBrowser, 'The in-flight takeover lacks a Core browser.');
-    assert.equal(takeoverBrowser.automationState, 'attached', JSON.stringify(takeoverBrowser));
-    const takeoverAttempt = await rpcResponse('browser.lease.takeover', {
-      sessionId: takeoverBrowser.sessionId, holder: 'w09-user-takeover',
-    }, takeoverConversationId);
-    assert.equal(takeoverAttempt.ok, false,
-      'An unconfirmed AI navigation must not grant the user a fabricated lease.');
-    const afterTakeover = await rpc('browser.session.snapshot',
-      { sessionId: takeoverBrowser.sessionId }, takeoverConversationId);
-    assert.equal(afterTakeover.status, 'closed', JSON.stringify(afterTakeover));
-    assert.equal(afterTakeover.automationState, 'detached', JSON.stringify(afterTakeover));
-    assert.equal(afterTakeover.leaseState, 'free', JSON.stringify(afterTakeover));
-    const takeoverStop = await rpc('service_stop_conversation_run', {
-      conversationId: takeoverConversationId, mode: 'main_only',
-    });
-    assert.equal(takeoverStop.status, 'stopped');
-    if (stalledPageResponse && !stalledPageResponse.destroyed) {
-      stalledPageResponse.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      stalledPageResponse.end('<!doctype html><title>Takeover navigation fixture</title>');
-    }
-    assert.equal((await rpc('browser.session.snapshot',
-      { sessionId: takeoverBrowser.sessionId }, takeoverConversationId)).status, 'closed');
-    aiTakeoverAcceptance = {
-      intentionalInterruption: true, inFlightNavigationObserved: true, userTakeoverAttempted: true,
-      fabricatedLeaseDenied: true, uncertainBrowserClosed: true,
-      automationDetached: true, staleNavigationCannotWrite: true,
+    assert.ok(interactionBrowser, 'The in-flight navigation lacks a Core browser.');
+    assert.equal(interactionBrowser.automationState, 'attached');
+    // Use the same request as a normal input event with the AI browser already selected.
+    // 使用已选中 AI 浏览器时普通输入事件发出的同一请求。
+    const interaction = { sessionId: interactionBrowser.sessionId, holder: 'w09-user-input', forInteraction: true };
+    const busyInteraction = await rpcResponse('browser.lease.acquire', interaction, interactionConversationId);
+    assert.equal(busyInteraction.ok, false);
+    const busyBrowser = await rpc('browser.session.snapshot',
+      { sessionId: interaction.sessionId }, interactionConversationId);
+    assert.equal(busyBrowser.status, 'running');
+    assert.equal(busyBrowser.automationState, 'attached');
+    assert.equal(busyBrowser.hostGeneration, interactionBrowser.hostGeneration);
+    assert.ok(stalledPageResponse && !stalledPageResponse.destroyed, 'The navigation lost its live HTTP response.');
+    stalledPageResponse.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    stalledPageResponse.end('<!doctype html><title>Direct interaction navigation fixture</title>');
+    await until(async () => {
+      const history = await rpcExact('service_session_event_hydration_v1', { sessionId: interactionConversationId });
+      assert.ok(history.events.some(({ event }) => event.kind === 'tool_call'
+        && event.status === 'completed' && event.tool_name.endsWith('browser_navigate')));
+      return true;
+    }, 20_000);
+    const interactionLease = await rpc('browser.lease.acquire', interaction, interactionConversationId);
+    assert.equal(interactionLease.session.hostGeneration, interactionBrowser.hostGeneration);
+    const released = await rpc('browser.lease.release',
+      { sessionId: interaction.sessionId, leaseSecret: interactionLease.leaseSecret }, interactionConversationId);
+    assert.equal(released.status, 'running');
+    assert.equal(released.leaseState, 'free');
+    aiInteractionAcceptance = {
+      inFlightNavigationObserved: true, browserPreserved: true, navigationCompleted: true, directLeaseReleased: true,
     };
     // A fourth real model turn reads only this disposable Core's discovery file through the
     // ordinary shell tool, proving its result is filtered before model replay and persistence.
@@ -2791,7 +2783,7 @@ try {
     pluginSettingsAcceptance,
     aiTurnRetirementAcceptance,
     aiCancellationAcceptance,
-    aiTakeoverAcceptance,
+    aiInteractionAcceptance,
     shellSecretRedactionAcceptance,
     sensitiveDataAudit,
     multiClientBrowserAcceptance,

@@ -457,6 +457,13 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
     const [controller, observer] = clients;
     await controller.bringToFront();
     const frame = client => client.frameLocator('.vk-browser-dom-surface iframe');
+    // Read Core's lease state to verify that a second viewer can act without an explicit handoff.
+    // 读取 Core 租约状态，验证第二个查看界面无需显式交接即可操作。
+    const waitForIdleBrowser = () => until(async () => {
+      const state = await rpc('browser.session.snapshot', { sessionId });
+      assert.equal(state.leaseState, 'free');
+      return true;
+    }, 5_000);
     for (const client of clients) {
       const image = frame(client).locator('#projected-image');
       await image.waitFor({ state: 'attached', timeout: 25_000 });
@@ -474,8 +481,7 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
     }
     assert.equal(originRequests, 0, 'The WebUI must consume assets without requesting the source origin.');
     console.log('DOM viewers loaded the same image, imported style, and font without source requests.');
-    await controller.getByRole('button', { name: 'Take control' }).click({ timeout: 5_000 });
-    await controller.getByRole('button', { name: 'Release control' }).waitFor({ timeout: 5_000 });
+    assert.equal(await controller.getByRole('button', { name: /^(Take control|Take over|Release control)$/ }).count(), 0);
     await frame(controller).locator('#projected-download').click();
     await controller.getByRole('button', { name: 'Download list' }).click();
     await controller.getByRole('button', { name: /projection-fixture\.txt/ }).waitFor();
@@ -605,10 +611,8 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
       assert.ok(snapshot.result.passwords.some(([, length, start, end]) => length === handoffPassword.length && start === 0 && end === 1));
       return true;
     }, 10_000);
-    await controller.getByRole('button', { name: 'Release control' }).click();
+    await waitForIdleBrowser();
     await observer.bringToFront();
-    await observer.getByRole('button', { name: 'Take control' }).click();
-    await observer.getByRole('button', { name: 'Release control' }).waitFor();
     const takenPassword = frame(observer).locator('#projection-password');
     await takenPassword.press('Backspace');
     await until(async () => {
@@ -618,10 +622,8 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
       assert.deepEqual(await passwordView(observer), expected);
       return true;
     }, 10_000);
-    await observer.getByRole('button', { name: 'Release control' }).click();
+    await waitForIdleBrowser();
     await controller.bringToFront();
-    await controller.getByRole('button', { name: 'Take control' }).click();
-    await controller.getByRole('button', { name: 'Release control' }).waitFor();
     await password.click();
     await password.press('Control+a');
     await cdp.send('Input.insertText', { text: handoffPassword });
@@ -755,17 +757,14 @@ async function verifyDomViewers(discovery, sessionId, rpc) {
     assert.notDeepEqual(await panelSize(observer), firstFit);
     await expectViewport(firstFit);
     assert.equal(viewportWrites, 3);
-    await controller.getByRole('button', { name: 'Release control' }).click({ timeout: 5_000 });
-    await controller.getByRole('button', { name: 'Take control' }).waitFor({ timeout: 5_000 });
+    await waitForIdleBrowser();
     await observer.bringToFront();
-    await observer.getByRole('button', { name: 'Take control' }).click();
     const secondFit = await panelSize(observer);
     await observer.getByRole('button', { name: 'Resize viewport' }).click();
     await observer.getByRole('menuitem', { name: /Fit to current window/ }).click();
     await expectViewport(secondFit);
     assert.equal(viewportWrites, 4);
-    await observer.getByRole('button', { name: 'Release control' }).click();
-    await observer.getByRole('button', { name: 'Take control' }).waitFor();
+    await waitForIdleBrowser();
     console.log('Viewport presets, custom dimensions, and one-shot fitting passed in two clients.');
     console.log('Both DOM viewers followed the new Playwright tab.');
   } finally {

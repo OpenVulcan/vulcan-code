@@ -5,9 +5,9 @@ import WebSocket from 'ws';
 
 import { PlaywrightProxy } from './playwright-proxy.js';
 
-/** Creates a fake BrowserServer pipe and optionally observes frames without replying. */
-/** 创建假的 BrowserServer 管道，并可选择只观察协议帧而不回复。 */
-async function listenPipe(onFrame?: (body: Buffer) => void): Promise<{ path: string; server: net.Server }> {
+/** Creates a fake BrowserServer pipe and optionally delegates replies to a frame handler. */
+/** 创建假的 BrowserServer 管道，并可选择由帧处理器负责应答。 */
+async function listenPipe(onFrame?: (body: Buffer, socket: net.Socket) => void): Promise<{ path: string; server: net.Server }> {
   const path = `\\\\.\\pipe\\vulcan-playwright-proxy-test-${process.pid}-${Date.now()}`;
   const server = net.createServer(socket => {
     let pending = Buffer.alloc(0);
@@ -18,7 +18,7 @@ async function listenPipe(onFrame?: (body: Buffer) => void): Promise<{ path: str
       while (end !== -1) {
         const body = pending.subarray(0, end);
         pending = pending.subarray(end + 1);
-        if (onFrame) onFrame(body);
+        if (onFrame) onFrame(body, socket);
         else {
           socket.write(body);
           socket.write('\0');
@@ -213,6 +213,66 @@ test('Playwright relay keeps an unanswered forwarded request after the client di
     );
   } finally {
     client?.terminate();
+    await proxy.shutdown();
+    await closePipe(pipe.server);
+  }
+});
+
+// A takeover must let the current request receive its reply before revoking control.
+// 接管必须等待当前请求收到应答，才能撤销控制权。
+test('Playwright relay defers takeover until its live request replies', async () => {
+  // The test controls when BrowserServer responds, so the pending state is deterministic.
+  // 由测试控制 BrowserServer 的应答时机，使等待状态可确定地复现。
+  let acceptFrame!: (socket: net.Socket) => void;
+  const forwarded = new Promise<net.Socket>(resolve => { acceptFrame = resolve; });
+  const pipe = await listenPipe((_body, socket) => acceptFrame(socket));
+  const browser = {
+    async bind(): Promise<{ endpoint: string }> { return { endpoint: pipe.path }; },
+    async unbind(): Promise<void> {},
+  };
+  const proxy = new PlaywrightProxy(browser as never);
+  const client = new WebSocket((await proxy.open('takeover-owner')).endpoint);
+  try {
+    await waitForOpen(client);
+    const reply = readJson(client);
+    client.send(JSON.stringify({ id: 17, method: 'goto' }));
+    const upstream = await forwarded;
+    assert.deepEqual(await proxy.close('takeover-owner', true), {
+      revoked: false, status: 'busy', inFlightRequestIds: [17],
+    });
+    assert.equal(client.readyState, WebSocket.OPEN);
+    upstream.write('{"id":17,"result":{}}\0');
+    assert.deepEqual(await reply, { id: 17, result: {} });
+    assert.deepEqual(await proxy.close('takeover-owner', true), {
+      revoked: true, status: 'revoked', inFlightRequestIds: [],
+    });
+  } finally {
+    client.terminate();
+    await proxy.shutdown();
+    await closePipe(pipe.server);
+  }
+});
+
+// An unused grant that expired is already retired, and its acknowledgement is scoped to its ID.
+// 未使用的授权到期后已撤销，撤销确认仅属于其原授权标识。
+test('Playwright relay acknowledges an expired grant without revoking a newer one', async ({ mock }) => {
+  mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const pipe = await listenPipe();
+  const browser = {
+    async bind(): Promise<{ endpoint: string }> { return { endpoint: pipe.path }; },
+    async unbind(): Promise<void> {},
+  };
+  const proxy = new PlaywrightProxy(browser as never);
+  try {
+    const grant = await proxy.open('expired-owner');
+    mock.timers.tick(Number(grant.expiresAt) - Date.now());
+    assert.deepEqual(await proxy.close('expired-owner', true), {
+      revoked: true, status: 'revoked', inFlightRequestIds: [],
+    });
+    await proxy.open('new-owner');
+    assert.equal((await proxy.close('expired-owner', true)).status, 'unknown');
+    assert.equal((await proxy.close('new-owner', true)).status, 'revoked');
+  } finally {
     await proxy.shutdown();
     await closePipe(pipe.server);
   }

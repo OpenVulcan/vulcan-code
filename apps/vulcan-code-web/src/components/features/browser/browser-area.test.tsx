@@ -78,6 +78,20 @@ async function selectBrowser(index = 0): Promise<void> {
   await act(async () => browserTabs()[index].click());
 }
 
+// Use an ordinary page so the address bar can start a real interaction in lifecycle tests.
+// 用普通页面让生命周期测试中的地址栏能启动实际交互。
+const interactionPage: CoreBrowserPage = {
+  pageId: "interaction-page", targetId: "interaction-target", url: "https://interaction.example/",
+  openerPageId: null, hostGeneration: 1,
+};
+
+// Submit the address shown in the selected page's enabled toolbar and wait for event dispatch.
+// 提交选中页面工具栏当前显示的地址，等待事件派发。
+async function submitAddress(): Promise<void> {
+  await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false));
+  await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+}
+
 it("normalizes browser addresses before Core navigation", () => {
   expect(coreBrowserAddress("www.baidu.com")).toBe("https://www.baidu.com/");
   expect(coreBrowserAddress("localhost:5173/test")).toBe("http://localhost:5173/test");
@@ -205,13 +219,13 @@ it("keeps a crashed Playwright browser visible with an explicit diagnostic", asy
   expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Take control')).toBe(false);
 });
 
-it("sends a bare domain through the address bar as an HTTPS Core navigation", async () => {
+it("navigates and releases control automatically when a bare domain is submitted", async () => {
   // session is a running Core browser owned by the visible conversation.
   // session 是归属当前可见会话的运行中 Core 浏览器。
   const session: CoreBrowserSession = {
     sessionId: "browser-a", ownerSessionId: "conversation-a", status: "running",
-    profileMode: "ephemeral", currentUrl: "https://old.example/", leaseState: "free", blockedReason: null,
-    automationState: "detached", pageGeneration: "1", viewportGeneration: "1",
+    profileMode: "ephemeral", currentUrl: "https://old.example/", leaseState: "held", blockedReason: null,
+    automationState: "attached", pageGeneration: "1", viewportGeneration: "1",
     viewportSize: { width: 1280, height: 800 }, controlEpoch: "1", hostGeneration: "1",
     pageCount: 1, requiresExplicitReopen: false,
   };
@@ -223,7 +237,7 @@ it("sends a bare domain through the address bar as an HTTPS Core navigation", as
   };
   // heldSession is the Core-confirmed lease projection after acquisition.
   // heldSession 是取得租约后 Core 确认的控制权投影。
-  const heldSession: CoreBrowserSession = { ...session, leaseState: "held", controlEpoch: "2" };
+  const heldSession: CoreBrowserSession = { ...session, automationState: "detached", controlEpoch: "2" };
   // held tracks the actual transition observed by Core list polling.
   // held 跟踪 Core 列表轮询能观察到的真实授权转换。
   let held = false;
@@ -237,26 +251,33 @@ it("sends a bare domain through the address bar as an HTTPS Core navigation", as
     if (method === "browser.session.navigate") {
       return Promise.resolve({ ...session, currentUrl: "https://www.baidu.com/", pageGeneration: "2" } as never);
     }
+    if (method === "browser.lease.release") held = false;
     return Promise.resolve(undefined as never);
   });
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
   await selectBrowser();
   await vi.waitFor(() => expect(host.querySelector('[data-browser-page-id="page-a"]')).not.toBeNull());
-  const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control"))!;
-  await act(async () => acquire.click());
-  await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false));
+  expect(host.textContent).not.toMatch(/Take control|Take over|Release control/);
+  expect(vi.mocked(requestCoreBrowser).mock.calls.some(([, method]) => method.startsWith("browser.lease."))).toBe(false);
   const address = host.querySelector<HTMLInputElement>('input[aria-label="Page URL"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(address, "www.baidu.com");
     address.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await act(async () => address.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  await submitAddress();
+  expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
+    "conversation-a", "browser.lease.acquire", expect.objectContaining({ sessionId: "browser-a", forInteraction: true }),
+  );
   await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
     "conversation-a", "browser.session.navigate", expect.objectContaining({
-      sessionId: "browser-a", pageId: "page-a", url: "https://www.baidu.com/",
+      sessionId: "browser-a", pageId: "page-a", url: "https://www.baidu.com/", leaseSecret: "lease-a",
     }),
   ));
+  await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
+    "conversation-a", "browser.lease.release", { sessionId: "browser-a", leaseSecret: "lease-a" },
+  ));
+  expect(held).toBe(false);
 });
 
 it("ignores a previous browser's page response after selecting another browser", async () => {
@@ -489,7 +510,7 @@ it("releases a control grant that arrives after its conversation is replaced", a
     profileMode: "ephemeral", currentUrl: null, leaseState: "free", blockedReason: null,
     automationState: "detached", pageGeneration: "1", viewportGeneration: "1",
     viewportSize: { width: 1280, height: 800 }, controlEpoch: "1", hostGeneration: "1",
-    pageCount: 0, requiresExplicitReopen: false,
+    pageCount: 1, requiresExplicitReopen: false,
   };
   // resolveLease lets Core grant the old request after the UI has switched owners.
   // resolveLease 让 Core 在界面切换归属后才批准旧请求。
@@ -499,23 +520,20 @@ it("releases a control grant that arrives after its conversation is replaced", a
   const pendingLease = new Promise<CoreBrowserLease>((resolve) => { resolveLease = resolve; });
   vi.mocked(listCoreBrowserSessions).mockImplementation((owner) =>
     Promise.resolve(owner === "conversation-a" ? [sessionA] : []));
-  vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([interactionPage]);
   vi.mocked(requestCoreBrowser).mockImplementation((_owner, method) =>
     method === "browser.lease.acquire" ? pendingLease as Promise<never> : Promise.resolve(undefined as never));
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
   await selectBrowser();
-  // acquire starts the exact old-owner request before the React prop changes.
-  // acquire 在 React 属性变化前启动精确的旧归属请求。
-  const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
-  await act(async () => acquire.click());
+  await submitAddress();
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-b" />));
   await act(async () => resolveLease({ session: sessionA, leaseSecret: "old-owner-secret", heartbeatIntervalMs: 5000 }));
   await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
     "conversation-a", "browser.lease.release", { sessionId: sessionA.sessionId, leaseSecret: "old-owner-secret" },
   ));
   expect(browserTabs()).toHaveLength(0);
-  expect(host.textContent).not.toContain("Release control");
+  expect(vi.mocked(requestCoreBrowser).mock.calls.some(([, method]) => method === "browser.session.navigate")).toBe(false);
 });
 
 it("releases a control grant that arrives after the browser panel unmounts", async () => {
@@ -526,7 +544,7 @@ it("releases a control grant that arrives after the browser panel unmounts", asy
     profileMode: "ephemeral", currentUrl: null, leaseState: "free", blockedReason: null,
     automationState: "detached", pageGeneration: "1", viewportGeneration: "1",
     viewportSize: { width: 1280, height: 800 }, controlEpoch: "1", hostGeneration: "1",
-    pageCount: 0, requiresExplicitReopen: false,
+    pageCount: 1, requiresExplicitReopen: false,
   };
   // finishAcquire resolves the request after the React panel is removed.
   // finishAcquire 在 React 面板卸载之后结束控制权申请。
@@ -535,20 +553,20 @@ it("releases a control grant that arrives after the browser panel unmounts", asy
   // pendingAcquire 模拟本地无法取消、已经发出的 Core 请求。
   const pendingAcquire = new Promise<CoreBrowserLease>((resolve) => { finishAcquire = resolve; });
   vi.mocked(listCoreBrowserSessions).mockResolvedValue([session]);
-  vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([interactionPage]);
   vi.mocked(requestCoreBrowser).mockImplementation((_owner, method) =>
     method === "browser.lease.acquire" ? pendingAcquire as Promise<never> : Promise.resolve(undefined as never));
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
   await selectBrowser();
-  const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
-  await act(async () => acquire.click());
+  await submitAddress();
   await act(async () => root.render(<></>));
   await act(async () => finishAcquire({ session, leaseSecret: "late-unmount-secret", heartbeatIntervalMs: 5000 }));
   await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
     "conversation-a", "browser.lease.release", { sessionId: session.sessionId, leaseSecret: "late-unmount-secret" },
   ));
   expect(host.textContent).toBe("");
+  expect(vi.mocked(requestCoreBrowser).mock.calls.some(([, method]) => method === "browser.session.navigate")).toBe(false);
 });
 
 it("releases an already-held browser grant under its original owner on conversation switch", async () => {
@@ -559,7 +577,7 @@ it("releases an already-held browser grant under its original owner on conversat
     profileMode: "ephemeral", currentUrl: null, leaseState: "free", blockedReason: null,
     automationState: "detached", pageGeneration: "1", viewportGeneration: "1",
     viewportSize: { width: 1280, height: 800 }, controlEpoch: "1", hostGeneration: "1",
-    pageCount: 0, requiresExplicitReopen: false,
+    pageCount: 1, requiresExplicitReopen: false,
   };
   // heldSession represents Core's newer control epoch after the grant.
   // heldSession 表示 Core 授权后的较新控制代次。
@@ -569,27 +587,37 @@ it("releases an already-held browser grant under its original owner on conversat
   let held = false;
   vi.mocked(listCoreBrowserSessions).mockImplementation((owner) =>
     Promise.resolve(owner === "conversation-a" ? [held ? heldSession : freeSession] : []));
-  vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([interactionPage]);
+  // A live navigation holds the grant until Core can confirm its result.
+  // Core 确认结果前，进行中的导航继续持有授权。
+  let finishNavigation!: (session: CoreBrowserSession) => void;
+  // navigation remains pending across the owner switch.
+  // navigation 在归属切换期间保持等待。
+  const navigation = new Promise<CoreBrowserSession>(resolve => { finishNavigation = resolve; });
   vi.mocked(requestCoreBrowser).mockImplementation((_owner, method) => {
     if (method === "browser.lease.acquire") {
       held = true;
       return Promise.resolve({ session: heldSession, leaseSecret: "held-owner-secret", heartbeatIntervalMs: 5000 } as never);
     }
+    if (method === "browser.session.navigate") return navigation as Promise<never>;
     if (method === "browser.lease.release") held = false;
     return Promise.resolve(undefined as never);
   });
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
   await selectBrowser();
-  const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
-  await act(async () => acquire.click());
-  await vi.waitFor(() => expect(host.textContent).toContain("Release control"));
+  await submitAddress();
+  expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
+    "conversation-a", "browser.session.navigate", expect.objectContaining({ leaseSecret: "held-owner-secret" }),
+  );
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-b" />));
+  expect(held).toBe(true);
+  await act(async () => finishNavigation(heldSession));
   await vi.waitFor(() => expect(vi.mocked(requestCoreBrowser)).toHaveBeenCalledWith(
     "conversation-a", "browser.lease.release", { sessionId: freeSession.sessionId, leaseSecret: "held-owner-secret" },
   ));
   expect(browserTabs()).toHaveLength(0);
-  expect(host.textContent).not.toContain("Release control");
+  expect(held).toBe(false);
 });
 
 it("shares one pending lease release across rapid browser-tab choices", async () => {
@@ -600,7 +628,7 @@ it("shares one pending lease release across rapid browser-tab choices", async ()
     profileMode: "ephemeral", currentUrl: null, leaseState: "free", blockedReason: null,
     automationState: "detached", pageGeneration: "1", viewportGeneration: "1",
     viewportSize: { width: 1280, height: 800 }, controlEpoch: "1", hostGeneration: "1",
-    pageCount: 0, requiresExplicitReopen: false,
+    pageCount: 1, requiresExplicitReopen: false,
   };
   // sessionB and sessionC are the two later selections under the same owner.
   // sessionB 和 sessionC 是同一归属下先后点击的两个目标。
@@ -616,20 +644,19 @@ it("shares one pending lease release across rapid browser-tab choices", async ()
   // releasePending 让授权释放等到两个页签均已点击后才完成。
   const releasePending = new Promise<void>((resolve) => { finishRelease = resolve; });
   vi.mocked(listCoreBrowserSessions).mockResolvedValue([sessionA, sessionB, sessionC]);
-  vi.mocked(listCoreBrowserPages).mockResolvedValue([]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([interactionPage]);
   vi.mocked(requestCoreBrowser).mockImplementation((_owner, method) => {
     if (method === "browser.lease.acquire") {
       return Promise.resolve({ session: heldA, leaseSecret: "rapid-switch-secret", heartbeatIntervalMs: 5000 } as never);
     }
     if (method === "browser.lease.release") return releasePending as Promise<never>;
+    if (method === "browser.session.navigate") return Promise.resolve(heldA as never);
     return Promise.resolve(undefined as never);
   });
 
   await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
   await selectBrowser();
-  const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
-  await act(async () => acquire.click());
-  await vi.waitFor(() => expect(host.textContent).toContain("Release control"));
+  await submitAddress();
   const tabs = browserTabs();
   await act(async () => { tabs[1].click(); tabs[2].click(); });
   expect(vi.mocked(requestCoreBrowser).mock.calls.filter(([, method]) => method === "browser.lease.release")).toHaveLength(1);
@@ -680,9 +707,6 @@ it("sends a held key's release to the previous page when the user changes page t
     await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
     await selectBrowser();
     await vi.waitFor(() => expect(host.textContent).toContain("a.example"));
-    const acquire = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Take control")) as HTMLButtonElement;
-    await act(async () => acquire.click());
-    await vi.waitFor(() => expect(host.textContent).toContain("Release control"));
     const frame = host.querySelector<HTMLIFrameElement>('iframe[title="Live Core browser page"]')!;
     await act(async () => frame.dispatchEvent(new Event("load")));
     await act(async () => frame.contentDocument!.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true })));
@@ -699,6 +723,69 @@ it("sends a held key's release to the previous page when the user changes page t
     URL.createObjectURL = previousCreate;
     URL.revokeObjectURL = previousRevoke;
   }
+});
+
+// Exercise the entire projected pointer gesture while Core is still admitting it.
+// 在 Core 仍在准入期间覆盖完整的投影指针手势。
+it.each([false, true])("keeps queued clicks scoped to their projected document (replaced: %s)", async replaced => {
+  // The AI browser initially owns the same attached, running page.
+  // AI 浏览器初始控制同一个仍在运行的页面。
+  const session: CoreBrowserSession = {
+    sessionId: "browser-a", ownerSessionId: "conversation-a", status: "running",
+    profileMode: "ephemeral", currentUrl: interactionPage.url, leaseState: "held", blockedReason: null,
+    automationState: "attached", pageGeneration: "1", viewportGeneration: "1", controlEpoch: "1", hostGeneration: "1",
+    viewportSize: { width: 1280, height: 800 }, pageCount: 1, requiresExplicitReopen: false,
+  };
+  // The original gesture waits while Core settles an AI operation.
+  // Core 结算 AI 操作期间，原始手势等待准入。
+  let finishAcquire!: (lease: CoreBrowserLease) => void;
+  const pendingAcquire = new Promise<CoreBrowserLease>(resolve => { finishAcquire = resolve; });
+  // Changing the document keeps the same tab but invalidates previously projected coordinates.
+  // 更换文档保留标签页，同时使先前投影的坐标失效。
+  let snapshot = domReply(interactionPage.pageId);
+  vi.mocked(listCoreBrowserSessions).mockResolvedValue([session]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([interactionPage]);
+  vi.mocked(requestCoreBrowser).mockImplementation(async (_owner, method) => {
+    if (method === "browser.dom.snapshot") return snapshot as never;
+    if (method === "browser.lease.acquire") return pendingAcquire as Promise<never>;
+    if (method === "browser.input.dispatch") return { outcome: "applied" } as never;
+    return undefined as never;
+  });
+  await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+  await vi.waitFor(() => expect(host.querySelector('iframe[title="Live Core browser page"]')).not.toBeNull());
+  const frame = host.querySelector<HTMLIFrameElement>('iframe[title="Live Core browser page"]')!;
+  await act(async () => frame.dispatchEvent(new Event("load")));
+  const content = frame.contentDocument!.body;
+  await act(async () => {
+    content.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, isPrimary: true, pointerId: 7 }));
+  });
+  expect(requestCoreBrowser).not.toHaveBeenCalledWith(expect.anything(), "browser.lease.acquire", expect.anything());
+  await act(async () => {
+    for (const type of ["pointerdown", "pointerup"]) {
+      content.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, isPrimary: true, pointerId: 7, clientX: 12, clientY: 24,
+      }));
+    }
+  });
+  expect(requestCoreBrowser).toHaveBeenCalledWith(
+    "conversation-a", "browser.lease.acquire", expect.objectContaining({ sessionId: "browser-a", forInteraction: true }),
+  );
+  if (replaced) {
+    snapshot = { ...snapshot, pageGeneration: "2", result: { ...snapshot.result, documentId: "new", revision: "new" } };
+    await vi.waitFor(() => expect(host.querySelector('iframe[title="Live Core browser page"]')).not.toBe(frame));
+  }
+  await act(async () => finishAcquire({
+    session: { ...session, automationState: "detached" }, leaseSecret: "direct-pointer", heartbeatIntervalMs: 5000,
+  }));
+  await vi.waitFor(() => expect(requestCoreBrowser).toHaveBeenCalledWith(
+    "conversation-a", "browser.lease.release", { sessionId: "browser-a", leaseSecret: "direct-pointer" },
+  ));
+  const inputs = vi.mocked(requestCoreBrowser).mock.calls
+    .filter(([, method]) => method === "browser.input.dispatch").map(([, , params]) => params);
+  expect(inputs).toEqual(replaced ? [] : ["down", "up"].map(type => expect.objectContaining({
+    pageId: interactionPage.pageId, pageGeneration: "1", viewportGeneration: "1", leaseSecret: "direct-pointer",
+    kind: "pointer", payload: { type, button: "left", x: 12, y: 24 },
+  })));
 });
 
 // The shell and panel observe the same owner without duplicate transport reads.
