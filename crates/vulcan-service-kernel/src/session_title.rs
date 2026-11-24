@@ -197,6 +197,12 @@ fn prepare_generation(
             let Some(selection) = request.session_model.clone() else {
                 return Ok(Preparation::Skip);
             };
+            if vulcan_provider_adapters::is_openai_chatgpt_plan(
+                &selection.route.connection.provider_id,
+                &selection.route.connection.service_entry_id,
+            ) {
+                return Ok(Preparation::Skip);
+            }
             let effort = session_model_reasoning_effort(&selection.model.capabilities);
             (selection, effort)
         }

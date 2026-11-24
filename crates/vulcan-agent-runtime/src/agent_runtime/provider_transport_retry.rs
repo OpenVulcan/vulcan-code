@@ -553,20 +553,6 @@ fn structured_error_is_known_stream_error(error: &AiExecutionError) -> bool {
         && !error.side_effect_observed
 }
 
-/// Returns whether a Responses WebSocket lost mid-stream permits replay on a fresh socket.
-/// 判断流中途丢失的 Responses WebSocket 是否允许在新 Socket 上重放。
-/// The adapter counts each loss and pins the session to HTTP after its consecutive limit.
-/// 适配层记录每次丢失，达到连续上限后将会话固定改走 HTTP。
-fn structured_error_is_replayable_websocket_loss(error: &AiExecutionError) -> bool {
-    error.transport == Some(AiTransportKind::ResponsesWebsocket)
-        && error.category == AiErrorCategory::ProviderUnavailable
-        && error.subcategory.as_deref() == Some("transport")
-        && error.stage == "response_stream"
-        && error.dispatch_outcome == DispatchOutcome::Dispatched
-        && error.retryable
-        && !error.side_effect_observed
-}
-
 /// Returns whether a successful terminal without an answer permits replacing its visible reasoning.
 /// 判断没有回答的成功终态是否允许替换其已显示的思考并重放。
 ///
@@ -598,7 +584,6 @@ fn structured_error_is_replayable_stream_failure(
 ) -> bool {
     structured_error_is_replayable_stream_idle_timeout(error)
         || structured_error_is_known_stream_error(error)
-        || structured_error_is_replayable_websocket_loss(error)
         || structured_error_is_no_answer_completion(error)
         || (error.dispatch_outcome == DispatchOutcome::Dispatched
             && !error.side_effect_observed
@@ -1815,32 +1800,6 @@ mod tests {
                 ..CoreProviderUsageSnapshot::default()
             })
         ));
-    }
-
-    /// Verifies a response identity alone keeps a dispatched transport close replayable.
-    /// 验证仅有响应身份时，已分派的传输关闭仍可重放。
-    #[test]
-    fn websocket_loss_after_semantic_output_replays_but_respects_side_effects() {
-        let mut loss = structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
-        if let VulcanCoreError::ProviderFailure {
-            details: Some(details),
-            ..
-        } = &mut loss
-        {
-            details.transport = Some(AiTransportKind::ResponsesWebsocket);
-            details.subcategory = Some(String::from("transport"));
-            details.stage = String::from("response_stream");
-            details.semantic_output_observed = true;
-        }
-        assert!(policy().next_retry(&loss, 0, true).is_some());
-        if let VulcanCoreError::ProviderFailure {
-            details: Some(details),
-            ..
-        } = &mut loss
-        {
-            details.transport = Some(AiTransportKind::Http);
-        }
-        assert!(policy().next_retry(&loss, 0, true).is_none());
     }
 
     #[test]

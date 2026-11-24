@@ -10,8 +10,7 @@ use vulcan_provider_adapters::{
     CustomProviderAuthentication, CustomProviderDefinition, CustomProviderModelDiscoveryMode,
     CustomProviderProtocol, InferenceRouteBinding, InferenceRouteConfiguration,
     PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderRegistry, PublicAiRuntime,
-    ResponsesRouteFeatures, ResponsesWebsocketPolicy, StagedConnectionCatalogObservation,
-    validate_custom_provider_identifier,
+    StagedConnectionCatalogObservation, validate_custom_provider_identifier,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -45,10 +44,6 @@ pub(crate) struct PublicAiCustomProviderSaveRequest {
     /// Exact compatible API base URL.
     /// 精确兼容 API 基础 URL。
     base_url: String,
-    /// Explicit WebSocket policy for Codex Responses.
-    /// Codex Responses 的显式 WebSocket 策略。
-    #[serde(default)]
-    websocket_policy: ResponsesWebsocketPolicy,
     /// Exact API-key header projection.
     /// 精确 API Key 请求头投影。
     authentication: CustomProviderAuthentication,
@@ -231,7 +226,7 @@ fn prepare_custom_provider_candidate(
         .provider_id
         .clone()
         .unwrap_or_else(|| format!("custom:{}", uuid::Uuid::new_v4().simple()));
-    let mut descriptor = CustomProviderDefinition {
+    let descriptor = CustomProviderDefinition {
         id: provider_id.clone(),
         display_name: request.display_name.clone(),
         base_url: request.base_url.clone(),
@@ -245,33 +240,6 @@ fn prepare_custom_provider_candidate(
         session_header: request.session_header.clone(),
     }
     .into_descriptor()?;
-    let declares_codex = descriptor
-        .service_entries
-        .iter()
-        .flat_map(|entry| entry.protocol_routes.iter())
-        .any(|route| {
-            route.protocol_profile_id == CustomProviderProtocol::OpenAiCodexResponses.profile_id()
-        });
-    if !declares_codex && request.websocket_policy != ResponsesWebsocketPolicy::Disabled {
-        return Err(String::from(
-            "Responses capability policies require the Codex Responses protocol.",
-        ));
-    }
-    let route_features = declares_codex.then_some(ResponsesRouteFeatures {
-        websocket: request.websocket_policy,
-        recovery: Default::default(),
-    });
-    if let Some(features) = route_features {
-        for entry in &mut descriptor.service_entries {
-            for route in &mut entry.protocol_routes {
-                if route.protocol_profile_id
-                    == CustomProviderProtocol::OpenAiCodexResponses.profile_id()
-                {
-                    route.responses_features = Some(features);
-                }
-            }
-        }
-    }
     let entry = descriptor
         .service_entries
         .first()

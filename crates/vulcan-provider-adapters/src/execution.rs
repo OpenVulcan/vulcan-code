@@ -12,7 +12,6 @@ mod request_headers;
 mod resource_download;
 mod response_body;
 mod response_metadata;
-mod responses_websocket;
 mod route;
 mod stream_state;
 mod tool_output;
@@ -51,12 +50,8 @@ pub(crate) use request_headers::{
 pub use resource_download::ProviderToolResourceDownloadPolicy;
 pub(crate) use response_body::read_bounded_response_text;
 pub(crate) use response_metadata::parse_retry_after_headers;
-use responses_websocket::{
-    ResponsesWebsocketHealth, ResponsesWebsocketSessionCacheEntry, responses_websocket_cache_key,
-};
 pub use route::ProviderExecutionRoute;
 pub(crate) use route::upstream_protocol_for_profile_id;
-use route::upstream_protocol_for_route;
 pub use tool_output::{
     ProviderToolCompositeOutput, ProviderToolEmbeddingOutput, ProviderToolEmbeddingVector,
     ProviderToolExecutionResult, ProviderToolExtractFailure, ProviderToolExtractOutput,
@@ -79,9 +74,9 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
 use vulcan_ai_contract::{AiExecutionRequest, AiStreamEvent};
-use vulcan_llm_core::{LlmProtocolRuntime, UpstreamProtocol};
+use vulcan_llm_core::LlmProtocolRuntime;
 
-use tokio::sync::{Mutex as TokioMutex, oneshot};
+use tokio::sync::oneshot;
 
 /// Supplies the core-owned protocol runtime to the provider execution client.
 /// 为供应商执行客户端提供由核心拥有的协议运行时。
@@ -127,13 +122,6 @@ pub struct ProviderExecutionClient {
     /// Same-key physical media preparations shared until one owner publishes a terminal result.
     /// 同键真实媒体准备在唯一所有者发布终态结果前共享。
     prepared_media_flights: Arc<StdMutex<PreparedMediaFlightRegistry>>,
-    /// Credential-, route-, and session-isolated Responses WebSocket connections.
-    /// 按凭据、路由与会话隔离的 Responses WebSocket 连接。
-    responses_websocket_sessions:
-        Arc<TokioMutex<BTreeMap<String, ResponsesWebsocketSessionCacheEntry>>>,
-    /// Session-scoped WebSocket health: consecutive socket losses and pinned HTTP fallback.
-    /// 会话作用域 WebSocket 健康状态：连续 Socket 丢失次数与固定的 HTTP 回退。
-    responses_websocket_health: Arc<StdMutex<BTreeMap<String, ResponsesWebsocketHealth>>>,
 }
 
 impl ProviderExecutionClient {
@@ -158,8 +146,6 @@ impl ProviderExecutionClient {
             protocols: protocols.into_protocol_runtime(),
             prepared_media: Arc::new(StdMutex::new(BTreeMap::new())),
             prepared_media_flights: Arc::new(StdMutex::new(BTreeMap::new())),
-            responses_websocket_sessions: Arc::new(TokioMutex::new(BTreeMap::new())),
-            responses_websocket_health: Arc::new(StdMutex::new(BTreeMap::new())),
         }
     }
 
@@ -418,26 +404,7 @@ impl ProviderExecutionClient {
         // transport receives its own frozen credential clone.
         // diagnostic_secret 仅供最终流错误边界使用，传输层接收其独立的冻结凭据副本。
         let diagnostic_secret = secret.clone();
-        let websocket_key = responses_websocket_cache_key(&route, &request, &secret);
-        let websocket_allowed = websocket_key.as_ref().is_some_and(|key| {
-            route.protocol_route.responses_websocket_enabled()
-                && upstream_protocol_for_route(&route) == Some(UpstreamProtocol::OpenAiResponses)
-                && !self.responses_websocket_disabled(key)
-        });
-        // stream selects exactly one declared transport before the credential leaves this boundary.
-        // stream 在凭据离开当前边界前精确选择一个已声明传输。
-        let stream = if websocket_allowed {
-            self.execute_responses_websocket(
-                route,
-                request,
-                secret,
-                execution_id,
-                websocket_key.expect("allowed WebSocket route has a cache key"),
-                wire_captures,
-            )
-        } else {
-            self.execute_http(route, request, secret, execution_id, wire_captures)
-        };
+        let stream = self.execute_http(route, request, secret, execution_id, wire_captures);
         // Every asynchronous error crosses one common secret-safe and bounded public boundary.
         // 每个异步错误都经过同一条不含秘密且有界的公共边界。
         // In-stream failure events carry the same provider-controlled fields, so they cross the

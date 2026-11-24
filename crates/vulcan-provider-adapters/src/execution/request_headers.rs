@@ -8,7 +8,6 @@ use crate::{
     provider_manifest::{CodexWireDialect, is_host_owned_session_header},
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use std::collections::BTreeMap;
 pub(crate) use vulcan_llm_core::vulcan_code_user_agent;
 use vulcan_llm_core::{VULCAN_CODE_CLIENT_NAME, vulcan_code_version};
 
@@ -415,26 +414,6 @@ pub(crate) fn coding_device_model() -> String {
         other => other,
     };
     format!("{operating_system} {}", std::env::consts::ARCH)
-}
-
-/// Copies validated HTTP headers into the secret-safe WebSocket handshake container.
-/// 将已校验 HTTP Header 复制到不实现调试输出的 WebSocket 握手容器。
-pub(super) fn websocket_headers(
-    headers: &HeaderMap,
-) -> Result<BTreeMap<String, String>, ProviderExecutionFailure> {
-    headers
-        .iter()
-        .map(|(name, value)| {
-            value
-                .to_str()
-                .map(|value| (name.as_str().to_string(), value.to_string()))
-                .map_err(|error| {
-                    pre_dispatch_failure(format!(
-                        "Responses WebSocket header `{name}` is not valid UTF-8: {error}"
-                    ))
-                })
-        })
-        .collect()
 }
 
 #[cfg(test)]

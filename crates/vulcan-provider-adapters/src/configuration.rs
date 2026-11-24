@@ -2095,10 +2095,20 @@ impl PersistedAiConfiguration {
     ///
     /// # Returns
     /// 返回值
-    /// `true` unless the user explicitly disabled this connection.
-    /// 除非用户显式停用此连接，否则返回 `true`。
+    /// `true` for connections that are neither retired nor explicitly disabled.
+    /// 对尚未废弃且未显式停用的连接返回 `true`。
     pub fn connection_is_enabled(&self, connection_id: &str) -> bool {
         !self.disabled_connection_ids.contains(connection_id)
+            && !self
+                .connection_graph
+                .connections
+                .get(connection_id)
+                .is_some_and(|connection| {
+                    crate::is_retired_codex_subscription(
+                        &connection.provider_id,
+                        &connection.service_entry_id,
+                    )
+                })
     }
 
     /// Persists one credential connection's reversible enabled state.
@@ -2118,6 +2128,20 @@ impl PersistedAiConfiguration {
         connection_id: &str,
         enabled: bool,
     ) -> Result<(), String> {
+        if enabled
+            && self
+                .connection_graph
+                .connections
+                .get(connection_id)
+                .is_some_and(|connection| {
+                    crate::is_retired_codex_subscription(
+                        &connection.provider_id,
+                        &connection.service_entry_id,
+                    )
+                })
+        {
+            return Err(crate::OPENAI_CODEX_RETIRED_MESSAGE.into());
+        }
         if !self
             .connection_graph
             .connections

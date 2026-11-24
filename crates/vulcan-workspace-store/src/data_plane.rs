@@ -525,6 +525,7 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
         'opencode_console_oauth',
         'openvulcan_auth',
         'open_ai_codex_oauth',
+        'open_ai_chat_gpt_oauth',
         'claude_code_oauth',
         'google_oauth',
         'mini_max_oauth',
@@ -581,6 +582,7 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
             material_kind IN (
                 'opencode_console_oauth',
                 'open_ai_codex_oauth',
+                'open_ai_chat_gpt_oauth',
                 'claude_code_oauth',
                 'google_oauth',
                 'mini_max_oauth',
@@ -595,6 +597,14 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
             AND issued_at_unix_ms >= 0
             AND expires_at_unix_ms IS NOT NULL
             AND expires_at_unix_ms > issued_at_unix_ms
+        )
+    ),
+    CHECK(
+        material_kind != 'open_ai_chat_gpt_oauth'
+        OR (
+            oauth_client_id IS NOT NULL AND length(trim(oauth_client_id)) > 0
+            AND account_subject IS NOT NULL AND length(trim(account_subject)) > 0
+            AND id_token IS NOT NULL AND length(trim(id_token)) > 0
         )
     ),
     CHECK(

@@ -796,12 +796,14 @@ rtk git diff --check
 - CommandCode 用量窗口必须按稳定 ID 映射本地化标签，并复用 Kimi 的“套餐/余额 + 额度窗口”结构；美元额度统一按货币精度展示，不能把上游高精度小数直接暴露给用户。
 - 会话账号选择器必须把 `command_code_usage` 识别为额度窗口能力，使已刷新账号在会话区域显示剩余值；设置页和会话区必须消费同一份规范化用量快照，不能分别实现供应商专属结构。
 
-### 11.4 OpenAI Codex 订阅
+### 11.4 OpenAI ChatGPT 套餐
 
-- 用量原语 `open_ai_codex_usage` 以 Codex 登录凭据（Bearer + `chatgpt-account-id`）请求固定入口 `https://chatgpt.com/backend-api/wham/usage`；响应形状以上游 `codex-rs/codex-backend-openapi-models` 的 `RateLimitStatusPayload` 为准。
-- 上游只报告整数 `used_percent`，不公开额度本身；窗口只填 `remaining_percent`、`duration_seconds`（`limit_window_seconds`）与 `resets_at`（`reset_at`，Unix 秒），不得臆造 `used`/`total`。主限额桶窗口 ID 为 `codex:primary`/`codex:secondary`，`additional_rate_limits` 为 `<metered_feature>:primary|secondary` 并以 `limit_name` 作为 `bucket_name`；界面按时长派生周期标签。
-- 模型发现声明的 `client_version` 由 `OPENAI_CODEX_DISCOVERY_CLIENT_VERSION` 唯一定义；账号目录会隐藏 `minimal_client_version` 更高的模型，服务端实际最低版本可能高于上游 `models.json` 的标注（GPT-6.1 Sol 标注 0.153.0，2026-10-23 实测 0.155.0 仍隐藏、0.160.0 起返回），因此该常量跟随本机已发布官方客户端（`~/.codex/models_cache.json` 的 `client_version`）。
-- 速度档位（Fast/Ultrafast）由账号目录逐模型的 `service_tiers` 决定：发现阶段把除 `default` 外列出的档位 ID（如 `priority`、`ultrafast`）注册为模型参数 `codex.service_tier`（`CODEX_SERVICE_TIER_PARAMETER_ID` 唯一定义，默认交给供应商），套餐不提供时不注册、界面不显示。用户在模型设置中选择后，Codex 路由的请求 Profile `openai-codex.service-tier.v1` 把值写入请求体 `service_tier`；未选择时省略该字段，等同官方客户端的标准档位。档位名称只走语言目录，不使用上游展示文本。
+旧版 Codex 套餐连接保留在设置中并标为已废弃。用户通过「使用 ChatGPT 继续」建立新的官方套餐连接。
+
+- 授权使用本机安装 ID、动态签发的客户端 ID 和回环 OAuth 回调。账号归属来自验证签名后的 ID token。
+- 套餐目录以当前账号会话访问 `GET https://api.openai.com/v1/models` 得到的可见模型为准。推理使用同一凭据调用 `POST /v1/responses`，采用 HTTP 流、完整输入和本地工具命名空间。
+- 套餐连接用于 Vulcan Code 内的交互会话。当前预览关闭 OpenAI 原生生图工具和 Images API，账号授权与用量在 ChatGPT 设置中管理。
+- 接口或授权流程变化时回查 [OpenAI 官方接入文档](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)。
 
 ## 十二、五轮连续审核要求
 

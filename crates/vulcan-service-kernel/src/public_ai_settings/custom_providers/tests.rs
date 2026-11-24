@@ -29,7 +29,7 @@ fn isolated_custom_provider_removal_identity_is_namespace_safe() {
 /// Verifies explicit Codex capability switches survive the custom-provider candidate projection.
 /// 验证显式 Codex 能力开关可完整通过自定义供应商候选投影。
 #[test]
-fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
+fn custom_codex_provider_candidate_uses_http() {
     // request represents a user explicitly enabling the opt-in Codex WebSocket capability.
     // request 表示用户明确启用可选的 Codex WebSocket 能力。
     let request = PublicAiCustomProviderSaveRequest {
@@ -37,7 +37,6 @@ fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
         display_name: String::from("Codex Proxy"),
         base_url: String::from("https://proxy.example.test/v1"),
         protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
-        websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: Some(String::from("Test Account")),
         secret: Some(String::from("test-secret")),
@@ -57,89 +56,19 @@ fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
     let candidate =
         prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
             .expect("explicit Codex capability candidate should compile");
-    // features is the route-scoped persisted capability projection under audit.
-    // features 是本轮审核的路由级持久化能力投影。
-    let features = candidate.descriptor.service_entries[0].protocol_routes[0]
-        .responses_features
-        .expect("Codex route should preserve explicit capability switches");
-
-    assert_eq!(
-        features.websocket,
-        ResponsesWebsocketPolicy::UnverifiedOverride
+    assert!(
+        candidate
+            .descriptor
+            .service_entries
+            .iter()
+            .flat_map(|entry| &entry.protocol_routes)
+            .all(|route| route.responses_features.is_none())
     );
     assert_eq!(
         candidate.descriptor.service_entries[0]
             .session_header
             .as_deref(),
         Some("x-custom-session")
-    );
-}
-
-/// Verifies execution-only Codex capability switches do not trigger credential revalidation.
-/// 验证只影响执行的 Codex 能力开关不会触发凭据重新验证。
-#[test]
-fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
-    // providerId identifies the exact credential-free custom provider being edited.
-    // providerId 标识正在编辑的精确无凭据自定义供应商。
-    let provider_id = String::from("custom:codex-capability-switch");
-    // descriptor is the persisted Codex route with both optional capabilities disabled by default.
-    // descriptor 是两项可选能力默认关闭的持久化 Codex 路由。
-    let descriptor = CustomProviderDefinition {
-        id: provider_id.clone(),
-        display_name: String::from("Codex Proxy"),
-        base_url: String::from("https://proxy.example.test/v1"),
-        protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
-        authentication: CustomProviderAuthentication::BearerAuthorization,
-        model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-        model_discovery_protocol:
-            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
-        model_discovery_path: None,
-        protocol_routes: Vec::new(),
-        request_headers: BTreeMap::new(),
-        session_header: None,
-    }
-    .into_descriptor()
-    .expect("default Codex provider should compile");
-    // configuration owns the exact persisted descriptor used as the comparison baseline.
-    // configuration 持有作为比较基线的精确持久化描述符。
-    let mut configuration = PersistedAiConfiguration::default();
-    configuration
-        .custom_providers
-        .insert(provider_id.clone(), descriptor.clone());
-    // request changes only the two explicit execution capabilities.
-    // request 仅修改两项显式执行能力。
-    let request = PublicAiCustomProviderSaveRequest {
-        provider_id: Some(provider_id),
-        display_name: String::from("Codex Proxy"),
-        base_url: String::from("https://proxy.example.test/v1"),
-        protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
-        websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
-        authentication: CustomProviderAuthentication::BearerAuthorization,
-        credential_display_name: None,
-        secret: None,
-        validation_connection_id: None,
-        model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-        model_discovery_protocol:
-            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
-        model_discovery_path: None,
-        protocol_routes: Vec::new(),
-        request_headers: BTreeMap::new(),
-        session_header: None,
-        allow_manual_fallback: false,
-        allow_pending_validation: false,
-    };
-    // candidate preserves the changed feature values while retaining the same connection contract.
-    // candidate 保留已变更能力值，同时维持相同连接契约。
-    let candidate = prepare_custom_provider_candidate(&request, &configuration)
-        .expect("capability-only edit should compile");
-
-    assert_ne!(
-        descriptor.service_entries,
-        candidate.descriptor.service_entries
-    );
-    assert!(
-        !custom_provider_connection_contract_changed(&configuration, &candidate)
-            .expect("capability-only edit should compare")
     );
 }
 
@@ -202,7 +131,6 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         display_name: String::from("Renamed Provider"),
         base_url: String::from("https://new.example.test/v1"),
         protocols: vec![CustomProviderProtocol::OpenAiChat],
-        websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: None,
         secret: None,
@@ -250,7 +178,6 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         display_name: String::from("Cosmetic Rename"),
         base_url: String::from("https://old.example.test/v1"),
         protocols: vec![CustomProviderProtocol::OpenAiResponses],
-        websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: None,
         secret: None,
@@ -631,7 +558,6 @@ fn multi_protocol_custom_provider_projects_one_route_per_protocol() {
         provider_id: None,
         display_name: String::from("Multi Protocol"),
         base_url: String::from("https://multi.example.test/v1"),
-        websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: Some(String::from("Account")),
         secret: Some(String::from("secret")),
@@ -741,7 +667,6 @@ fn bounded_fixed_headers_survive_prepare_and_registry_revalidation() {
         provider_id: None,
         display_name: String::from("Header Provider"),
         base_url: String::from("https://headers.example.test/v1"),
-        websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: Some(String::from("Account")),
         secret: Some(String::from("secret")),
@@ -781,7 +706,6 @@ fn secret_fixed_headers_are_rejected_at_service_save_boundary() {
             provider_id: None,
             display_name: String::from("Unsafe Header"),
             base_url: String::from("https://unsafe.example.test/v1"),
-            websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: Some(String::from("Account")),
             secret: Some(String::from("secret")),

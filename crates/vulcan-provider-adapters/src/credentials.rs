@@ -130,6 +130,19 @@ pub enum CredentialSecretMaterial {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<String>,
     },
+    /// Renewable subscription enrollment issued by Sign in with ChatGPT.
+    /// 通过 Sign in with ChatGPT 签发的可续期套餐注册。
+    OpenAiChatGptOAuth {
+        /// Access and refresh material bound to the verified account.
+        /// 与已验证账号绑定的访问和刷新材料。
+        tokens: OAuthTokenSet,
+        /// Client identifier issued to this specific registration.
+        /// 签发给此注册的客户端标识。
+        client_id: String,
+        /// Last verified ID token retained for account-specific sign-in.
+        /// 为指定账号重新登录保留的最近已验证 ID 令牌。
+        id_token: String,
+    },
     /// Renewable Google account authorization.
     /// 可续期 Google 账号授权。
     GoogleOAuth {
@@ -441,6 +454,7 @@ impl CredentialSecretEnvelope {
             CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. } => CredentialMode::Token,
             CredentialSecretMaterial::OpenAiCodexOAuth { .. }
+            | CredentialSecretMaterial::OpenAiChatGptOAuth { .. }
             | CredentialSecretMaterial::OpencodeConsoleOAuth { .. }
             | CredentialSecretMaterial::GoogleOAuth { .. }
             | CredentialSecretMaterial::MiniMaxOAuth { .. }
@@ -464,6 +478,7 @@ impl CredentialSecretEnvelope {
         matches!(
             self.material,
             CredentialSecretMaterial::OpenAiCodexOAuth { .. }
+                | CredentialSecretMaterial::OpenAiChatGptOAuth { .. }
                 | CredentialSecretMaterial::OpencodeConsoleOAuth { .. }
                 | CredentialSecretMaterial::GoogleOAuth { .. }
                 | CredentialSecretMaterial::MiniMaxOAuth { .. }
@@ -545,6 +560,14 @@ impl CredentialSecretEnvelope {
                     CredentialExecutionSecretKind::Bearer,
                     tokens.access_token.clone(),
                     account_id.clone(),
+                    None,
+                    None,
+                    None,
+                ),
+                CredentialSecretMaterial::OpenAiChatGptOAuth { tokens, .. } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    tokens.access_token.clone(),
+                    None,
                     None,
                     None,
                     None,
@@ -672,6 +695,7 @@ impl CredentialSecretEnvelope {
                 expires_at_unix_ms, ..
             } => *expires_at_unix_ms,
             CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. }
+            | CredentialSecretMaterial::OpenAiChatGptOAuth { tokens, .. }
             | CredentialSecretMaterial::OpencodeConsoleOAuth { tokens, .. }
             | CredentialSecretMaterial::GoogleOAuth { tokens, .. }
             | CredentialSecretMaterial::MiniMaxOAuth { tokens, .. }
@@ -777,6 +801,28 @@ impl CredentialSecretEnvelope {
                 validate_non_empty_secret("static bearer token", access_token)
             }
             CredentialSecretMaterial::OpenAiCodexOAuth { tokens, .. } => tokens.validate(),
+            CredentialSecretMaterial::OpenAiChatGptOAuth {
+                tokens,
+                client_id,
+                id_token,
+            } => {
+                tokens.validate()?;
+                validate_bounded_identity("ChatGPT issued client ID", client_id)?;
+                validate_non_empty_secret("ChatGPT ID token", id_token)?;
+                if client_id == "dynamic_agent_client"
+                    || tokens
+                        .account_subject
+                        .as_deref()
+                        .is_none_or(|subject| subject.trim().is_empty())
+                    || !tokens.scopes.contains("chatgpt.tokens.use.direct")
+                    || !tokens.scopes.contains("resource.invoke")
+                {
+                    return Err(String::from(
+                        "ChatGPT Plan credential is missing its issued registration or grant.",
+                    ));
+                }
+                Ok(())
+            }
             CredentialSecretMaterial::GoogleOAuth {
                 tokens,
                 client_id,

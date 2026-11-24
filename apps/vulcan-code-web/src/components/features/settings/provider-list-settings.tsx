@@ -1,4 +1,5 @@
 import * as React from "react"
+import { isRetiredCodexSubscription, localizedServiceEntryPresentation } from "./provider-presentation"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
@@ -216,7 +217,12 @@ export function PublicAiConnectionDialog(props: {
 
   const provider = props.providers.find((item) => item.id === providerId)
     ?? (props.lockedProviderId ? undefined : props.providers[0])
-  const entry = provider?.service_entries.find((item) => item.id === entryId) ?? provider?.service_entries[0]
+  const entries = provider?.service_entries.filter((item) =>
+    !isRetiredCodexSubscription(provider.id, item.id)
+    && (props.connection?.provider_id !== "openai"
+      || props.connection.service_entry_id !== "chatgpt-plan"
+      || item.id === "chatgpt-plan"))
+  const entry = entries?.find((item) => item.id === entryId) ?? entries?.[0]
   const credentialProfile = entry?.credential_profiles.find((item) => item.id === credentialProfileId)
     ?? entry?.credential_profiles[0]
   const registeredOauthProvider = credentialProfile?.authorization?.kind === "registered_oauth"
@@ -381,6 +387,9 @@ export function PublicAiConnectionDialog(props: {
           providerId: provider.id,
           serviceEntryId: entry.id,
           credentialProfileId: credentialProfile.id,
+          ...(registeredOauthProvider === "open_ai_chat_gpt" && props.connection
+            ? { connectionId: props.connection.id }
+            : {}),
           client: {
             ...(oauthClientId.trim() ? { clientId: oauthClientId.trim() } : {}),
             ...(oauthClientSecret ? { clientSecret: oauthClientSecret } : {}),
@@ -538,29 +547,19 @@ export function PublicAiConnectionDialog(props: {
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {(provider?.service_entries ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{item.display_name}</SelectItem>)}
+                  {provider && entries?.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {localizedServiceEntryPresentation(provider.id, item, t).title}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             )}
           </label>}
-          <label className="vk-field">
-            <span>{t("settings.credentials.credentialType")}</span>
-            <Select
-              onValueChange={(value) => {
-                const nextProfile = entry?.credential_profiles.find((item) => item.id === value)
-                setCredentialProfileId(value)
-                setCredentialMode(nextProfile?.credential_mode ?? "token")
-              }}
-              value={credentialProfile?.id ?? ""}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-              {(entry?.credential_profiles ?? []).map((profile) => (
-                <SelectItem key={profile.id} value={profile.id}>{profile.display_name}</SelectItem>
-              ))}
-              </SelectContent>
-            </Select>
-          </label>
+          <CredentialProfileField entry={entry} selectedId={credentialProfile?.id ?? ""} onSelect={(id, mode) => {
+            setCredentialProfileId(id)
+            setCredentialMode(mode)
+          }} />
           <label className="vk-field">
             <span>{t("settings.credentials.displayName")}</span>
             <Input onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
@@ -666,12 +665,46 @@ export function PublicAiConnectionDialog(props: {
                 : credentialMode === "auth"
                   ? props.connection
                     ? t("settings.credentials.reauthorizeAndSave")
-                    : t("settings.credentials.openBrowserAuthorize")
+                    : registeredOauthProvider === "open_ai_chat_gpt"
+                      ? t("settings.credentials.continueWithChatGpt")
+                      : t("settings.credentials.openBrowserAuthorize")
                   : t("settings.credentials.saveSync")}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// Selects a credential profile from the current entry and reports its declared mode.
+// 从当前服务入口选择凭据配置，并回传其声明的模式。
+function CredentialProfileField(props: {
+  entry: PublicAiProviderDescriptor["service_entries"][number] | undefined
+  selectedId: string
+  onSelect: (id: string, mode: CredentialMode) => void
+}) {
+  const { t } = useI18n()
+  const profiles = props.entry?.credential_profiles ?? []
+  return (
+    <label className="vk-field">
+      <span>{t("settings.credentials.credentialType")}</span>
+      <Select value={props.selectedId} onValueChange={(value) => {
+        const profile = profiles.find((candidate) => candidate.id === value)
+        if (profile) props.onSelect(profile.id, profile.credential_mode)
+      }}>
+        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {profiles.map((profile) => (
+            <SelectItem key={profile.id} value={profile.id}>
+              {profile.authorization?.kind === "registered_oauth"
+                && profile.authorization.provider === "open_ai_chat_gpt"
+                ? t("settings.credentials.continueWithChatGpt")
+                : profile.display_name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </label>
   )
 }
 

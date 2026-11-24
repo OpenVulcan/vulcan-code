@@ -81,7 +81,180 @@ pub(crate) const APP_SCHEMA_MIGRATIONS: &[AppSchemaMigration] = &[
         description: "record the last explicit project directory change",
         apply: migrate_v7_to_v8,
     },
+    AppSchemaMigration {
+        from_version: 8,
+        description: "accept Sign in with ChatGPT credentials",
+        apply: migrate_v8_to_v9,
+    },
 ];
+
+/// Adds the new OAuth material kind while preserving every existing credential column.
+/// 添加新的 OAuth 材料类型，保留所有既有凭据列。
+fn migrate_v8_to_v9(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        r#"
+ALTER TABLE ai_credential_secrets RENAME TO ai_credential_secrets_before_v9;
+
+CREATE TABLE IF NOT EXISTS ai_credential_secrets (
+    secret_reference TEXT PRIMARY KEY,
+    format_version INTEGER NOT NULL CHECK(format_version > 0),
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    material_kind TEXT NOT NULL CHECK(material_kind IN (
+        'api_key',
+        'static_bearer',
+        'open_design_auth',
+        'opencode_console_oauth',
+        'openvulcan_auth',
+        'open_ai_codex_oauth',
+        'open_ai_chat_gpt_oauth',
+        'claude_code_oauth',
+        'google_oauth',
+        'mini_max_oauth',
+        'kimi_coding_plan_oauth',
+        'tokenrhythm_auth'
+    )),
+    secret_value TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    issued_at_unix_ms INTEGER,
+    expires_at_unix_ms INTEGER,
+    scope_text TEXT NOT NULL DEFAULT '',
+    account_subject TEXT,
+    authorization_kind TEXT CHECK(authorization_kind IN ('browser_callback', 'rotation_pending')),
+    provider_username TEXT,
+    credential_label TEXT,
+    email TEXT,
+    id_token TEXT,
+    account_id TEXT,
+    oauth_client_id TEXT,
+    oauth_client_secret TEXT,
+    project_id TEXT,
+    quota_project_id TEXT,
+    provider_region TEXT,
+    resource_url TEXT,
+    provider_device_id TEXT,
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL,
+    CHECK(
+        (material_kind = 'api_key' AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0)
+        OR (material_kind = 'static_bearer' AND access_token IS NOT NULL AND length(trim(access_token)) > 0)
+        OR (
+            material_kind = 'open_design_auth'
+            AND access_token IS NOT NULL AND length(trim(access_token)) > 0
+            AND secret_value IS NOT NULL AND length(trim(secret_value)) > 0
+            AND account_subject IS NOT NULL AND length(trim(account_subject)) > 0
+            AND email IS NOT NULL AND length(trim(email)) > 0
+            AND refresh_token IS NULL AND expires_at_unix_ms IS NULL
+        )
+        OR (
+            material_kind = 'openvulcan_auth'
+            AND access_token IS NOT NULL
+            AND length(trim(access_token)) > 0
+            AND refresh_token IS NULL
+            AND issued_at_unix_ms IS NULL
+            AND expires_at_unix_ms IS NOT NULL
+            AND expires_at_unix_ms > 0
+            AND provider_device_id IS NOT NULL
+            AND length(trim(provider_device_id)) > 0
+            AND provider_region IS NOT NULL
+            AND provider_region IN ('china', 'global')
+        )
+        OR (
+            material_kind IN (
+                'opencode_console_oauth',
+                'open_ai_codex_oauth',
+                'open_ai_chat_gpt_oauth',
+                'claude_code_oauth',
+                'google_oauth',
+                'mini_max_oauth',
+                'kimi_coding_plan_oauth',
+                'tokenrhythm_auth'
+            )
+            AND access_token IS NOT NULL
+            AND length(trim(access_token)) > 0
+            AND refresh_token IS NOT NULL
+            AND length(trim(refresh_token)) > 0
+            AND issued_at_unix_ms IS NOT NULL
+            AND issued_at_unix_ms >= 0
+            AND expires_at_unix_ms IS NOT NULL
+            AND expires_at_unix_ms > issued_at_unix_ms
+        )
+    ),
+    CHECK(
+        material_kind != 'open_ai_chat_gpt_oauth'
+        OR (
+            oauth_client_id IS NOT NULL AND length(trim(oauth_client_id)) > 0
+            AND account_subject IS NOT NULL AND length(trim(account_subject)) > 0
+            AND id_token IS NOT NULL AND length(trim(id_token)) > 0
+        )
+    ),
+    CHECK(
+        material_kind != 'google_oauth'
+        OR (oauth_client_id IS NOT NULL AND length(trim(oauth_client_id)) > 0)
+    ),
+    CHECK(
+        material_kind != 'opencode_console_oauth'
+        OR (account_id IS NOT NULL AND length(trim(account_id)) > 0)
+    ),
+    CHECK(
+        material_kind != 'mini_max_oauth'
+        OR (
+            provider_region IS NOT NULL
+            AND length(trim(provider_region)) > 0
+            AND resource_url IS NOT NULL
+            AND length(trim(resource_url)) > 0
+        )
+    ),
+    CHECK(
+        material_kind != 'kimi_coding_plan_oauth'
+        OR (provider_device_id IS NOT NULL AND length(trim(provider_device_id)) > 0)
+    ),
+    CHECK(
+        material_kind != 'tokenrhythm_auth'
+        OR (
+            secret_value IS NOT NULL
+            AND length(trim(secret_value)) > 0
+            AND provider_device_id IS NOT NULL
+            AND length(trim(provider_device_id)) > 0
+            AND oauth_client_id IS NOT NULL
+            AND length(trim(oauth_client_id)) > 0
+        )
+    ),
+    CHECK(
+        authorization_kind IS NULL
+        OR (material_kind = 'openvulcan_auth' AND authorization_kind = 'rotation_pending')
+        OR (
+            material_kind IN ('api_key', 'static_bearer')
+            AND authorization_kind = 'browser_callback'
+            AND account_subject IS NOT NULL
+            AND length(trim(account_subject)) > 0
+            AND provider_username IS NOT NULL
+            AND length(trim(provider_username)) > 0
+            AND credential_label IS NOT NULL
+            AND length(trim(credential_label)) > 0
+        )
+    )
+);
+
+INSERT INTO ai_credential_secrets (
+    secret_reference, format_version, revision, material_kind, secret_value, access_token,
+    refresh_token, issued_at_unix_ms, expires_at_unix_ms, scope_text, account_subject,
+    authorization_kind, provider_username, credential_label, email, id_token, account_id,
+    oauth_client_id, oauth_client_secret, project_id, quota_project_id, provider_region,
+    resource_url, provider_device_id, created_at_unix_ms, updated_at_unix_ms
+)
+SELECT
+    secret_reference, format_version, revision, material_kind, secret_value, access_token,
+    refresh_token, issued_at_unix_ms, expires_at_unix_ms, scope_text, account_subject,
+    authorization_kind, provider_username, credential_label, email, id_token, account_id,
+    oauth_client_id, oauth_client_secret, project_id, quota_project_id, provider_region,
+    resource_url, provider_device_id, created_at_unix_ms, updated_at_unix_ms
+FROM ai_credential_secrets_before_v9;
+
+DROP TABLE ai_credential_secrets_before_v9;
+"#,
+    )
+}
 
 /// Adds the previous path and time of an explicit rebind. A v7 row has no recorded change.
 /// 添加显式重新绑定的旧路径和时间。v7 行没有已记录的变更。
@@ -648,10 +821,10 @@ mod tests {
         assert_eq!(row, (String::from("/original"), None));
     }
 
-    /// Rebuilding the credential table keeps stored rows and then accepts TokenRhythm material.
-    /// 重建凭据表保留已存储行，之后接受 TokenRhythm 材料。
+    /// Historical credential upgrades preserve stored rows and accept each newly registered kind.
+    /// 历史凭据升级保留既有记录，并接受各次新增的凭据类型。
     #[test]
-    fn v5_keeps_credentials_and_accepts_tokenrhythm() {
+    fn credential_migrations_preserve_rows_and_accept_new_material() {
         let (_directory, _path, mut connection) = database();
         create_current(&connection, false);
         connection
@@ -683,6 +856,32 @@ mod tests {
                      1, 2, 'session-1', 'client-1', 10, 10);",
             )
             .expect("TokenRhythm row must be accepted after v5");
+        let transaction = connection.transaction().expect("transaction");
+        migrate_v8_to_v9(&transaction).expect("v9 step");
+        transaction.commit().expect("commit");
+        let retained: u32 = connection
+            .query_row(
+                "SELECT count(*) FROM ai_credential_secrets
+             WHERE (secret_reference = 'ref-1' AND revision = 3 AND secret_value = 'sk-kept')
+                OR (secret_reference = 'ref-2' AND provider_device_id = 'session-1')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("credential rows retained by v9");
+        assert_eq!(retained, 2);
+        connection
+            .execute_batch(
+                "INSERT INTO ai_credential_secrets (secret_reference, format_version, revision,
+                 material_kind, access_token, refresh_token, issued_at_unix_ms, expires_at_unix_ms,
+                 account_subject, oauth_client_id, id_token, created_at_unix_ms, updated_at_unix_ms)
+             VALUES ('ref-3', 1, 1, 'open_ai_chat_gpt_oauth', 'access', 'refresh', 1, 2,
+                 'subject', 'issued-client', 'id-token', 10, 10);",
+            )
+            .expect("ChatGPT row must be accepted after v9");
+        assert!(connection.execute(
+            "UPDATE ai_credential_secrets SET oauth_client_id = NULL WHERE secret_reference = 'ref-3'",
+            [],
+        ).is_err());
         let (_fresh_directory, _fresh_path, fresh) = database();
         create_current(&fresh, false);
         assert_eq!(catalog(&connection), catalog(&fresh));

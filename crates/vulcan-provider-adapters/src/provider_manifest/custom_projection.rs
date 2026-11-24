@@ -328,6 +328,7 @@ fn convert_service_entry(entry: &ServiceEntry) -> ManifestServiceEntry {
                     | crate::ModelDiscoveryKind::OpenVulcan
                     | crate::ModelDiscoveryKind::OpenAi
                     | crate::ModelDiscoveryKind::OpenAiCodex
+                    | crate::ModelDiscoveryKind::OpenAiChatGpt
                     | crate::ModelDiscoveryKind::Anthropic
                     | crate::ModelDiscoveryKind::AnthropicCompatible
                     | crate::ModelDiscoveryKind::Gemini

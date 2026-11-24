@@ -13,6 +13,7 @@ export type OAuthProviderKind =
   | "open_vulcan_china"
   | "open_vulcan_global"
   | "open_ai_codex"
+  | "open_ai_chat_gpt"
   | "google_code_assist"
   | "google_gemini"
   | "mini_max_global_token_plan"
@@ -122,6 +123,7 @@ export type PublicAiModelDiscoveryKind =
   | "manifest_static"
   | "open_ai"
   | "open_ai_codex"
+  | "open_ai_chat_gpt"
   | "open_vulcan"
   | "anthropic"
   | "anthropic_compatible"
@@ -279,7 +281,6 @@ export interface PublicAiCustomProviderSaveRequest {
   // Optional regular-conversation session-header name for this provider.
   // 此供应商可选的常规会话请求头名称。
   sessionHeader?: string;
-  websocketPolicy: PublicAiResponsesWebsocketPolicy;
   authentication: "bearer_authorization" | "google_api_key" | "x_api_key";
   credentialDisplayName?: string;
   secret?: string;
@@ -1627,7 +1628,32 @@ export interface PublicAiOAuthStartRequest {
   providerId: string;
   serviceEntryId: string;
   credentialProfileId: string;
+  connectionId?: string;
   client: PublicAiOAuthClientConfiguration;
+}
+
+// PublicAiConfigurationArchiveAccount gives the visible identity shared by preview and completion.
+// PublicAiConfigurationArchiveAccount 提供预览和结果共用的可见账号身份。
+export interface PublicAiConfigurationArchiveAccount {
+  providerId: string;
+  serviceEntryId: string;
+  displayName: string;
+}
+
+// PublicAiConfigurationImportPreview exposes file-bound selection indexes and visible metadata.
+// PublicAiConfigurationImportPreview 公开与文件绑定的选择索引和可见元数据。
+export interface PublicAiConfigurationImportPreview {
+  accounts: Array<PublicAiConfigurationArchiveAccount & { index: number; connectionId: string | null }>;
+  providerCount: number;
+}
+
+// PublicAiConfigurationImportResult reports the imported settings and accounts needing sign-in.
+// PublicAiConfigurationImportResult 返回已导入设置和需要重新登录的账号。
+export interface PublicAiConfigurationImportResult {
+  snapshot: PublicAiSettingsSnapshot;
+  providerCount: number;
+  accountCount: number;
+  signInRequired: PublicAiConfigurationArchiveAccount[];
 }
 
 // PublicAiOAuthTransaction describes one browser-safe in-memory authorization state.

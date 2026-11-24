@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 31,
-  "published_at": "2026-11-21T05:14:16Z",
+  "revision": 32,
+  "published_at": "2026-11-24T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 6,
     "required_protocol_profiles": [
@@ -101,6 +101,56 @@
       }
     },
     {
+      "service_entry_id": "chatgpt-plan",
+      "display_name": "ChatGPT Plan",
+      "kind": "conversation",
+      "base_url": "https://api.openai.com/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "chatgpt-oauth",
+          "display_name": "Sign in with ChatGPT",
+          "credential_mode": "auth",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "open_ai_chat_gpt"
+          },
+          "billing_kind": "provider_managed",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_headers": {},
+      "request_projector": "direct",
+      "model_catalog": {
+        "source_policy": "discovery_only",
+        "discovery_kind": "open_ai_chat_gpt"
+      },
+      "model_defaults_override": {
+        "catalog_membership_policy": "discovery_evidence",
+        "unknown_model_policy": "default_binding_allowed",
+        "supported_protocols": [
+          "openai-responses.v1"
+        ],
+        "selected_protocol": "openai-responses.v1"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-responses.v1",
+          "endpoint_path": "/responses",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [
+            "x-request-id",
+            "x-oai-request-id"
+          ],
+          "verified": true
+        }
+      ]
+    },
+    {
       "service_entry_id": "codex-subscription",
       "display_name": "OpenAI Codex Subscription",
       "kind": "conversation",
@@ -136,9 +186,6 @@
         {
           "protocol_profile_id": "openai-codex-responses.v1",
           "endpoint_path": "/responses",
-          "responses_features": {
-            "websocket": "verified"
-          },
           "input_resource_constraints": [
             {
               "resource_kind": "image",
@@ -177,6 +224,44 @@
     "default_operation_refs": []
   },
   "model_rules": [
+    {
+      "rule_id": "chatgpt-plan-gpt-6-2-sol",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.2-sol"
+      },
+      "core_model_ref": "gpt-6.2-sol",
+      "selected_protocol": "openai-responses.v1",
+      "responses_developer_prefix": true,
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-6-2-astra",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.2-astra"
+      },
+      "core_model_ref": "gpt-6.2-astra",
+      "selected_protocol": "openai-responses.v1",
+      "responses_developer_prefix": true,
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
     {
       "rule_id": "public-api-gpt-5-6-sol",
       "display_name": "GPT-5.6 Sol",
@@ -720,7 +805,6 @@
         "requires_sandboxed_review": false,
         "comp_hash": "3000",
         "tool_output_truncation": {"mode": "tokens", "limit": 10000},
-        "prefer_websockets": true,
         "supports_experimental_context": false
       },
       "capabilities": {
@@ -758,7 +842,6 @@
         "requires_sandboxed_review": false,
         "comp_hash": "3000",
         "tool_output_truncation": {"mode": "tokens", "limit": 10000},
-        "prefer_websockets": true,
         "supports_experimental_context": false
       },
       "capabilities": {
@@ -796,7 +879,6 @@
         "requires_sandboxed_review": false,
         "comp_hash": "3000",
         "tool_output_truncation": {"mode": "tokens", "limit": 10000},
-        "prefer_websockets": true,
         "supports_experimental_context": false
       },
       "capabilities": {
@@ -835,7 +917,6 @@
         "requires_sandboxed_review": false,
         "comp_hash": "3000",
         "tool_output_truncation": {"mode": "tokens", "limit": 10000},
-        "prefer_websockets": true,
         "supports_experimental_context": true
       },
       "capabilities": {
@@ -887,7 +968,6 @@
           "mode": "tokens",
           "limit": 10000
         },
-        "prefer_websockets": true,
         "supports_experimental_context": false
       },
       "capabilities": {
@@ -954,7 +1034,6 @@
           "mode": "tokens",
           "limit": 10000
         },
-        "prefer_websockets": true,
         "supports_experimental_context": false
       },
       "capabilities": {
@@ -1007,7 +1086,6 @@
         "requires_sandboxed_review": false,
         "comp_hash": "3000",
         "tool_output_truncation": {"mode": "tokens", "limit": 10000},
-        "prefer_websockets": true,
         "supports_experimental_context": true
       },
       "capabilities": {
@@ -1044,7 +1122,6 @@
         "requires_sandboxed_review": false,
         "comp_hash": "3000",
         "tool_output_truncation": {"mode": "tokens", "limit": 10000},
-        "prefer_websockets": true,
         "supports_experimental_context": true
       },
       "capabilities": {
@@ -1082,7 +1159,6 @@
         "requires_sandboxed_review": false,
         "comp_hash": "3000",
         "tool_output_truncation": {"mode": "tokens", "limit": 10000},
-        "prefer_websockets": true,
         "supports_experimental_context": true
       },
       "capabilities": {
@@ -3706,6 +3782,10 @@
   "provenance": {
     "status": "verified",
     "sources": [
+      {
+        "url": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations",
+        "note": "Official ChatGPT Plan HTTP Responses contract and preview capability restrictions."
+      },
       {
         "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
         "note": "Official OpenAI model card for gpt-6.2-astra."

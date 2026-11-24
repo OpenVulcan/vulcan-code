@@ -244,7 +244,7 @@
                         },
                         "provider": {
                           "enum": [
-                            "open_ai_codex",
+                            "open_ai_codex",                            "open_ai_chat_gpt",
                             "google_code_assist",
                             "google_gemini",
                             "mini_max_global_token_plan",
@@ -676,7 +676,7 @@
                   "open_router",
                   "manifest_static",
                   "open_ai",
-                  "open_ai_codex",
+                  "open_ai_codex",                  "open_ai_chat_gpt",
                   "anthropic",
                   "anthropic_compatible",
                   "gemini",
@@ -762,7 +762,7 @@
                     "open_router",
                     "manifest_static",
                     "open_ai",
-                    "open_ai_codex",
+                    "open_ai_codex",                    "open_ai_chat_gpt",
                     "anthropic",
                     "anthropic_compatible",
                     "gemini",

@@ -1,4 +1,6 @@
 import type {
+  PublicAiConfigurationImportPreview,
+  PublicAiConfigurationImportResult,
   ContextCompactionWindowNodeId,
   ContextWindowSelection,
   PublicAiAccountUsage,
@@ -141,6 +143,39 @@ export async function startPublicAiOAuth(
   request: PublicAiOAuthStartRequest,
 ): Promise<PublicAiOAuthChallenge> {
   return serviceClient.request<PublicAiOAuthChallenge>("service_start_public_ai_oauth", { request });
+}
+
+// Exports the selected credential IDs and requested provider definitions as ciphertext.
+// 将已选凭据 ID 和指定供应商定义导出为密文。
+export async function exportPublicAiConfiguration(
+  password: string,
+  connectionIds: string[],
+  includeOtherProviders: boolean,
+): Promise<string> {
+  return serviceClient.request<string>("service_export_public_ai_configuration", {
+    request: { password, connectionIds, includeOtherProviders },
+  });
+}
+
+// Retrieves selectable account metadata for an encrypted archive without changing settings.
+// 获取加密配置包中的可选择账号元数据，不更改设置。
+export async function previewPublicAiConfigurationImport(archive: string, password: string): Promise<PublicAiConfigurationImportPreview> {
+  return serviceClient.request<PublicAiConfigurationImportPreview>("service_preview_public_ai_configuration_import", {
+    request: { archive, password },
+  });
+}
+
+// Imports only the confirmed indexes from the same encrypted file the user reviewed.
+// 从用户预览过的同一份加密文件中导入已确认的索引。
+export async function importPublicAiConfiguration(
+  archive: string,
+  password: string,
+  accountIndexes: number[],
+  includeOtherProviders: boolean,
+): Promise<PublicAiConfigurationImportResult> {
+  return serviceClient.request<PublicAiConfigurationImportResult>("service_import_public_ai_configuration", {
+    request: { archive, password, accountIndexes, includeOtherProviders },
+  });
 }
 
 // getPublicAiOAuthStatus reads one process-local authorization transaction.

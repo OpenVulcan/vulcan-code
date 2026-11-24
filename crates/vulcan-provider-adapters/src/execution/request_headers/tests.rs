@@ -6,6 +6,7 @@ use super::super::test_support::{
     bundled_manifest_route, minimal_request, pinned_openrouter_route,
 };
 use super::*;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use vulcan_llm_core::{
@@ -411,25 +412,6 @@ fn native_codex_protocol_owns_exact_codex_user_agent() {
             .and_then(|value| value.to_str().ok()),
         Some("true")
     );
-    // websocket_map is the exact secret-safe projection used by the WebSocket handshake.
-    // websocket_map 是 WebSocket 握手使用的精确不泄密投影。
-    let websocket_map =
-        websocket_headers(&lite_headers).expect("Lite WebSocket headers should project");
-    assert_eq!(
-        websocket_map
-            .get(CODEX_RESPONSES_LITE_HEADER_NAME)
-            .map(String::as_str),
-        Some("true")
-    );
-
-    // spoofed_route proves provider-owned declarations cannot replace the host selector.
-    // spoofed_route 证明供应商声明不能替换宿主选择头。
-    let mut spoofed_route = lite_route;
-    spoofed_route.entry.request_headers.insert(
-        String::from(CODEX_RESPONSES_LITE_HEADER_NAME),
-        String::from("false"),
-    );
-    assert!(execution_headers(&spoofed_route, &encoded.headers, &secret, None).is_err());
 }
 
 /// Verifies Kimi receives the provider-observed operating-system label.

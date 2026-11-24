@@ -1022,6 +1022,45 @@ fn validate_service_entry(
             &format!("$.services[{index}].credential_profiles[{profile_index}].authorization"),
             errors,
         );
+        // The plan grant stays bound to the official inference and model-list endpoints.
+        // 套餐授权始终绑定官方推理及模型列表端点。
+        let chatgpt_authorization = matches!(
+            &profile.authorization,
+            Some(CredentialAuthorization::RegisteredOauth {
+                provider: crate::OAuthProviderKind::OpenAiChatGpt,
+            })
+        );
+        if chatgpt_authorization
+            && !(crate::is_openai_chatgpt_plan(&manifest.provider_id, &entry.service_entry_id)
+                && entry.base_url == crate::OPENAI_CHATGPT_PLAN_BASE_URL
+                && entry.service_origin_override_policy.is_none()
+                && entry.credential_profiles.len() == 1
+                && entry.default_authentication
+                    == Some(crate::AuthenticationProjection::BearerAuthorization)
+                && profile.authentication.is_none()
+                && profile.default_usage_scopes
+                    == BTreeSet::from([vulcan_ai_contract::InferenceUsageScope::InteractiveAgent])
+                && entry.native_inference_bindings.is_empty()
+                && entry.model_catalog.as_ref().is_some_and(|catalog| {
+                    catalog.source_policy
+                        == crate::provider_manifest::ModelSourcePolicy::DiscoveryOnly
+                        && catalog.discovery_kind == Some(crate::ModelDiscoveryKind::OpenAiChatGpt)
+                })
+                && matches!(entry.protocol_routes.as_slice(), [route]
+                    if route.protocol_profile_id == vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
+                        && route.endpoint_path.as_deref() == Some("/responses")
+                        && route.base_url_override.is_none()
+                        && route.model_discovery_base_url_override.is_none()
+                        && route.model_discovery_path.is_none()
+                        && route.model_discovery.is_none()
+                        && route.authentication.is_none()))
+        {
+            errors.push(ManifestValidationError::new(
+                "invalid_chatgpt_plan_binding",
+                path(".credential_profiles"),
+                "Sign in with ChatGPT requires the official account-specific plan route.",
+            ));
+        }
         if let Some(policy) = profile.account_model_access.as_ref() {
             validate_account_model_access_policy(
                 policy,

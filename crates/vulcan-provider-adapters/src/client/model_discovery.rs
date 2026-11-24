@@ -297,6 +297,24 @@ impl HttpProviderMetadataClient {
                 parse_openai_codex_model_catalog(connection.id.as_str(), generation, body.as_str())
                     .map_err(ModelDiscoveryError::invalid_response)?
             }
+            ModelDiscoveryKind::OpenAiChatGpt => {
+                let url = protocol_route.model_discovery_url(entry, "/models");
+                let body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    authentication,
+                    &url,
+                    secret,
+                    "ChatGPT Plan model discovery",
+                )
+                .await?;
+                crate::discovery::parse_openai_chatgpt_plan_catalog(
+                    &connection.id,
+                    generation,
+                    &body,
+                )
+                .map_err(ModelDiscoveryError::invalid_response)?
+            }
             ModelDiscoveryKind::Anthropic => {
                 discover_anthropic_models(&self.http, entry, connection, secret, generation).await?
             }
@@ -458,6 +476,7 @@ pub(super) fn default_discovery_path(kind: ModelDiscoveryKind) -> &'static str {
         ModelDiscoveryKind::OpenRouter => "/models/user",
         ModelDiscoveryKind::OpenAi
         | ModelDiscoveryKind::OpenAiCodex
+        | ModelDiscoveryKind::OpenAiChatGpt
         | ModelDiscoveryKind::AnthropicCompatible
         | ModelDiscoveryKind::Gemini => "/models",
         ModelDiscoveryKind::GoogleCodeAssist => "/v1/codeassist:fetchAvailableModels",

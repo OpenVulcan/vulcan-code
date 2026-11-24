@@ -14,14 +14,13 @@ import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
 import { Input } from "@/ui-kit/primitives/input"
 import { ScrollArea } from "@/ui-kit/primitives/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
-import { Switch } from "@/ui-kit/primitives/switch"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog"
 import { useI18n } from "@/i18n"
 import type { TranslationKey } from "@/i18n-messages"
-import { CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE, codexResponsesFeaturePoliciesFromEntry, customProtocolRouteDraftValue, customProtocolRouteSelectValue, customProtocolProfileId, emptyProtocolRouteDraft, protocolCollectionChanged, protocolCollectionFromEntry, protocolRoutesFromCollection, sortProtocolsByAutoPriority } from "@/components/features/settings/custom-provider-protocol-drafts"
+import { CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE, customProtocolRouteDraftValue, customProtocolRouteSelectValue, customProtocolProfileId, emptyProtocolRouteDraft, protocolCollectionChanged, protocolCollectionFromEntry, protocolRoutesFromCollection, sortProtocolsByAutoPriority } from "@/components/features/settings/custom-provider-protocol-drafts"
 import type { CustomProtocolRouteDraft, CustomProviderProtocolCollection } from "@/components/features/settings/custom-provider-protocol-drafts"
 import { probePublicAiCustomProvider, savePublicAiCustomProvider } from "@/service/settings-actions-service"
-import type { PublicAiCustomProviderModelDiscoveryMode, PublicAiCustomProviderProbeResult, PublicAiCustomProviderProtocol, PublicAiCustomProviderSaveRequest, PublicAiResponsesWebsocketPolicy, PublicAiConnection, PublicAiModelCapabilityEvidence, PublicAiProviderDescriptor, PublicAiServiceEntry, PublicAiSettingsSnapshot } from "@/types"
+import type { PublicAiCustomProviderModelDiscoveryMode, PublicAiCustomProviderProbeResult, PublicAiCustomProviderProtocol, PublicAiCustomProviderSaveRequest, PublicAiConnection, PublicAiModelCapabilityEvidence, PublicAiProviderDescriptor, PublicAiServiceEntry, PublicAiSettingsSnapshot } from "@/types"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 import { protocolDisplayName } from "./protocol-display-name"
 import "@/ui-kit/styles/features/settings-forms.css"
@@ -135,7 +134,6 @@ export function CustomProviderDialog(props: {
   // （方案 §R6.4/§R6.5）。
   const [protocols, setProtocols] = React.useState<PublicAiCustomProviderProtocol[]>(["open_ai_responses"])
   const [routeDrafts, setRouteDrafts] = React.useState<CustomProviderProtocolCollection["drafts"]>({})
-  const [websocketPolicy, setWebsocketPolicy] = React.useState<PublicAiResponsesWebsocketPolicy>("disabled")
   const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "google_api_key" | "x_api_key">("bearer_authorization")
   const [modelDiscoveryMode, setModelDiscoveryMode] = React.useState<PublicAiCustomProviderModelDiscoveryMode>("standard")
   // modelDiscoveryProtocol selects exactly one directory format independently from conversation protocols.
@@ -191,8 +189,6 @@ export function CustomProviderDialog(props: {
     const collection = protocolCollectionFromEntry(entry)
     setProtocols(collection.protocols)
     setRouteDrafts(collection.drafts)
-    const codexFeatures = codexResponsesFeaturePoliciesFromEntry(entry)
-    setWebsocketPolicy(codexFeatures.websocketPolicy)
     // catalog restores only the entry-owned selection, including the shared custom path.
     // catalog 只恢复入口持有的选择，包括共享自定义路径。
     const catalog = customProviderCatalogDraft(entry)
@@ -259,7 +255,6 @@ export function CustomProviderDialog(props: {
     // The enabled protocol collection is authoritative and never empty.
     // 启用协议集合是权威事实且绝不为空。
     protocols,
-    websocketPolicy,
     authentication,
     ...(props.provider
       ? (validationConnectionId ? { validationConnectionId } : {})
@@ -279,7 +274,7 @@ export function CustomProviderDialog(props: {
     protocolRoutes: protocolRoutesFromCollection({ protocols, drafts: routeDrafts }),
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryProtocol, modelDiscoveryPath, props.provider, protocols, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryProtocol, modelDiscoveryPath, props.provider, protocols, routeDrafts, secret, sessionHeader, validationConnectionId])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
@@ -366,14 +361,6 @@ export function CustomProviderDialog(props: {
     || (modelDiscoveryMode === "custom_path"
       && modelDiscoveryPath.trim() !== (originalEntry.model_discovery_path ?? ""))
   )
-  // responsesFeaturesChanged tracks explicit Codex transport capabilities without forcing credential revalidation.
-  // responsesFeaturesChanged 跟踪显式 Codex 传输能力开关，但不会强制重新验证凭据。
-  const originalResponsesFeatures = originalEntry?.protocol_routes.find(
-    (route) => route.protocol_profile_id === "openai-codex-responses.v1",
-  )?.responses_features
-  const responsesFeaturesChanged = Boolean(props.provider)
-    && protocols.includes("open_ai_codex_responses")
-    && websocketPolicy !== (originalResponsesFeatures?.websocket ?? "disabled")
   // credentialFreeEdit identifies an existing provider whose contract cannot be remotely probed yet.
   // credentialFreeEdit 标识当前尚无法远程探测契约的无账号现有供应商。
   const credentialFreeEdit = Boolean(props.provider) && providerConnections.length === 0
@@ -382,7 +369,6 @@ export function CustomProviderDialog(props: {
   const providerChanged = Boolean(props.provider) && (
     displayName.trim() !== props.provider?.display_name
     || connectionContractChanged
-    || responsesFeaturesChanged
   )
   // directSaveOnly covers display and capability changes that do not change the credential route contract.
   // directSaveOnly 覆盖不改变凭据路由契约的展示信息与能力开关变更。
@@ -552,21 +538,6 @@ export function CustomProviderDialog(props: {
                 </label>
               </div>
             </DisclosureSection>
-            {protocols.includes("open_ai_codex_responses") ? (
-              <div className="vk-form-box" data-tone="muted">
-                <strong className="vk-form-strong">{t("settings.customProviders.codexCapabilities")}</strong>
-                <label className="vk-form-option">
-                  <Switch
-                    checked={websocketPolicy !== "disabled"}
-                    onCheckedChange={(checked) => setWebsocketPolicy(checked ? "unverified_override" : "disabled")}
-                  />
-                  <span>
-                    <b>{t("settings.customProviders.codexWebsocket")}</b>
-                    <span className="vk-form-note">{t("settings.customProviders.codexWebsocketHint")}</span>
-                  </span>
-                </label>
-              </div>
-            ) : null}
             <dl className="vk-facts vk-form-summary">
               <dt>{t("settings.customProviders.protocolEndpoint")}</dt>
               <dd className="vk-mono">{protocolEndpoint || "—"}</dd>

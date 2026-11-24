@@ -24,10 +24,15 @@ use tokio::{
 use uuid::Uuid;
 
 mod open_design;
+mod openai_chatgpt;
 mod opencode;
 mod openvulcan;
 mod tokenrhythm;
 mod xiaomi;
+pub use openai_chatgpt::{
+    OPENAI_CHATGPT_PLAN_BASE_URL, OPENAI_CHATGPT_PLAN_ENTRY_ID, OPENAI_CODEX_RETIRED_MESSAGE,
+    is_openai_chatgpt_plan, is_retired_codex_subscription,
+};
 pub use openvulcan::revoke_openvulcan_authorization;
 
 const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -81,6 +86,9 @@ pub enum OAuthProviderKind {
     /// OpenAI Codex subscription authorization.
     /// OpenAI Codex 订阅授权。
     OpenAiCodex,
+    /// Sign in with ChatGPT using an issued OpenAI public client.
+    /// 使用 OpenAI 签发的公共客户端登录 ChatGPT。
+    OpenAiChatGpt,
     /// Google Code Assist authorization using a user-owned desktop OAuth client.
     /// 使用用户自有桌面 OAuth 客户端的 Google Code Assist 授权。
     GoogleCodeAssist,
@@ -549,6 +557,11 @@ impl OAuthAuthorizationRuntime {
     ) -> Result<OAuthAuthorizationChallenge, String> {
         match authorization {
             CredentialAuthorization::RegisteredOauth {
+                provider: OAuthProviderKind::OpenAiChatGpt,
+            } => Err(String::from(
+                "ChatGPT Plan sign-in requires a local host identity.",
+            )),
+            CredentialAuthorization::RegisteredOauth {
                 provider: OAuthProviderKind::XiaomiMimo,
             } => {
                 self.start_xiaomi_mimo(authorization_binding, service_base_url)
@@ -667,6 +680,9 @@ impl OAuthAuthorizationRuntime {
             return self
                 .start_openvulcan(region, authorization_binding, client.return_page_locale)
                 .await;
+        }
+        if provider_kind == OAuthProviderKind::OpenAiCodex {
+            return Err(OPENAI_CODEX_RETIRED_MESSAGE.into());
         }
         if matches!(
             provider_kind,
@@ -1123,6 +1139,9 @@ impl OAuthAuthorizationRuntime {
         material: &CredentialSecretMaterial,
     ) -> Result<CredentialSecretMaterial, String> {
         match material {
+            CredentialSecretMaterial::OpenAiChatGptOAuth { .. } => {
+                openai_chatgpt::refresh(material).await
+            }
             CredentialSecretMaterial::OpencodeConsoleOAuth {
                 tokens,
                 organization_id,
@@ -1135,38 +1154,8 @@ impl OAuthAuthorizationRuntime {
             | CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => Ok(material.clone()),
-            CredentialSecretMaterial::OpenAiCodexOAuth {
-                tokens,
-                id_token,
-                account_id,
-            } => {
-                let token = refresh_oauth_token(
-                    &self.client,
-                    OPENAI_CODEX_TOKEN_URL,
-                    OPENAI_CODEX_CLIENT_ID,
-                    None,
-                    tokens,
-                )
-                .await?;
-                let refreshed_id_token = token.id_token.clone().or_else(|| id_token.clone());
-                let refreshed_identity = refreshed_id_token
-                    .as_deref()
-                    .map(parse_openai_codex_identity)
-                    .transpose()?;
-                let refreshed_account_id = refreshed_identity
-                    .as_ref()
-                    .map(|claims| claims.authentication.chatgpt_account_id.clone())
-                    .or_else(|| account_id.clone());
-                if refreshed_account_id.is_none() {
-                    return Err(String::from(
-                        "OpenAI Codex refresh did not preserve a verified account id; reauthorization is required.",
-                    ));
-                }
-                Ok(CredentialSecretMaterial::OpenAiCodexOAuth {
-                    tokens: merge_refreshed_token_set(tokens, &token)?,
-                    id_token: refreshed_id_token,
-                    account_id: refreshed_account_id,
-                })
+            CredentialSecretMaterial::OpenAiCodexOAuth { .. } => {
+                Err(OPENAI_CODEX_RETIRED_MESSAGE.into())
             }
             CredentialSecretMaterial::GoogleOAuth {
                 tokens,
@@ -2534,7 +2523,8 @@ async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpL
         | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan
-        | OAuthProviderKind::XiaomiMimo => {
+        | OAuthProviderKind::XiaomiMimo
+        | OAuthProviderKind::OpenAiChatGpt => {
             return Err(String::from(
                 "This authorization flow requires its dedicated callback runtime.",
             ));
@@ -2569,7 +2559,8 @@ fn callback_redirect_uri(
         | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan
-        | OAuthProviderKind::XiaomiMimo => Err(String::from(
+        | OAuthProviderKind::XiaomiMimo
+        | OAuthProviderKind::OpenAiChatGpt => Err(String::from(
             "This authorization flow requires its dedicated callback runtime.",
         )),
     }
@@ -2635,7 +2626,8 @@ fn build_oauth_flow(
             | OAuthProviderKind::TokenRhythm
             | OAuthProviderKind::OpencodeConsole
             | OAuthProviderKind::KimiCodingPlan
-            | OAuthProviderKind::XiaomiMimo => {
+            | OAuthProviderKind::XiaomiMimo
+            | OAuthProviderKind::OpenAiChatGpt => {
                 return Err(String::from(
                     "This authorization flow must be constructed by its dedicated runtime.",
                 ));
@@ -2685,7 +2677,8 @@ fn build_oauth_flow(
             | OAuthProviderKind::TokenRhythm
             | OAuthProviderKind::OpencodeConsole
             | OAuthProviderKind::KimiCodingPlan
-            | OAuthProviderKind::XiaomiMimo => {
+            | OAuthProviderKind::XiaomiMimo
+            | OAuthProviderKind::OpenAiChatGpt => {
                 return Err(String::from(
                     "This authorization flow must use its dedicated authorization URL.",
                 ));
@@ -3021,7 +3014,8 @@ async fn exchange_authorization_code(
         | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan
-        | OAuthProviderKind::XiaomiMimo => {
+        | OAuthProviderKind::XiaomiMimo
+        | OAuthProviderKind::OpenAiChatGpt => {
             return Err(String::from(
                 "This authorization flow must use its dedicated token exchange.",
             ));

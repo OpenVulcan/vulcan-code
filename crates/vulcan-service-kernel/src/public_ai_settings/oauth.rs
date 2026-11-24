@@ -3,10 +3,12 @@
 
 use serde::Deserialize;
 use vulcan_provider_adapters::{
-    CredentialMode, CredentialSecretEnvelope, CredentialSecretSnapshot, CredentialSecretStore,
-    OAuthAuthorizationChallenge, OAuthClientConfiguration, OAuthTransactionPhase,
-    OAuthTransactionSnapshot, PersistedAiConfiguration, PublicAiRuntime,
-    credential_authorization_binding,
+    CredentialAuthorization, CredentialMode, CredentialSecretEnvelope, CredentialSecretMaterial,
+    CredentialSecretSnapshot, CredentialSecretStore, OAuthAuthorizationChallenge,
+    OAuthClientConfiguration, OAuthProviderKind, OAuthTransactionPhase, OAuthTransactionSnapshot,
+    OPENAI_CHATGPT_PLAN_BASE_URL, OPENAI_CODEX_RETIRED_MESSAGE, PersistedAiConfiguration,
+    PublicAiRuntime, credential_authorization_binding, is_openai_chatgpt_plan,
+    is_retired_codex_subscription,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -37,6 +39,10 @@ pub(crate) struct PublicAiOAuthStartRequest {
     /// Stable renewable credential-profile identifier.
     /// 稳定的可续期凭据配置档标识。
     credential_profile_id: String,
+    /// Identifies the exact ChatGPT registration for a returning sign-in.
+    /// 重新登录时指定精确的 ChatGPT 注册。
+    #[serde(default)]
+    connection_id: Option<String>,
     /// User-owned OAuth client settings required only by declared flows.
     /// 仅声明需要的流程使用的用户自有 OAuth 客户端设置。
     #[serde(default)]
@@ -127,23 +133,68 @@ pub(crate) async fn service_start_public_ai_oauth(
             request.credential_profile_id
         ));
     }
-    let authorization_binding = credential_authorization_binding(
+    let mut authorization_binding = credential_authorization_binding(
         request.provider_id.as_str(),
         request.service_entry_id.as_str(),
         request.credential_profile_id.as_str(),
         &entry.base_url,
         authorization,
     )?;
-    let challenge = runtime
-        .oauth()
-        .start(
-            authorization,
-            authorization_binding,
-            credential_profile.key_prefix.clone(),
-            &entry.base_url,
-            request.client,
-        )
-        .await?;
+    let is_chatgpt = matches!(
+        authorization,
+        CredentialAuthorization::RegisteredOauth {
+            provider: OAuthProviderKind::OpenAiChatGpt
+        }
+    );
+    let mut challenge = if is_chatgpt {
+        if !is_openai_chatgpt_plan(&request.provider_id, &request.service_entry_id)
+            || entry.base_url != OPENAI_CHATGPT_PLAN_BASE_URL
+        {
+            return Err(String::from("Invalid ChatGPT Plan service binding."));
+        }
+        let registration = if let Some(connection_id) = request.connection_id.as_deref() {
+            let connection = configuration
+                .connection_graph
+                .connections
+                .get(connection_id)
+                .filter(|connection| {
+                    connection.provider_id == request.provider_id
+                        && connection.service_entry_id == request.service_entry_id
+                        && connection.credential_profile_id == request.credential_profile_id
+                })
+                .ok_or_else(|| {
+                    String::from("The selected ChatGPT Plan connection is unavailable.")
+                })?;
+            authorization_binding.push_str(&format!(":{connection_id}"));
+            Some(
+                runtime
+                    .credential_secret_store()
+                    .read_secret(&connection.secret_reference)
+                    .await?
+                    .material,
+            )
+        } else {
+            None
+        };
+        let host = openai_chatgpt_host_id(
+            &crate::service_state_access::public_ai_configuration_app_data_root(),
+        )?;
+        runtime
+            .oauth()
+            .start_openai_chatgpt(authorization_binding, host, registration)
+            .await?
+    } else {
+        runtime
+            .oauth()
+            .start(
+                authorization,
+                authorization_binding,
+                credential_profile.key_prefix.clone(),
+                &entry.base_url,
+                request.client,
+            )
+            .await?
+    };
     if let Err(error) =
         shell_host_from_state(&state)?.open_url(challenge.authorization_url.as_str())
     {
@@ -151,9 +202,50 @@ pub(crate) async fn service_start_public_ai_oauth(
             .oauth()
             .cancel(challenge.transaction.transaction_id.as_str())
             .await;
-        return Err(error);
+        return Err(if is_chatgpt {
+            String::from("Could not open the ChatGPT sign-in page.")
+        } else {
+            error
+        });
+    }
+    if is_chatgpt {
+        // The browser already owns this URL, so never serialize its identity hint to WebUI.
+        // 浏览器已接收此地址，避免把其中的账号身份提示序列化给 WebUI。
+        challenge.authorization_url.clear();
     }
     Ok(challenge)
+}
+
+/// Loads or atomically creates one stable installation ID under the active local data root.
+/// 在当前本地数据根目录读取或原子创建稳定的安装标识。
+fn openai_chatgpt_host_id(root: &std::path::Path) -> Result<uuid::Uuid, String> {
+    use std::io::Write as _;
+
+    let path = root.join("openai-chatgpt-host-id");
+    let read = || -> Result<uuid::Uuid, String> {
+        let id = std::fs::read_to_string(&path)
+            .map_err(|_| String::from("Could not read the ChatGPT host ID."))?;
+        uuid::Uuid::parse_str(id.trim())
+            .map_err(|_| String::from("The ChatGPT host ID is invalid."))
+    };
+    match path.try_exists() {
+        Ok(true) => return read(),
+        Ok(false) => {}
+        Err(_) => return Err(String::from("Could not inspect the ChatGPT host ID.")),
+    }
+    std::fs::create_dir_all(root)
+        .map_err(|_| String::from("Could not create the ChatGPT host ID directory."))?;
+    let id = uuid::Uuid::new_v4();
+    let mut file = tempfile::NamedTempFile::new_in(root)
+        .map_err(|_| String::from("Could not prepare the ChatGPT host ID."))?;
+    writeln!(file, "{id}")
+        .and_then(|()| file.as_file().sync_all())
+        .map_err(|_| String::from("Could not write the ChatGPT host ID."))?;
+    match file.persist_noclobber(&path) {
+        Ok(_) => Ok(id),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => read(),
+        Err(_) => Err(String::from("Could not save the ChatGPT host ID.")),
+    }
 }
 
 /// Returns the current state of one process-local OAuth transaction.
@@ -216,6 +308,9 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
     request: PublicAiOAuthCommitRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     super::openvulcan_account::reject_generic_provider_mutation(&state, &request.provider_id)?;
+    if is_retired_codex_subscription(&request.provider_id, &request.service_entry_id) {
+        return Err(OPENAI_CODEX_RETIRED_MESSAGE.into());
+    }
     validate_non_empty("transactionId", request.transaction_id.as_str())?;
     validate_non_empty("providerId", request.provider_id.as_str())?;
     validate_non_empty("displayName", request.display_name.as_str())?;
@@ -258,13 +353,18 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
             request.credential_profile_id
         )
     })?;
-    let expected_authorization_binding = credential_authorization_binding(
+    let mut expected_authorization_binding = credential_authorization_binding(
         request.provider_id.as_str(),
         request.service_entry_id.as_str(),
         request.credential_profile_id.as_str(),
         &entry.base_url,
         authorization,
     )?;
+    if is_openai_chatgpt_plan(&request.provider_id, &request.service_entry_id)
+        && let Some(connection_id) = request.connection_id.as_deref()
+    {
+        expected_authorization_binding.push_str(&format!(":{connection_id}"));
+    }
     if snapshot.authorization_binding != expected_authorization_binding {
         return Err(String::from(
             "Authorization transaction does not belong to the selected service entry.",
@@ -292,6 +392,20 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
             ));
         }
         let secret_store = runtime.credential_secret_store();
+        if let CredentialSecretMaterial::OpenAiChatGptOAuth {
+            tokens, client_id, ..
+        } = &material
+        {
+            let previous = secret_store.read_secret(&current.secret_reference).await?;
+            if !matches!(&previous.material, CredentialSecretMaterial::OpenAiChatGptOAuth {
+                tokens: previous_tokens, client_id: previous_client, ..
+            } if previous_client == client_id && previous_tokens.account_subject == tokens.account_subject)
+            {
+                return Err(String::from(
+                    "The selected ChatGPT Plan registration has changed.",
+                ));
+            }
+        }
         let (previous, replacement) = super::credential_repair::replace_credential_material(
             secret_store.as_ref(),
             current.secret_reference.as_str(),

@@ -58,6 +58,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_logout_openvulcan_account",
     "service_provider_usage_dashboard",
     "service_start_public_ai_oauth",
+    "service_export_public_ai_configuration",
+    "service_preview_public_ai_configuration_import",
+    "service_import_public_ai_configuration",
     "service_public_ai_oauth_status",
     "service_cancel_public_ai_oauth",
     "service_commit_public_ai_oauth_connection",
@@ -429,6 +432,27 @@ pub(super) async fn dispatch(
         }
         "service_start_public_ai_oauth" => rpc_json_result(
             service_start_public_ai_oauth(state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_export_public_ai_configuration" => rpc_json_result(
+            crate::public_ai_settings::configuration_archive::export(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_preview_public_ai_configuration_import" => rpc_json_result(
+            crate::public_ai_settings::configuration_archive::preview_import(rpc_required_param(
+                params, "request",
+            )?)
+            .await,
+        ),
+        "service_import_public_ai_configuration" => rpc_json_result(
+            crate::public_ai_settings::configuration_archive::import(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
         ),
         "service_public_ai_oauth_status" => rpc_json_result(
             service_public_ai_oauth_status(state, rpc_required_param(params, "transactionId")?)

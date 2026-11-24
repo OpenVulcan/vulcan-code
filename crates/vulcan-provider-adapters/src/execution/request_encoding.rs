@@ -468,6 +468,9 @@ pub(super) fn project_provider_request(
     if let Some(projection) = route.custom_model_projection.as_ref() {
         project_custom_model_request(projection, request, &mut encoded)?;
     }
+    if crate::is_openai_chatgpt_plan(&route.connection.provider_id, &route.entry.id) {
+        project_chatgpt_plan_request(&mut encoded)?;
+    }
     validate_structured_output_projection(route, request, &encoded)?;
     // Provider mappings cannot reintroduce internal media or broaden the selected protocol family.
     // 供应商映射不能重新引入内部媒体或扩大选中协议族的能力。
@@ -481,6 +484,68 @@ pub(super) fn project_provider_request(
     // 已声明的推理回传契约在即将分派的精确字节上被证明，绝不从内存请求推断。
     validate_declared_reasoning_replay_contract(route, request, &encoded)?;
     Ok(encoded)
+}
+
+/// Applies the published stateless HTTP contract to a ChatGPT Plan Responses request.
+/// 对 ChatGPT 套餐 Responses 请求应用官方无状态 HTTP 契约。
+fn project_chatgpt_plan_request(
+    encoded: &mut EncodedWireRequest,
+) -> Result<(), ProviderExecutionFailure> {
+    let body = request_body_mut(encoded, "ChatGPT Plan")?;
+    for unsupported in [
+        "background",
+        "conversation",
+        "max_output_tokens",
+        "max_tool_calls",
+        "metadata",
+        "moderation",
+        "multi_agent",
+        "prompt",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "temperature",
+        "top_logprobs",
+        "top_p",
+        "truncation",
+        "user",
+        "previous_response_id",
+    ] {
+        body.remove(unsupported);
+    }
+    body.insert("stream".into(), Value::Bool(true));
+    body.insert("store".into(), Value::Bool(false));
+    let input = body
+        .get_mut("input")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| pre_dispatch_failure("ChatGPT Plan Responses input must be an array."))?;
+    for item in input {
+        if item.get("type").and_then(Value::as_str) == Some("message")
+            && item.get("role").and_then(Value::as_str) == Some("system")
+        {
+            item["role"] = Value::String("developer".into());
+        }
+    }
+    if let Some(tools) = body.remove("tools") {
+        let Value::Array(tools) = tools else {
+            return Err(pre_dispatch_failure(
+                "ChatGPT Plan Responses tools must be an array.",
+            ));
+        };
+        if tools.iter().any(|tool| {
+            !matches!(
+                tool.get("type").and_then(Value::as_str),
+                Some("function" | "custom")
+            )
+        }) {
+            return Err(pre_dispatch_failure(
+                "ChatGPT Plan supports local function and custom tools only.",
+            ));
+        }
+        if !tools.is_empty() {
+            body.insert("tools".into(), Value::Array(codex_lite_tools(tools)));
+        }
+    }
+    Ok(())
 }
 
 /// Proves the final wire body satisfies the reasoning replay contract this route declared.

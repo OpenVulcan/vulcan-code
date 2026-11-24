@@ -20,7 +20,6 @@ mod responses_plaintext_replay;
 mod responses_to_anthropic;
 mod responses_to_chat;
 mod responses_to_gemini;
-mod responses_websocket;
 mod usage;
 
 pub(crate) use reasoning_bridge::anthropic_block_from_openai_reasoning_item;
@@ -33,11 +32,6 @@ use responses_to_anthropic::responses_to_anthropic_messages_for_route;
 pub use responses_to_chat::responses_to_chat_completions;
 pub use responses_to_gemini::{
     responses_to_gemini_generate_content, responses_to_gemini_interactions,
-};
-pub use responses_websocket::{
-    DEFAULT_RESPONSES_WEBSOCKET_HEARTBEAT_INTERVAL, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
-    RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig, ResponsesWebsocketFrame,
-    ResponsesWebsocketRawFrame, ResponsesWebsocketSession,
 };
 pub use usage::{
     UsageAccumulator, UsageDerivation, UsageExtractionProfile, UsageField, UsageFieldBinding,

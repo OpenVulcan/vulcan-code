@@ -336,6 +336,19 @@ pub(super) async fn add_public_ai_connection_with_secret(
         ));
     }
     let service_entry_kind = entry.kind;
+    if vulcan_provider_adapters::is_retired_codex_subscription(&provider.id, &entry.id) {
+        return Err(vulcan_provider_adapters::OPENAI_CODEX_RETIRED_MESSAGE.into());
+    }
+    if vulcan_provider_adapters::is_openai_chatgpt_plan(&provider.id, &entry.id)
+        != matches!(
+            secret.material,
+            CredentialSecretMaterial::OpenAiChatGptOAuth { .. }
+        )
+    {
+        return Err(String::from(
+            "ChatGPT Plan credentials require the corresponding official service entry.",
+        ));
+    }
     if credential_profile.credential_mode != credential_mode {
         return Err(format!(
             "Credential profile `{credential_profile_id}` does not support credential mode `{credential_mode:?}`."
@@ -1049,6 +1062,26 @@ pub(super) fn apply_connection_update(
         .get(connection_id)
         .cloned()
         .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
+    if vulcan_provider_adapters::is_retired_codex_subscription(
+        &latest.provider_id,
+        &latest.service_entry_id,
+    ) || vulcan_provider_adapters::is_retired_codex_subscription(
+        &latest.provider_id,
+        &request.service_entry_id,
+    ) {
+        return Err(vulcan_provider_adapters::OPENAI_CODEX_RETIRED_MESSAGE.into());
+    }
+    if vulcan_provider_adapters::is_openai_chatgpt_plan(
+        &latest.provider_id,
+        &latest.service_entry_id,
+    ) != vulcan_provider_adapters::is_openai_chatgpt_plan(
+        &latest.provider_id,
+        &request.service_entry_id,
+    ) {
+        return Err(String::from(
+            "Create a new connection when changing to or from ChatGPT Plan.",
+        ));
+    }
     let providers = runtime.effective_providers(configuration)?;
     let provider = providers
         .provider(latest.provider_id.as_str())
@@ -1555,6 +1588,17 @@ pub(super) async fn remove_public_ai_connection_inner(
         .cloned()
         .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
     let secret_store = runtime.credential_secret_store();
+    let chatgpt_material = if vulcan_provider_adapters::is_openai_chatgpt_plan(
+        &removed.provider_id,
+        &removed.service_entry_id,
+    ) {
+        secret_store
+            .read_optional_secret(&removed.secret_reference)
+            .await?
+            .map(|secret| secret.material)
+    } else {
+        None
+    };
     let removed_secret = secret_store
         .capture_secret(removed.secret_reference.as_str())
         .await?;
@@ -1644,6 +1688,9 @@ pub(super) async fn remove_public_ai_connection_inner(
     match publication_result {
         Ok(snapshot) => {
             drop(transaction);
+            if let Some(material) = chatgpt_material {
+                runtime.oauth().revoke_openai_chatgpt(&material).await?;
+            }
             Ok(snapshot)
         }
         Err(primary) => {

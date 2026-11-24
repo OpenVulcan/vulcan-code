@@ -6,7 +6,7 @@ import {
   PublicAiConnectionDialog,
   PublicAiDeleteConnectionDialog,
 } from "@/components/features/settings/provider-list-settings"
-import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
+import { isRetiredCodexSubscription, localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { PageEmptyState } from "@/components/page"
 import { credentialUsageIsNonPlanAccount, useCredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
 import { Button, IconButton } from "@/ui-kit/primitives/button"
@@ -154,7 +154,8 @@ function AccountCard(props: AccountCardProps) {
     : { title: connection.service_entry_id, tags: [] as string[] }
   const toolsOnly = entry?.kind === "provider_tools"
   const isDefault = snapshot.providerDefaults[provider.id] === connection.id
-  const health = healthOf(props.alerts, connection.enabled)
+  const retired = isRetiredCodexSubscription(provider.id, connection.service_entry_id)
+  const health = retired ? "warn" : healthOf(props.alerts, connection.enabled)
   const catalogError = props.alerts.find((alert) => alert.kind === "catalog_error")?.detail
   const modelCount = snapshot.catalogs[connection.id]?.models.length ?? 0
   // Share the translated names between hover hints and accessible button labels.
@@ -174,15 +175,22 @@ function AccountCard(props: AccountCardProps) {
         <span className="vk-ms-chip">{presentation.title}</span>
         {presentation.tags.map((tag) => <span className="vk-ms-chip" key={tag}>{tag}</span>)}
       </div>
-      <AccountUsage connection={connection} profile={profile} signupUrl={providerSignupUrl(provider)} usage={props.usage} />
-      {catalogError ? <p className="vk-ms-account-error" title={catalogError}>{catalogError}</p> : null}
+      {retired
+        ? <p className="vk-form-note" role="status">{t("settings.credentials.retiredCodexMigration")}</p>
+        : <AccountUsage connection={connection} profile={profile} signupUrl={providerSignupUrl(provider)} usage={props.usage} />}
+      {provider.id === "openai" && connection.service_entry_id === "chatgpt-plan" ? (
+        <a className="vk-form-note" href="https://chatgpt.com/settings/usage" rel="noreferrer" target="_blank">
+          {t("settings.credentials.chatGptPlanUsage")}
+        </a>
+      ) : null}
+      {!retired && catalogError ? <p className="vk-ms-account-error" title={catalogError}>{catalogError}</p> : null}
       <footer className="vk-ms-account-foot">
         <span className="vk-ms-status" data-state={health}>
           <i aria-hidden="true" />
-          {healthLabel(health, props.alerts, t)}
+          {retired ? t("settings.credentials.retiredCodexStatus") : healthLabel(health, props.alerts, t)}
           {!toolsOnly && connection.enabled ? ` · ${t("settings.modelServices.connect.enabled").replace("{count}", String(modelCount))}` : null}
         </span>
-        <div className="vk-ms-account-actions">
+        {!retired ? <div className="vk-ms-account-actions">
           <div className="vk-ms-account-shortcuts">
             {/* The wrapper keeps hover hints available while the button is disabled. */}
             {/* 按钮禁用时，外层元素仍可显示悬停提示。 */}
@@ -228,7 +236,7 @@ function AccountCard(props: AccountCardProps) {
               onCheckedChange={props.onEnabledChange}
             />
           </span>
-        </div>
+        </div> : null}
       </footer>
     </article>
   )

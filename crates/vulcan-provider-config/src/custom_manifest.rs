@@ -383,7 +383,7 @@ fn apply_local_overrides(
 /// `configuration` 持有既有清单与覆盖；`provider_id` 标识供应商；`descriptor` 提供显式编辑。
 /// Returns a fully validated document without modifying the supplied configuration, or an explicit contract error.
 /// 返回完整校验后的文档且不修改传入配置，或返回明确的契约错误。
-fn document_from_configuration(
+pub fn document_from_configuration(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
     descriptor: &ProviderDescriptor,
@@ -650,6 +650,44 @@ fn validate_document(
         format!("Standalone custom manifest for `{provider_id}` is invalid: {error}")
     })?;
     Ok(compiled.provider().clone())
+}
+
+/// Installs a portable provider into the candidate and returns whether it was added.
+/// 将可迁移供应商装入候选配置，并返回是否新增。
+pub fn install_portable_custom_provider(
+    configuration: &mut PersistedAiConfiguration,
+    document: CustomProviderManifestDocumentV1,
+) -> Result<bool, String> {
+    let provider_id = document.provider_manifest.provider_id.clone();
+    validate_custom_provider_identifier(&provider_id)?;
+    if let Some(existing) = configuration.custom_providers.get(&provider_id) {
+        // Importing another credential for the same provider must use the same definition.
+        // 再次导入同一供应商的其他凭据时，必须使用相同的供应商定义。
+        if document_from_configuration(configuration, &provider_id, existing)? == document {
+            return Ok(false);
+        }
+        return Err(format!(
+            "Custom provider `{provider_id}` has a different configuration."
+        ));
+    }
+    if configuration
+        .custom_provider_file_refs
+        .contains(&provider_id)
+    {
+        return Err(format!("Custom provider `{provider_id}` already exists."));
+    }
+    let descriptor = validate_document(&provider_id, &document)?;
+    apply_local_overrides(configuration, &provider_id, document.local_overrides)?;
+    configuration
+        .custom_providers
+        .insert(provider_id.clone(), descriptor);
+    configuration
+        .custom_provider_file_refs
+        .insert(provider_id.clone());
+    configuration
+        .custom_provider_manifests
+        .insert(provider_id, document.provider_manifest);
+    Ok(true)
 }
 
 /// Parses one complete current standalone document; any other shape is rejected.

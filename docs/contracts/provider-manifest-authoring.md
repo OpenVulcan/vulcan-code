@@ -100,6 +100,11 @@ ASCII 字节，后缀只允许 `[A-Za-z0-9._-]`，单文件上限为 4 MiB。
 手工模型、逐模型协议偏好、启用差异及模型执行覆盖。连接、凭据、会话与推理配置档仍保留在中央
 连接文件中；中央文件只持久化 `custom_provider_file_refs`，不会再次写入自定义供应商定义。
 
+「模型服务」的 `.vc_mcfg` 配置包使用 ZIP 容器保存 AES-256-GCM 密文。导出只读取已选凭据，并带上它们依赖的
+自定义供应商定义。迁移其他自定义供应商需要勾选对应选项。导入先验证密码和完整性并预览账号，再导入用户确认的项目。
+同一自定义供应商的定义完全一致时可以复用，用于分批导入不同的凭据。同 ID 的供应商定义冲突或同 ID 的连接已存在时，
+拒绝本次导入。使用轮换令牌的账号在目标安装上重新授权，配置包记录其账号名称及服务标识。
+
 编辑自定义供应商协议时，独立清单必须同时补齐新路由的引擎协议依赖，并保留已有高级 Profile 的
 依赖与引用。显式切换手工或发现来源时同步更新模型成员策略，避免拉取成功后仍被旧策略过滤；仅
 修改协议、名称或地址且来源选择未变化时，不能覆盖独立编写的成员限制。同步后的完整清单先通过
@@ -249,7 +254,7 @@ Schema v2 将凭据档的用途字段固定为 `default_usage_scopes`。它只�
 或新的二级路由握手才属于需要升级宿主的引擎能力。
 
 `session_header` 是服务入口级的动态请求头声明，不是固定请求头值，也不能通过 Request Profile 写入。
-宿主在最终 HTTP 与 WebSocket 请求头投影阶段，将当前公共会话 ID 写入该名称；没有会话 ID 时不发送，
+宿主在最终 HTTP 请求头投影阶段，将当前公共会话 ID 写入该名称；没有会话 ID 时不发送，
 未声明该字段时保持原有行为。若该名称已经存在于请求头，或属于宿主持有的鉴权、传输、身份请求头，
 运行时忽略 `session_header`，绝不覆盖既有值；其他请求头名称仍受宿主边界保护。
 
@@ -262,7 +267,7 @@ Schema v2 将凭据档的用途字段固定为 `default_usage_scopes`。它只�
 - 其他全部协议统一使用 VulcanCode 自有 `User-Agent`；
 - Codex 规范请求只作为跨协议转换的内部正文基线时，必须丢弃 Codex `originator`、会话标识和
   `User-Agent`，只保留目标协议自身要求的请求头；
-- HTTP 与 WebSocket 传输必须共用同一最终请求头投影，不能在某个传输分支重新覆盖协议身份。
+- HTTP 传输使用最终请求头投影，并遵循已冻结的协议身份。
 
 OpenRouter 应用归因由其随包 Manifest 的固定非秘密请求头声明。当前闭合契约同时发送
 `HTTP-Referer`、`X-OpenRouter-Title` 与 `X-OpenRouter-Categories`；分类只能使用官方识别值，单次
@@ -1040,27 +1045,25 @@ custom 历史只按其原始配对重放，不得借此向无声明的新请求�
 
 ### 7.1 Codex 模型行为与 Responses 路由特性
 
-公开 Responses 线路可在模型规则中配置 `responses_developer_prefix: true`（清单引擎 6 起），该规则必须选择 `openai-responses.v1`。当前只有 OpenAI 公开 API Key 入口的 GPT-6.2 Sol 和 Astra 启用。固定 System 正文按原顺序合并为 `input` 的第一条 developer 消息，调用方显式提供的 `request_instructions` 作为本次请求的顶层 `instructions`。已有 developer 消息、工具结果和带时序的宿主事件保留原顺序。模型规则或请求编码变化时，同步核对 [OpenAI 的 GPT-6.2 迁移说明](https://developers.openai.com/api/docs/guides/latest-model#migration-quickstart)。
+Responses 线路可在模型规则中配置 `responses_developer_prefix: true`（清单引擎 6 起），该规则必须选择 `openai-responses.v1`。OpenAI 公开 API Key 和 ChatGPT 套餐入口为 GPT-6.2 Sol 和 Astra 启用该规则。固定 System 正文按原顺序合并为 `input` 的第一条 developer 消息，调用方显式提供的 `request_instructions` 作为本次请求的顶层 `instructions`。已有 developer 消息、工具结果和带时序的宿主事件保留原顺序。模型规则或请求编码变化时，同步核对官方迁移说明。[OpenAI GPT-6.2 迁移说明](https://developers.openai.com/api/docs/guides/latest-model#migration-quickstart)
 
 `model_rules[].codex_behavior` 是精确模型规则拥有的封闭契约，只能用于
 `openai-codex-responses.v1`。它冻结 wire 方言、补丁/终端/搜索工具形态、并行调用、
-图片细节、verbosity、多智能体版本、说明注入、Node 审核、压缩哈希、工具输出截断、WebSocket 偏好
+图片细节、verbosity、多智能体版本、说明注入、Node 审核、压缩哈希、工具输出截断
 和实验上下文。解析结果随模型绑定进入路由修订指纹；重试、续跑和热更新不能按同名模型重新推断。
 第三方供应商即使提供 `gpt-6-astra` 等相同模型 ID，也不会自动继承 OpenAI 的 Lite 行为，除非其
 自身精确规则具有独立验证证据并显式声明。
 
 `wire_dialect: lite` 使用稳定 UUIDv5 前缀项、`additional_tools` 命名空间目录、
 `reasoning.context: all_turns`、`parallel_tool_calls: false` 和专用内部请求头；顶层
-`instructions` 与 `tools` 省略。HTTP 与 WebSocket 首包/增量包共享同一最终头投影。上下文压缩一律走本地摘要，不使用供应商的
+`instructions` 与 `tools` 省略。HTTP 使用最终请求头投影。上下文压缩一律走本地摘要，不使用供应商的
 远端压缩端点。
 由 Codex 宿主持久化的
 `configuration_update` 还要求可信的宿主来源和版本化私有历史；没有该宿主时不得伪造普通输入项。
 
-`protocol_routes[].responses_features` 持有传输和恢复契约：
+`protocol_routes[].responses_features` 持有恢复契约。
 
-- `websocket` 只在精确路由验证后启用；游标无效时只能按既有安全边界重建同一路由全量请求；
-  终态事件之前的 Socket 丢失（含已有局部输出、任意关闭码）按通用重试设置在新 Socket 上从检查点
-  重放，同一会话连续 5 次连接或 Socket 失败（或握手 426）后在进程剩余期间固定改走 HTTP；
+- 历史清单的 `websocket` 字段可读取。Responses 请求统一使用 HTTP。
 - `recovery: agent_space_result_and_usage_reconciliation_v1` 只允许 AgentSpace 的
   `chatgpt-plan` 入口声明。它把 `reconciliation_required` 标记为结果与用量待确认，保留请求和
   response 身份并禁止盲重放；没有供应商查询/幂等契约前不能称为自动重试。

@@ -2,6 +2,7 @@
 //! 公共 AI 连接设置与运行时元数据服务。
 
 mod catalog_projection;
+pub(crate) mod configuration_archive;
 mod connections;
 mod credential_repair;
 mod custom_models;

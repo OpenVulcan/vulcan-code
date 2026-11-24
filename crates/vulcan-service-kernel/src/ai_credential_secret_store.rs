@@ -266,6 +266,16 @@ fn credential_record_from_envelope(
             record.material_kind = String::from("static_bearer");
             record.access_token = Some(access_token.clone());
         }
+        CredentialSecretMaterial::OpenAiChatGptOAuth {
+            tokens,
+            client_id,
+            id_token,
+        } => {
+            record.material_kind = String::from("open_ai_chat_gpt_oauth");
+            apply_oauth_tokens(&mut record, tokens)?;
+            record.oauth_client_id = Some(client_id.clone());
+            record.id_token = Some(id_token.clone());
+        }
         CredentialSecretMaterial::OpenAiCodexOAuth {
             tokens,
             id_token,
@@ -442,6 +452,17 @@ fn credential_envelope_from_record(
                 &record.account_id,
                 "OpenCode billing workspace",
             )?,
+        },
+        ("open_ai_chat_gpt_oauth", None) => CredentialSecretMaterial::OpenAiChatGptOAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+            client_id: record
+                .oauth_client_id
+                .clone()
+                .ok_or_else(|| String::from("ChatGPT Plan credential has no issued client ID."))?,
+            id_token: record
+                .id_token
+                .clone()
+                .ok_or_else(|| String::from("ChatGPT Plan credential has no ID token."))?,
         },
         ("open_ai_codex_oauth", None) => CredentialSecretMaterial::OpenAiCodexOAuth {
             tokens: oauth_tokens_from_record(&record)?,

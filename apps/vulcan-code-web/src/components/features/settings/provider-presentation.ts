@@ -135,6 +135,12 @@ export function localizedServiceEntryPresentation(
   entry: PublicAiServiceEntry,
   t: TranslationResolver,
 ): ServiceEntryPresentation {
+  if (isRetiredCodexSubscription(providerId, entry.id)) {
+    return { title: t("settings.serviceEntry.title.retiredCodex"), tags: [] }
+  }
+  if (providerId === "openai" && entry.id === "chatgpt-plan") {
+    return { title: t("settings.serviceEntry.title.chatGptPlan"), tags: [] }
+  }
   if (providerId !== "alibaba") {
     return { title: entry.display_name, tags: [] }
   }
@@ -146,4 +152,10 @@ export function localizedServiceEntryPresentation(
     title: t(presentation.title),
     tags: presentation.tags.map(t),
   }
+}
+
+// Returns whether a provider entry is the retired native Codex subscription.
+// 判断供应商入口是否为已废弃的 Codex 套餐。
+export function isRetiredCodexSubscription(providerId: string, entryId: string): boolean {
+  return providerId === "openai" && entryId === "codex-subscription"
 }

@@ -743,6 +743,9 @@ pub enum ModelDiscoveryKind {
     /// OpenAI Codex subscription model catalog.
     /// OpenAI Codex 订阅模型目录。
     OpenAiCodex,
+    /// Account-scoped model catalog for Sign in with ChatGPT.
+    /// 通过 Sign in with ChatGPT 获取的账号专属模型目录。
+    OpenAiChatGpt,
     /// Anthropic public paginated models endpoint.
     /// Anthropic 公共分页模型端点。
     Anthropic,
@@ -1016,17 +1019,6 @@ pub struct ProtocolRoute {
 }
 
 impl ProtocolRoute {
-    /// Reports whether this exact route explicitly enables Responses WebSocket transport.
-    /// 报告当前精确路由是否显式启用 Responses WebSocket 传输。
-    pub fn responses_websocket_enabled(&self) -> bool {
-        self.responses_features.as_ref().is_some_and(|features| {
-            matches!(
-                features.websocket,
-                ResponsesWebsocketPolicy::Verified | ResponsesWebsocketPolicy::UnverifiedOverride
-            )
-        })
-    }
-
     /// Returns the exact recovery policy frozen into this route.
     /// 返回冻结到当前路由的精确恢复策略。
     ///

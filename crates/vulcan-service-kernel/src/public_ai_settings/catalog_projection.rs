@@ -169,6 +169,7 @@ pub(super) fn service_entry_model_directory_kind(
             | ModelDiscoveryKind::OpenVulcan
             | ModelDiscoveryKind::OpenAi
             | ModelDiscoveryKind::OpenAiCodex
+            | ModelDiscoveryKind::OpenAiChatGpt
             | ModelDiscoveryKind::Anthropic
             | ModelDiscoveryKind::AnthropicCompatible
             | ModelDiscoveryKind::Gemini

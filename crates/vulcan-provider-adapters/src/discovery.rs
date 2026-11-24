@@ -913,6 +913,69 @@ pub fn parse_openai_codex_model_catalog(
     })
 }
 
+/// Builds the plan's selectable conversation catalog from explicitly visible account models.
+/// 以账号明确可见的模型构建套餐对话模型目录。
+pub(crate) fn parse_openai_chatgpt_plan_catalog(
+    connection_id: &str,
+    generation: u64,
+    body: &str,
+) -> Result<ConnectionModelCatalog, String> {
+    /// Parses the account response with the documented model list.
+    /// 解析含有官方模型列表的账号响应。
+    #[derive(Deserialize)]
+    struct Catalog {
+        models: Vec<Entry>,
+    }
+
+    /// Holds a model's ID, display label and account visibility from OpenAI.
+    /// 保存 OpenAI 提供的模型 ID、显示标签和账号可见性。
+    #[derive(Deserialize)]
+    struct Entry {
+        slug: Option<String>,
+        display_name: Option<String>,
+        visibility: Option<String>,
+    }
+
+    let response: Catalog = parse_discovery_json(body, "ChatGPT Plan model list")?;
+    let mut models = Vec::new();
+    for entry in response
+        .models
+        .into_iter()
+        .filter(|entry| entry.visibility.as_deref() == Some("list"))
+    {
+        let id = entry
+            .slug
+            .ok_or_else(|| String::from("A visible ChatGPT Plan model has no slug."))?;
+        if id.starts_with("gpt-image-") || id == "gpt-image" {
+            continue;
+        }
+        let display_name = entry
+            .display_name
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| String::from("A visible ChatGPT Plan model has no display name."))?;
+        models.push(ConnectionModel {
+            id,
+            display_name,
+            capabilities: ModelCapabilities {
+                operations: vec![AiOperation::ConversationRespond],
+                evidence_revision: String::from("openai.chatgpt-plan.models.v1"),
+                ..ModelCapabilities::default()
+            },
+            capability_evidence: ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        });
+    }
+    validate_model_catalog_identities(&models, "ChatGPT Plan model list")?;
+    Ok(ConnectionModelCatalog {
+        connection_id: connection_id.to_owned(),
+        models,
+        generation,
+        page_count: 1,
+        discovery_schema_revision: String::from("openai.chatgpt-plan.models.v1"),
+    })
+}
+
 /// Registers the service-tier choice for one Codex model when its account catalog lists tiers.
 /// 当 Codex 账号目录为模型列出服务档位时，为其注册服务档位选择。
 ///

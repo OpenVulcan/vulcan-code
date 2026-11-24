@@ -128,6 +128,7 @@ pub(super) const fn model_discovery_is_remote(kind: ModelDiscoveryKind) -> bool 
         | ModelDiscoveryKind::OpenRouter
         | ModelDiscoveryKind::OpenAi
         | ModelDiscoveryKind::OpenAiCodex
+        | ModelDiscoveryKind::OpenAiChatGpt
         | ModelDiscoveryKind::Anthropic
         | ModelDiscoveryKind::AnthropicCompatible
         | ModelDiscoveryKind::Gemini

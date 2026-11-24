@@ -1,7 +1,7 @@
 import * as React from "react"
 import { CheckCircle2, CircleAlert, CircleDashed, ExternalLink, LoaderCircle, X } from "lucide-react"
 
-import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
+import { isRetiredCodexSubscription, localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { Button } from "@/ui-kit/primitives/button"
 import { useI18n } from "@/i18n"
 import { cx } from "@/ui-kit/behavior/core";
@@ -28,8 +28,10 @@ export function ProviderConnectPanel(props: {
 }) {
   const { t } = useI18n()
   const { provider } = props
-  const [entryId, setEntryId] = React.useState(provider.service_entries[0]?.id ?? "")
-  React.useEffect(() => setEntryId(provider.service_entries[0]?.id ?? ""), [provider.id, provider.service_entries])
+  const entries = React.useMemo(() => provider.service_entries.filter((entry) =>
+    !isRetiredCodexSubscription(provider.id, entry.id)), [provider.id, provider.service_entries])
+  const [entryId, setEntryId] = React.useState(entries[0]?.id ?? "")
+  React.useEffect(() => setEntryId(entries[0]?.id ?? ""), [entries, provider.id])
   return (
     <div className="vk-ms-connect-panel">
       <section className="vk-ms-panel">
@@ -38,7 +40,7 @@ export function ProviderConnectPanel(props: {
       <section className="vk-ms-panel">
         <h3>{t("settings.modelServices.connectPanel.entries")}</h3>
         <div className="vk-ms-entries" role="radiogroup" aria-label={t("settings.modelServices.connectPanel.entries")}>
-          {provider.service_entries.map((entry) => {
+          {entries.map((entry) => {
             const presentation = localizedServiceEntryPresentation(provider.id, entry, t)
             const billing = Array.from(new Set(entry.credential_profiles.map((profile) => profile.billing_kind)))
             return (

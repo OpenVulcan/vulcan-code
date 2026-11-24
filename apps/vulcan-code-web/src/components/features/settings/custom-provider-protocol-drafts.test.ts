@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 
 import {
   CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE,
-  codexResponsesFeaturePoliciesFromEntry,
   customProtocolRouteDraftValue,
   customProtocolRouteSelectValue,
   customProtocolProfileId,
@@ -175,27 +174,6 @@ describe("custom provider protocol drafts", () => {
 
   // Verifies execution-only capabilities are read solely from the exact Codex Responses route.
   // 验证仅影响执行的能力只从精确 Codex Responses 路由读取。
-  it("reads Codex Responses feature policies from their unique authoritative route", () => {
-    const entry = entryFixture()
-    entry.protocol_routes.push({
-      protocol_profile_id: "openai-codex-responses.v1",
-      endpoint_path: "/codex/responses",
-      request_headers: {},
-      model_discovery: "open_ai",
-      responses_features: {
-        websocket: "unverified_override",
-      },
-      verified: true,
-    })
-
-    expect(codexResponsesFeaturePoliciesFromEntry(entry)).toEqual({
-      websocketPolicy: "unverified_override",
-    })
-    expect(codexResponsesFeaturePoliciesFromEntry(entryFixture())).toEqual({
-      websocketPolicy: "disabled",
-    })
-  })
-
   it("serializes routes with full authentication round trip including explicit bearer", () => {
     const collection = protocolCollectionFromEntry(entryFixture())
     const routes = protocolRoutesFromCollection(collection)

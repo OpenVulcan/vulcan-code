@@ -7,9 +7,9 @@ use crate::execution::test_support::{
 use crate::runtime::test_support::{install_source_catalog, with_protocol_variants};
 use crate::{
     CredentialSecretEnvelope, PersistedAiConfiguration, ProviderExecutionClient, PublicAiRuntime,
-    parse_openai_model_catalog,
+    ResponsesRouteFeatures, ResponsesWebsocketPolicy, parse_openai_model_catalog,
 };
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::{io::AsyncWriteExt, net::TcpListener};
@@ -130,6 +130,12 @@ async fn public_responses_instruction_placement_on_the_wire() {
             .unwrap()
             .route;
         route.protocol_route.base_url_override = Some(origin.clone());
+        // Historical capability fields cannot select a transport after removal.
+        // 移除传输实现后，历史能力字段无法选择传输方式。
+        route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
+            websocket: ResponsesWebsocketPolicy::Verified,
+            recovery: Default::default(),
+        });
         // Keep messages independent of the optional instruction for a single dispatch.
         // 让消息历史独立于单次分派的可选指令。
         let mut request = minimal_request();
@@ -198,99 +204,87 @@ async fn public_responses_instruction_placement_on_the_wire() {
     }
 }
 
-/// Checks that both subscription models send the original Lite tool and developer prefix over WebSocket.
-/// 检查两种订阅模型实际通过 WebSocket 发送既有 Lite 工具及开发者前缀。
-#[tokio::test]
-async fn codex_responses_instruction_placement_on_the_wire() {
-    // Capture the normal subscription transport with a local peer and synthetic OAuth identity.
-    // 使用本地接收端及合成 OAuth 身份捕获正常的订阅传输。
-    let models = ["gpt-6.2-sol", "gpt-6.2-astra"];
-    // Exercise the production model binding for this service entry.
-    // 执行此服务入口的生产模型绑定。
+/// Checks that a saved native Codex account cannot resolve a conversation route.
+/// 验证已保存的原生 Codex 账号无法解析可执行对话路由。
+#[test]
+fn retired_codex_connection_is_visible_but_cannot_execute() {
     let (runtime, config) = model_fixture(
         "codex-subscription",
         OPENAI_CODEX_RESPONSES_PROFILE_ID,
-        &models,
+        &["gpt-6.2-sol"],
     );
-    // Use a synthetic credential of the type required by the selected service.
-    // 使用所选服务要求的凭据类型构造测试身份。
-    let secret = CredentialSecretEnvelope::new(crate::CredentialSecretMaterial::OpenAiCodexOAuth {
-        tokens: crate::OAuthTokenSet {
-            access_token: "fixture".into(),
-            refresh_token: "fixture".into(),
-            issued_at_unix_ms: 1,
-            expires_at_unix_ms: u64::MAX,
-            scopes: Default::default(),
-            account_subject: None,
-            email: None,
-        },
-        id_token: None,
-        account_id: Some("fixture".into()),
-    })
-    .unwrap()
-    .execution_secret()
+    assert!(config.connection_graph.connections.contains_key("fixture"));
+    assert!(!config.connection_is_enabled("fixture"));
+    assert!(
+        runtime
+            .resolve_connection_model_selection(&config, "fixture", "openai", "gpt-6.2-sol")
+            .is_err()
+    );
+}
+
+/// Verifies account-scoped model choices, GPT-6.2 prefix placement, and plan wire restrictions.
+/// 验证账号专属的模型选择、GPT‑6.2 提示词前缀及套餐线路限制。
+#[test]
+fn chatgpt_plan_projects_stateless_responses_and_no_image_generation() {
+    let account_models = crate::discovery::parse_openai_chatgpt_plan_catalog(
+        "fixture",
+        1,
+        r#"{"models":[
+            {"slug":"gpt-6.2-astra","display_name":"Astra","visibility":"list"},
+            {"slug":"gpt-image-2.6-sunburst","display_name":"Image","visibility":"list"},
+            {"slug":"gpt-6.1-sol","visibility":"hidden"}
+        ]}"#,
+    )
     .unwrap();
-    // Use the production encoder and transport with a direct loopback connection.
-    // 使用生产编码器和传输直连本地回环服务。
+    assert_eq!(
+        account_models
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["gpt-6.2-astra"]
+    );
+    let (runtime, config) = model_fixture(
+        crate::OPENAI_CHATGPT_PLAN_ENTRY_ID,
+        OPENAI_RESPONSES_PROFILE_ID,
+        &["gpt-6.2-astra"],
+    );
+    let route = runtime
+        .resolve_connection_model_selection(&config, "fixture", "openai", "gpt-6.2-astra")
+        .unwrap()
+        .route;
+    assert_eq!(route.entry.base_url, crate::OPENAI_CHATGPT_PLAN_BASE_URL);
+    assert!(route.responses_developer_prefix);
+    assert!(
+        runtime
+            .resolve_connection_model_selection(&config, "fixture", "openai", "gpt-6.2-sol")
+            .is_err()
+    );
     let client = ProviderExecutionClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
+        reqwest::Client::new(),
         Arc::new(ProtocolRegistry::first_batch().unwrap()),
     );
-    for model in models {
-        // Bind a fresh loopback endpoint for this transport.
-        // 为本次传输绑定新的回环端点。
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        // Resolve each model through the active manifest and its selected account.
-        // 通过活动清单和所选账号解析每个模型。
-        let mut route = runtime
-            .resolve_connection_model_selection(&config, "fixture", "openai", model)
-            .unwrap()
-            .route;
-        route.protocol_route.base_url_override =
-            Some(format!("http://{}", listener.local_addr().unwrap()));
-        // Read the transmitted body at the receiving end of the connection.
-        // 在连接的接收端读取实际发送的正文。
-        let peer = tokio::spawn(async move {
-            // Accept the actual connection initiated by the native subscription client.
-            // 接受原生订阅客户端主动发起的连接。
-            let (socket, _) = listener.accept().await.unwrap();
-            // Complete the WebSocket handshake on the receiving side.
-            // 在接收端完成 WebSocket 握手。
-            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
-            // Read the outgoing response.create frame before acknowledging completion.
-            // 在返回完成事件前读取发送的 response.create 帧。
-            let frame = ws.next().await.unwrap().unwrap();
-            // Inspect the JSON received by the peer.
-            // 检查接收端收到的 JSON。
-            let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
-            ws.send(tokio_tungstenite::tungstenite::Message::text(
-                r#"{"type":"response.completed","response":{"id":"resp_fixture"}}"#,
-            ))
-            .await
-            .unwrap();
-            body
-        });
-        // Keep messages independent of the optional instruction for a single dispatch.
-        // 让消息历史独立于单次分派的可选指令。
-        let mut request = minimal_request();
-        request.model_id = model.into();
-        request.cache_scope_id = Some("fixture-session".into());
-        request
-            .messages
-            .insert(0, message(MessageRole::System, "fixed-system"));
-        // Consume the production stream through its terminal event.
-        // 消费生产响应流直到终态事件。
-        let mut events = client.execute(route, request, secret.clone(), "wire-fixture".into());
-        while !matches!(
-            events.next().await.expect("missing completion").unwrap(),
-            AiStreamEvent::ResponseCompleted
-        ) {}
-        // Inspect the JSON received by the peer.
-        // 检查接收端收到的 JSON。
-        let body = peer.await.unwrap();
-        assert!(body.get("instructions").is_none());
-        assert_eq!(body["input"][0]["type"], "additional_tools");
-        assert_eq!(body["input"][1]["role"], "developer");
-        assert_eq!(body["input"][1]["content"][0]["text"], "fixed-system");
-    }
+    let mut request = minimal_request();
+    request.model_id = "gpt-6.2-astra".into();
+    request
+        .messages
+        .insert(0, message(MessageRole::System, "fixed-system"));
+    request.request_instructions = Some("only-this-call".into());
+    request.tools.push(
+        serde_json::from_value(json!({
+            "name": "list_files",
+            "description": "List files in the workspace.",
+            "input_schema": {"type": "object"}
+        }))
+        .unwrap(),
+    );
+    let encoded = client.encode_request(&route, &request).unwrap();
+    assert_eq!(encoded.body["store"], false);
+    assert_eq!(encoded.body["stream"], true);
+    assert_eq!(encoded.body["input"][0]["role"], "developer");
+    assert_eq!(encoded.body["instructions"], "only-this-call");
+    assert_eq!(encoded.body["tools"][0]["type"], "namespace");
+    assert_eq!(encoded.body["tools"][0]["tools"][0]["name"], "list_files");
+    assert!(encoded.body.get("max_output_tokens").is_none());
+    assert!(encoded.body.get("previous_response_id").is_none());
 }

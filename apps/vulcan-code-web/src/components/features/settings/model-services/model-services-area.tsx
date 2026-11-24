@@ -11,7 +11,7 @@ import { isFunctionalProvider } from "@/components/features/settings/provider-or
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { SystemProviderModelsDialog } from "@/components/features/settings/system-provider-models-dialog"
-import { PageEmptyState, PageTabs } from "@/components/page"
+import { PageEmptyState, PageTabs, PageToolbar } from "@/components/page"
 import { Button } from "@/ui-kit/primitives/button"
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
 import { useI18n } from "@/i18n"
@@ -25,6 +25,7 @@ import type {
 } from "@/types"
 
 import { ModelServicesDiagnostics } from "./model-services-diagnostics"
+import { ConfigurationArchiveDialog } from "./configuration-archive-dialog"
 import { alertSeverity, collectProviderAlerts, providerHealth, type ProviderAlert } from "./provider-alerts"
 import {
   buildProviderDirectory,
@@ -254,6 +255,7 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
 
       {tab === "providers" ? (
         <div className="vk-ms-shell">
+          {snapshot ? <ConfigurationArchiveControls snapshot={snapshot} onImported={setSnapshot} /> : null}
           {snapshot ? <AlertStrip alerts={alerts} onSelect={showProvider} providerName={providerName} /> : null}
           <div className="vk-ms-body">
             <ProviderRail
@@ -369,6 +371,34 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
         snapshot={snapshot}
       />
     </div>
+  )
+}
+
+// Opens the appropriate transfer form and publishes imported settings to the page.
+// 打开相应的迁移表单，并将导入的设置发布到当前页面。
+function ConfigurationArchiveControls(props: {
+  snapshot: PublicAiSettingsSnapshot
+  onImported: (snapshot: PublicAiSettingsSnapshot) => void
+}) {
+  const { t } = useI18n()
+  const [mode, setMode] = React.useState<"export" | "import" | null>(null)
+  return (
+    <>
+      <PageToolbar actions={
+        <>
+          <Button size="sm" type="button" variant="outline" onClick={() => setMode("export")}>
+            {t("settings.configurationArchive.export")}
+          </Button>
+          <Button size="sm" type="button" variant="outline" onClick={() => setMode("import")}>
+            {t("settings.configurationArchive.import")}
+          </Button>
+        </>
+      } />
+      {mode ? (
+        <ConfigurationArchiveDialog mode={mode} settings={props.snapshot}
+          onClose={() => setMode(null)} onImported={props.onImported} />
+      ) : null}
+    </>
   )
 }
 

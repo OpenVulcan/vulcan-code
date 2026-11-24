@@ -8,12 +8,18 @@ import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog";
 import { PublicAiConnectionDialog } from "@/components/features/settings/provider-list-settings";
 import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area";
+import { ConfigurationArchiveDialog } from "@/components/features/settings/model-services/configuration-archive-dialog";
+import { ProviderConnectPanel } from "@/components/features/settings/model-services/provider-connect";
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status";
 import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings";
 
 // Every mutation and read below is a detached mock, never a provider or local configuration write.
 // 下方所有变更和读取均为独立模拟，不写供应商或本地配置。
-const service = vi.hoisted(() => ({ load: vi.fn(), modelSave: vi.fn(), connectionSave: vi.fn(), providerSave: vi.fn(), prioritySave: vi.fn(), manifestGet: vi.fn(), manifestSync: vi.fn(), oauthStart: vi.fn(), oauthStatus: vi.fn(), oauthCommit: vi.fn(), oauthCancel: vi.fn(), connectionDelete: vi.fn() }));
+const service = vi.hoisted(() => ({
+  load: vi.fn(), modelSave: vi.fn(), connectionSave: vi.fn(), providerSave: vi.fn(), prioritySave: vi.fn(),
+  manifestGet: vi.fn(), manifestSync: vi.fn(), oauthStart: vi.fn(), oauthStatus: vi.fn(), oauthCommit: vi.fn(),
+  oauthCancel: vi.fn(), connectionDelete: vi.fn(), archiveExport: vi.fn(), archivePreview: vi.fn(), archiveImport: vi.fn(),
+}));
 vi.mock("@/service/settings-actions-service", async (importOriginal) => ({
   ...await importOriginal<object>(), loadPublicAiSettings: service.load,
   savePublicAiModelCapabilityOverrides: service.modelSave, addPublicAiConnection: service.connectionSave,
@@ -23,6 +29,9 @@ vi.mock("@/service/settings-actions-service", async (importOriginal) => ({
   startPublicAiOAuth: service.oauthStart, getPublicAiOAuthStatus: service.oauthStatus,
   commitPublicAiOAuthConnection: service.oauthCommit, cancelPublicAiOAuth: service.oauthCancel,
   removePublicAiConnection: service.connectionDelete,
+  exportPublicAiConfiguration: service.archiveExport,
+  previewPublicAiConfigurationImport: service.archivePreview,
+  importPublicAiConfiguration: service.archiveImport,
 }));
 
 // Shared test ownership guarantees portal cleanup even when an assertion fails.
@@ -302,4 +311,123 @@ it("locks reordering and account creation during a priority write and reloads af
   expect(service.load.mock.calls.length).toBe(loads + 1);
   expect(add.disabled).toBe(false);
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Synthetic priority write failed");
+});
+
+// Existing Codex records explain the migration, while the plan is the new selectable entry.
+// 已有 Codex 记录说明迁移方式，套餐作为可选择的新入口。
+it("shows the retirement notice and prevents adding a legacy Codex connection", async () => {
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
+  const [provider] = snapshot.providers;
+  const [connection] = snapshot.connections;
+  const [entry] = provider.service_entries;
+  provider.id = "openai";
+  provider.display_name = "OpenAI";
+  provider.service_entries = [
+    { ...entry, id: "codex-subscription", display_name: "Legacy Codex" },
+    { ...entry, id: "chatgpt-plan", display_name: "ChatGPT Plan" },
+  ];
+  connection.provider_id = "openai";
+  connection.service_entry_id = "codex-subscription";
+  connection.enabled = false;
+  snapshot.providers = [provider];
+  snapshot.connections = [connection];
+  service.load.mockResolvedValue(snapshot);
+  await render(<ModelServicesArea />);
+  const account = document.querySelector(".vk-ms-account")!;
+  expect(account.querySelector('[role="status"]')?.textContent)
+    .toBe(readLocaleMessage("en-US", "settings.credentials.retiredCodexMigration"));
+  expect(account.querySelector('[role="switch"]')).toBeNull();
+  const connect = vi.fn();
+  await render(<ProviderConnectPanel busy={false} onConnect={connect} provider={provider} />);
+  expect(document.querySelectorAll('[role="radio"]')).toHaveLength(1);
+  await act(async () => button(readLocaleMessage("en-US", "settings.modelServices.connectPanel.connect")).click());
+  expect(connect).toHaveBeenCalledExactlyOnceWith("chatgpt-plan");
+});
+
+// Locates a checkbox by its visible credential name or group action.
+// 按可见凭据名或分组操作定位复选框。
+function archiveCheckbox(label: string): HTMLButtonElement {
+  const checkbox = [...document.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]')]
+    .find((entry) => entry.closest("label")?.textContent?.startsWith(label));
+  expect(checkbox, label).toBeTruthy();
+  return checkbox!;
+}
+
+// Locates a migration password field through the current locale catalog.
+// 通过当前语言目录定位配置迁移密码输入框。
+function archivePassword(key: "password" | "confirmPassword"): HTMLInputElement {
+  const label = readLocaleMessage("en-US", `settings.configurationArchive.${key}`);
+  const input = [...document.querySelectorAll<HTMLInputElement>('input[type="password"]')]
+    .find((entry) => entry.closest("label")?.textContent === label);
+  expect(input, label).toBeTruthy();
+  return input!;
+}
+
+// Exercises the page entry point and verifies only the single checked ID is exported.
+// 通过设置页面入口验证导出仅提交唯一勾选的 ID。
+it("exports only the credentials selected on the model services page", async () => {
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
+  const chosen = snapshot.connections.find((entry) => entry.id === "audit-account-2")!;
+  const exportLabel = readLocaleMessage("en-US", "settings.configurationArchive.export");
+  const selectAll = readLocaleMessage("en-US", "settings.misc.selectAll");
+  service.load.mockResolvedValue(snapshot);
+  service.archiveExport.mockRejectedValueOnce(new Error("Fixture does not write a download"));
+  await render(<ModelServicesArea />);
+  await act(async () => button(exportLabel).click());
+  await type(archivePassword("password"), "fixture password");
+  await type(archivePassword("confirmPassword"), "fixture password");
+  const submit = document.querySelector<HTMLButtonElement>('[role="dialog"] button[type="submit"]')!;
+  await act(async () => archiveCheckbox(selectAll).click());
+  expect(submit.disabled).toBe(true);
+  await act(async () => archiveCheckbox(chosen.display_name).click());
+  await act(async () => submit.click());
+  expect(service.archiveExport).toHaveBeenCalledExactlyOnceWith("fixture password", [chosen.id], false);
+});
+
+// Reviews an encrypted file, skips credentials already present and imports the confirmed subset.
+// 预览加密文件，跳过已存在的凭据并导入已确认的子集。
+it("binds the import selection to the previewed file and password", async () => {
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
+  const existing = snapshot.connections.find((entry) => entry.id === "audit-account-1")!;
+  const preview = {
+    providerCount: 1,
+    accounts: [
+      { connectionId: existing.id, displayName: "Installed account" },
+      { connectionId: "imported-first", displayName: "First available credential" },
+      { connectionId: "imported-second", displayName: "Second available credential" },
+    ].map((account, index) => ({ ...account, index, providerId: existing.provider_id, serviceEntryId: existing.service_entry_id })),
+  };
+  const onImported = vi.fn();
+  const reviewLabel = readLocaleMessage("en-US", "settings.configurationArchive.review");
+  const importLabel = readLocaleMessage("en-US", "settings.configurationArchive.import");
+  service.archivePreview.mockResolvedValue(preview);
+  service.archiveImport.mockResolvedValue({ snapshot, providerCount: 0, accountCount: 1, signInRequired: [] });
+  await render(<ConfigurationArchiveDialog mode="import" settings={snapshot} onClose={vi.fn()} onImported={onImported} />);
+  const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const file = new File(["synthetic ciphertext"], "fixture.vc_mcfg");
+  const encoded = btoa("synthetic ciphertext");
+  await act(async () => {
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await type(archivePassword("password"), "first password");
+  await act(async () => {
+    button(reviewLabel).click();
+    await vi.waitFor(() => expect(service.archivePreview).toHaveBeenCalledExactlyOnceWith(encoded, "first password"));
+  });
+  expect(archiveCheckbox("Installed account").disabled).toBe(true);
+  expect(service.archiveImport).not.toHaveBeenCalled();
+  await type(archivePassword("password"), "changed password");
+  expect(document.querySelector('[role="dialog"] fieldset')).toBeNull();
+  await act(async () => {
+    button(reviewLabel).click();
+    await vi.waitFor(() => expect(service.archivePreview).toHaveBeenLastCalledWith(encoded, "changed password"));
+  });
+  const omitted = preview.accounts.find((account) => account.connectionId === "imported-first")!;
+  const selected = preview.accounts.find((account) => account.connectionId === "imported-second")!;
+  await act(async () => archiveCheckbox(omitted.displayName).click());
+  await act(async () => button(importLabel).click());
+  expect(service.archiveImport).toHaveBeenCalledExactlyOnceWith(encoded, "changed password", [selected.index], false);
+  expect(onImported).toHaveBeenCalledExactlyOnceWith(snapshot);
+  expect(document.querySelector('input[type="password"]')).toBeNull();
 });

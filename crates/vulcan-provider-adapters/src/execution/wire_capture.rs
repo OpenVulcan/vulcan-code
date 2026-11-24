@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 use vulcan_ai_contract::AiStreamEvent;
-use vulcan_llm_core::{EncodedWireRequest, ResponsesWebsocketRawFrame};
+use vulcan_llm_core::EncodedWireRequest;
 
 /// Carries the secret-safe transport request captured immediately before dispatch.
 /// 承载在分派前立即捕获且不含秘密值的传输请求。
@@ -313,34 +313,6 @@ impl ProviderWireResponseCaptureGuard {
             capture.chunk_index_truncated = true;
         }
         Self::observe_body_bytes(capture, chunk);
-    }
-
-    /// Records one decoded WebSocket application frame before JSON and protocol parsing.
-    /// 在 JSON 与协议解析前记录一条已解码 WebSocket 应用帧。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `frame` contains the exact application payload and its stable decoded frame kind.
-    /// `frame` 包含精确应用载荷及其稳定的已解码帧类型。
-    pub(super) fn observe_websocket_frame(&mut self, frame: ResponsesWebsocketRawFrame) {
-        if let Some(hasher) = self.body_hasher.as_mut() {
-            hasher.update(frame.payload.as_slice());
-        }
-        let Some(capture) = self.capture.as_mut() else {
-            return;
-        };
-        if capture.frames.len() < PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_CHUNKS {
-            capture.frames.push(ProviderWireResponseFrameCapture {
-                kind: frame.kind,
-                offset: capture.received_bytes,
-                length: u64::try_from(frame.payload.len()).unwrap_or(u64::MAX),
-                observed_at_unix_ms: provider_wire_capture_timestamp_ms(),
-                sha256: hex::encode(Sha256::digest(frame.payload.as_slice())),
-            });
-        } else {
-            capture.frame_index_truncated = true;
-        }
-        Self::observe_body_bytes(capture, frame.payload.as_slice());
     }
 
     /// Appends one raw payload to the bounded body while retaining the unbounded byte count.

@@ -3048,6 +3048,28 @@ async fn service_start_conversation_execution(
         }
         None => None,
     };
+    if activation == SubmissionActivation::Background
+        && let Some(connection_id) = existing_bound_request_config
+            .as_ref()
+            .and_then(|config| config.connection_id.as_deref())
+    {
+        let configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
+        if configuration
+            .connection_graph
+            .connections
+            .get(connection_id)
+            .is_some_and(|connection| {
+                vulcan_provider_adapters::is_openai_chatgpt_plan(
+                    &connection.provider_id,
+                    &connection.service_entry_id,
+                )
+            })
+        {
+            return Err(String::from(
+                "ChatGPT Plan is available in Vulcan Code only. Select another account for external MCP submissions.",
+            ));
+        }
+    }
     let (reasoning_effort, model_selection) = if submission_session_id.is_some() {
         (None, None)
     } else if let Some(config) = dropped_request_config.as_ref() {
@@ -3363,31 +3385,44 @@ async fn service_start_conversation_execution(
     // 在发布根输入前，按实际所选模型解析新会话默认窗口。
     // The selected model also titles the new session when no title route is saved.
     // 未保存标题路由时，所选模型同时用于为新会话生成标题。
-    let (new_session_context_window_node_id, new_session_model) =
-        if materialized_session.kind == PromptSessionMaterializationKind::Created {
-            let runtime = agent_runtime.public_ai_runtime.as_ref();
-            let configuration = runtime.configuration_snapshot()?;
-            let selected_model = if let Some(selection) = model_selection.as_ref() {
-                Some(resolve_enabled_submission_model_selection(
-                    runtime,
-                    &configuration,
-                    selection,
-                )?)
-            } else {
-                crate::public_ai_workbench_selection(&configuration, runtime, None, None)?
-            };
-            let window = match selected_model.as_ref() {
-                Some(selected) => configuration.new_session_context_window_for_model(
-                    selected.route.connection.provider_id.as_str(),
-                    selected.model.id.as_str(),
-                    selected.model.capabilities.context_limit,
-                )?,
-                None => None,
-            };
-            (window, selected_model)
+    let (new_session_context_window_node_id, new_session_model) = if materialized_session.kind
+        == PromptSessionMaterializationKind::Created
+    {
+        let runtime = agent_runtime.public_ai_runtime.as_ref();
+        let configuration = runtime.configuration_snapshot()?;
+        let selected_model = if let Some(selection) = model_selection.as_ref() {
+            Some(resolve_enabled_submission_model_selection(
+                runtime,
+                &configuration,
+                selection,
+            )?)
         } else {
-            (None, None)
+            crate::public_ai_workbench_selection(&configuration, runtime, None, None)?
         };
+        if activation == SubmissionActivation::Background
+            && selected_model.as_ref().is_some_and(|selection| {
+                vulcan_provider_adapters::is_openai_chatgpt_plan(
+                    &selection.route.connection.provider_id,
+                    &selection.route.connection.service_entry_id,
+                )
+            })
+        {
+            return Err(String::from(
+                "ChatGPT Plan is available in Vulcan Code only. Select another account for external MCP submissions.",
+            ));
+        }
+        let window = match selected_model.as_ref() {
+            Some(selected) => configuration.new_session_context_window_for_model(
+                selected.route.connection.provider_id.as_str(),
+                selected.model.id.as_str(),
+                selected.model.capabilities.context_limit,
+            )?,
+            None => None,
+        };
+        (window, selected_model)
+    } else {
+        (None, None)
+    };
     // Bind the initial reasoning level to the exact model resolved for the new session.
     // 将首个思考档位绑定到为新会话解析出的精确模型。
     let reasoning_effort = new_session_model.as_ref().map(|selection| {

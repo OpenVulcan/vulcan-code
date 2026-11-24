@@ -29,6 +29,12 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+# Derives password keys and authenticates encrypted configuration archives.
+# 派生密码密钥并认证加密配置包。
+ring.workspace = true
+# Stores encrypted configuration archives and builds spreadsheet test fixtures.
+# 存储加密配置包并构建电子表格测试夹具。
+zip.workspace = true
 time = { workspace = true, features = ["formatting", "local-offset", "macros", "parsing", "serde"] }
 tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
@@ -91,9 +97,6 @@ vulcan-process-lifecycle.workspace = true
 # Generates real portable image fixtures for composer conversion tests.
 # 为输入区转换测试生成真实可移植图片夹具。
 image.workspace = true
-# Writes small spreadsheet fixtures for the sheet preview tests.
-# 为工作表预览测试写入小型电子表格夹具。
-zip.workspace = true
 # Isolates full startup and restart tests without changing user-profile environment variables.
 # 隔离完整启动和重启测试，不修改用户主目录环境变量。
 vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
