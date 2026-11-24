@@ -88,6 +88,32 @@ ChatGPT 套餐按官方流程向 `POST https://api.openai.com/v1/responses` 发�
 - [官方图片参数与尺寸约束](https://developers.openai.com/api/docs/guides/image-prompting)
 - [官方图片生成指南](https://developers.openai.com/api/docs/guides/image-generation)
 
+## 同步图片编辑
+
+核对日期：2026-11-24。OpenAI API 入口的 Image 2、Image 2.5 Flare、Image 2.5 Sunburst
+和两款 Image 2.6 都注册独立的 `POST /images/edits` 目标。用 `vulcan_image_edit` 的
+`source_paths` 传入按顺序排列的 1～16 张参考图。宿主把本地文件转为 JSON 图片引用。
+Image 2 支持遮罩，Image 2.5 还支持标注层。遮罩或标注层作用于第一张图，两者互斥。
+用 `mask_path` 提供与第一张原图同尺寸的带 Alpha 通道的 PNG。透明区域引导编辑。
+宿主保留遮罩字节并发送为 `mask.image_url`。原图与遮罩的格式、尺寸及 Alpha 通道由上游校验。
+Image 2 的输入保真度固定为高，请求省略 `input_fidelity`。
+
+- [官方参考图和编辑说明](https://developers.openai.com/api/docs/guides/image-generation#edit-images)
+- [官方图片编辑请求格式](https://developers.openai.com/api/reference/resources/images/methods/edit)
+
+### Codex 套餐图片编辑
+
+Codex 登录入口用 GPT Image 2 调用同一后端的 `images/edits`。按官方 Codex 工具在
+2026-11-24 的实现接受 1～5 张有序参考图，返回一张 PNG。该目标按 Codex 请求类型提供
+参考图和提示词，不声明遮罩或标注层。ChatGPT 套餐登录入口的 Responses 预览限制不开放原生生图工具。
+
+- [Codex 图片工具与参考图上限](https://github.com/openai/codex/blob/75df5098a6d92b40dc61e7a9964233ce9c359677/codex-rs/ext/image-generation/src/tool.rs)
+- [Codex 图片编辑客户端](https://github.com/openai/codex/blob/75df5098a6d92b40dc61e7a9964233ce9c359677/codex-rs/codex-api/src/endpoint/images.rs)
+- [ChatGPT 套餐调用限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+
+Image 2 和 2.5 的本地回环 fixture 检查原图顺序、单独传送 PNG 遮罩或标注层、使用目标声明的
+凭据和参数，以及回收输出图片。第三方入口的独立媒体能力以各自经过验证的清单声明为准。
+
 ### Image 2.6 生成与编辑选项
 
 两款 2.6 模型支持独立于 `quality` 的 `complexity`，可选 `low / medium / high`，官方默认 `high`。

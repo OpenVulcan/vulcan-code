@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.core-models.v1",
-  "revision": 7,
-  "published_at": "2026-11-19T06:05:03Z",
+  "revision": 8,
+  "published_at": "2026-11-24T13:58:34Z",
   "models": [
     {
       "model_id": "beam-free",
@@ -1325,49 +1325,76 @@
       "model_id": "gpt-image-2",
       "display_name": "GPT Image 2",
       "vendor": "openai",
-      "aliases": ["openai: gpt image 2"],
+      "aliases": [
+        "openai: gpt image 2"
+      ],
       "capabilities": {
-        "operations": ["image_generate"],
-        "input_resources": [],
-        "output_resources": ["image"],
+        "operations": [
+          "image_generate",
+          "image_edit"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [
+          "image"
+        ],
         "reasoning": "unsupported",
         "reasoning_control": "fixed_off",
         "reasoning_efforts": []
       },
-      "verification": "seeded",
-      "provenance_ref": "builtin:core.seed.2026-11-08"
+      "verification": "verified",
+      "provenance_ref": "https://developers.openai.com/api/docs/models/gpt-image-2"
     },
     {
       "model_id": "gpt-image-2.5-flare",
       "display_name": "GPT Image 2.5 Flare",
       "vendor": "openai",
-      "aliases": ["openai: gpt image 2.5 flare"],
+      "aliases": [
+        "openai: gpt image 2.5 flare"
+      ],
       "capabilities": {
-        "operations": ["image_generate"],
-        "input_resources": [],
-        "output_resources": ["image"],
+        "operations": [
+          "image_generate",
+          "image_edit"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [
+          "image"
+        ],
         "reasoning": "unsupported",
         "reasoning_control": "fixed_off",
         "reasoning_efforts": []
       },
-      "verification": "seeded",
-      "provenance_ref": "builtin:core.seed.2026-11-08"
+      "verification": "verified",
+      "provenance_ref": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare"
     },
     {
       "model_id": "gpt-image-2.5-sunburst",
       "display_name": "GPT Image 2.5 Sunburst",
       "vendor": "openai",
-      "aliases": ["openai: gpt image 2.5 sunburst"],
+      "aliases": [
+        "openai: gpt image 2.5 sunburst"
+      ],
       "capabilities": {
-        "operations": ["image_generate"],
-        "input_resources": [],
-        "output_resources": ["image"],
+        "operations": [
+          "image_generate",
+          "image_edit"
+        ],
+        "input_resources": [
+          "image"
+        ],
+        "output_resources": [
+          "image"
+        ],
         "reasoning": "unsupported",
         "reasoning_control": "fixed_off",
         "reasoning_efforts": []
       },
-      "verification": "seeded",
-      "provenance_ref": "builtin:core.seed.2026-11-08"
+      "verification": "verified",
+      "provenance_ref": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst"
     },
     {
       "model_id": "gpt-image-2.6-sunburst",
@@ -3024,6 +3051,18 @@
   "provenance": {
     "status": "migrated",
     "sources": [
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-image-2",
+        "note": "Official OpenAI model card for gpt-image-2, including image inputs and the Images Edits endpoint."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare",
+        "note": "Official OpenAI model card for gpt-image-2.5-flare, including image inputs and the Images Edits endpoint."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst",
+        "note": "Official OpenAI model card for gpt-image-2.5-sunburst, including image inputs and the Images Edits endpoint."
+      },
       {
         "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
         "note": "Official OpenAI model card for gpt-6.2-sol."

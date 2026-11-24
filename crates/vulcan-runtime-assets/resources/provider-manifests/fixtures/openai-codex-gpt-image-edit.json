@@ -1,0 +1,212 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "openai-codex-gpt-image-edit",
+  "base_manifest": "openai.json",
+  "production_target_refs": [
+    "openai::codex-subscription.gpt-image-2.edit"
+  ],
+  "tool_target": {
+    "target_id": "codex-subscription.fixture-openai-codex-gpt-image-edit",
+    "description": "Edit an image or create a new image from ordered references through the Codex subscription.",
+    "service_entry_id": "codex-subscription",
+    "credential_profile_ids": [
+      "codex-oauth"
+    ],
+    "upstream_target_id": "gpt-image-2",
+    "display_name": "GPT Image 2 Editing",
+    "tool_id": "vulcan_image_edit",
+    "capability": "image_edit",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Describe the requested edit or the new image to create from the references."
+        },
+        "background": {
+          "type": "string",
+          "enum": [
+            "transparent",
+            "opaque",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "model": {
+          "type": "string",
+          "const": "gpt-image-2",
+          "default": "gpt-image-2"
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "size": {
+          "type": "string",
+          "const": "auto",
+          "default": "auto"
+        },
+        "source_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "One to five local source image paths in reference order."
+        }
+      },
+      "required": [
+        "prompt",
+        "source_paths"
+      ]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": [
+        "image/png"
+      ],
+      "resource_decoders": [
+        {
+          "source_path": "/data/0/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "max_bytes": 104857600,
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/openai-codex-gpt-image-edit",
+      "authentication": "open_ai_codex_bearer",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    },
+    "extension_profile": {
+      "summary": "Codex subscription image editing with ordered reference images.",
+      "input_modes": [
+        "reference_image"
+      ],
+      "resolution_policy": {
+        "mode": "provider_managed"
+      },
+      "format_policy": {
+        "input_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "output_formats": [
+          "png"
+        ]
+      },
+      "constraints": [
+        "Use ordered references and the Codex provider-managed output size."
+      ],
+      "evidence_refs": [
+        "docs/contracts/providers/openai-public-api-verified-facts.md#codex-套餐图片编辑",
+        "https://github.com/openai/codex/blob/75df5098a6d92b40dc61e7a9964233ce9c359677/codex-rs/ext/image-generation/src/tool.rs"
+      ]
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.openai-codex-gpt-image-edit",
+    "operation": "image_edit",
+    "carrier": "provider_tool",
+    "input_resources": [
+      "image"
+    ],
+    "output_resources": [
+      "image"
+    ],
+    "tool_target_refs": [
+      "codex-subscription.fixture-openai-codex-gpt-image-edit"
+    ],
+    "request_profile_refs": [
+      "openai.public-api.image-edit.request.v1"
+    ],
+    "response_profile_refs": [],
+    "upload_channel_refs": [
+      "public-api.image-edit-data-url"
+    ],
+    "upload_bindings": [
+      {
+        "source_path": "/source_paths",
+        "target_path": "/source_images",
+        "upload_channel_refs": [
+          "public-api.image-edit-data-url"
+        ],
+        "mime_types_by_extension": {
+          "jpg": "image/jpeg",
+          "jpeg": "image/jpeg",
+          "png": "image/png",
+          "webp": "image/webp"
+        },
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "timeout_ms": 300000,
+    "idempotent": false
+  },
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "arguments": {
+    "prompt": "Create a layout using the two images in order.",
+    "source_paths": [
+      "data:image/png;base64,iVBORw0KGgo=",
+      "data:image/png;base64,iVBORw0KGgpy"
+    ],
+    "quality": "auto",
+    "background": "auto",
+    "size": "auto"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/openai-codex-gpt-image-edit",
+      "expected_headers": {
+        "authorization": "Bearer fixture-secret",
+        "chatgpt-account-id": "fixture-account"
+      },
+      "expected_json_body": {
+        "model": "gpt-image-2",
+        "prompt": "Create a layout using the two images in order.",
+        "images": [
+          {
+            "image_url": "data:image/png;base64,iVBORw0KGgo="
+          },
+          {
+            "image_url": "data:image/png;base64,iVBORw0KGgpy"
+          }
+        ],
+        "quality": "auto",
+        "background": "auto",
+        "size": "auto"
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": [
+          {
+            "b64_json": "iVBORw0KGgo="
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

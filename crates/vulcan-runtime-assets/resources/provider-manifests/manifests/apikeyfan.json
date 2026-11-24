@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "apikeyfan",
-  "revision": 12,
-  "published_at": "2026-11-08T06:25:07Z",
+  "revision": 13,
+  "published_at": "2026-11-24T13:58:34Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -617,6 +617,8 @@
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
+        "operations": ["image_generate"],
+        "input_resources": [],
         "provider_native_tools": [],
         "evidence_revision": "apikeyfan.gpt-image-2.5-sunburst.official-and-skill.2026-09-22"
       }
@@ -630,6 +632,8 @@
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
+        "operations": ["image_generate"],
+        "input_resources": [],
         "provider_native_tools": [],
         "evidence_revision": "apikeyfan.gpt-image-2.5-flare.official-and-user.2026-09-22"
       }
@@ -643,6 +647,8 @@
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
+        "operations": ["image_generate"],
+        "input_resources": [],
         "provider_native_tools": [],
         "evidence_revision": "apikeyfan.verified-groups.2026-08-14"
       }

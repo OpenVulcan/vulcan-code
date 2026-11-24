@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 
 use crate::provider_task::ProviderAsyncTaskPoll;
 use crate::{
-    CredentialSecretEnvelope, ManifestOwnership, MediaUploadCancellation,
-    ProviderToolExecutionKind, ProviderToolNormalizedOutput,
+    AuthenticationProjection, CredentialSecretEnvelope, CredentialSecretMaterial,
+    ManifestOwnership, MediaUploadCancellation, OAuthTokenSet, ProviderToolExecutionKind,
+    ProviderToolNormalizedOutput,
 };
 use vulcan_llm_core::UsageRecordKind;
 
@@ -666,8 +667,27 @@ async fn execute_provider_manifest_execution_fixture(
     let (origin, server) = spawn_fixture_server(fixture.interactions.clone())?;
     entry.base_url = origin.clone();
     target.execution.endpoint_base_url = Some(origin.clone());
-    let secret = CredentialSecretEnvelope::new_api_key(String::from("fixture-secret"))?
-        .execution_secret()?;
+    // Supply the synthetic account identity required by the compiled Codex authentication projection.
+    // 为编译后的 Codex 鉴权投影提供其要求的合成账号标识。
+    let secret = match target.execution.authentication {
+        AuthenticationProjection::OpenAiCodexBearer => {
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::OpenAiCodexOAuth {
+                tokens: OAuthTokenSet {
+                    access_token: String::from("fixture-secret"),
+                    refresh_token: String::from("fixture-refresh"),
+                    issued_at_unix_ms: 1,
+                    expires_at_unix_ms: 2,
+                    scopes: BTreeSet::new(),
+                    account_subject: None,
+                    email: None,
+                },
+                id_token: None,
+                account_id: Some(String::from("fixture-account")),
+            })?
+        }
+        _ => CredentialSecretEnvelope::new_api_key(String::from("fixture-secret"))?,
+    }
+    .execution_secret()?;
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()

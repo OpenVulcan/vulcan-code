@@ -1682,6 +1682,7 @@
         "openai: gpt image 2"
       ],
       "input_modalities": [
+        "image",
         "text"
       ],
       "output_modalities": [
@@ -1696,6 +1697,7 @@
         "openai: gpt image 2.5 flare"
       ],
       "input_modalities": [
+        "image",
         "text"
       ],
       "output_modalities": [
@@ -1710,6 +1712,7 @@
         "openai: gpt image 2.5 sunburst"
       ],
       "input_modalities": [
+        "image",
         "text"
       ],
       "output_modalities": [
