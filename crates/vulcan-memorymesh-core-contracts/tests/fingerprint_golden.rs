@@ -353,21 +353,23 @@ fn remaining_commands_match_golden() {
 /// 验证 `PreCheck` 指纹黄金覆盖时间线、Unicode 与两种模式。
 #[test]
 fn precheck_fingerprint_matches_golden() {
-    // The identity fields (operation id, idempotency key, observed time) must not
-    // participate in the material, so this exact digest freezes the cross-language contract.
-    // 身份字段（操作标识、幂等键、观测时间）不参与材料，因此该精确摘要冻结跨语言契约。
+    // The cross-language digest excludes mutation identity and the clock sampled for each attempt.
+    // 跨语言摘要排除变更身份与每次尝试重新采样的时钟。
     assert_eq!(
         request_fingerprint(&precheck_command(), SNAPSHOT_ID),
-        "fp256:e0170c5246fbc0522fa175fcdc1276de74d8ea1fe8463f9078f26620ebc2e85e"
+        "fp256:284afc3eacd5d8d953b8c81d1cb18dd76cce7f0cedbaa2e493fcc029de467f35"
     );
 }
 
-/// Verifies identical semantic payloads with different identity fields share one fingerprint.
-/// 验证不同身份字段但相同语义载荷共享同一指纹。
+/// Verifies that resampling the clock and changing identity preserve the fingerprint of a retry.
+/// 验证重试重新采样时钟和更改身份后，指纹保持一致。
 #[test]
 fn fingerprint_ignores_identity_and_observation_time() {
     let first = request_fingerprint(&precheck_command(), SNAPSHOT_ID);
     let retry = CoreCommand::PreCheck(PreCheckCommand {
+        // A retry can sample a later clock while replaying the same submitted query.
+        // 重试可以重新采样更晚的时钟，同时重放同一已提交查询。
+        now_ns: 2_000,
         mutation_identity: MutationIdentity {
             operation_id: OperationId::new("op-golden-retry")
                 .expect("operation identity must be valid"),

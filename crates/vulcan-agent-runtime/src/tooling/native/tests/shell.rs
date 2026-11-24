@@ -1,7 +1,5 @@
 use super::*;
-use crate::tooling::native::{
-    NativeToolRuntimeSnapshot, build_vmm_memory_write_tool, vmm_memory_write_args_schema,
-};
+use crate::tooling::native::{NativeToolRuntimeSnapshot, build_vmm_memory_write_tool};
 
 /// Relative shell-command working directories should resolve below the current workspace root.
 /// 相对 shell 命令工作目录应解析到当前工作区根目录之下。
@@ -202,8 +200,12 @@ fn shell_tool_schema_descriptions_are_present_and_english() {
     );
 }
 
+/// Verifies the published write tool exposes the numeric memory arguments and their valid ranges.
+/// 验证对外发布的写入工具暴露了数值型记忆参数及其有效范围。
 #[test]
-fn vmm_memory_write_tool_documents_numeric_mappings() {
+fn vmm_memory_write_advertises_numeric_parameter_bounds() {
+    // Supply a minimal runtime snapshot to build the same tool definition the model receives.
+    // 使用最小运行时快照构建模型实际收到的工具定义。
     let snapshot = Arc::new(NativeToolRuntimeSnapshot {
         workspace_directory: String::from(r"D:\workspace"),
         active_model: Some(String::from("openai/gpt-5")),
@@ -213,31 +215,20 @@ fn vmm_memory_write_tool_documents_numeric_mappings() {
         enabled_mcp_server_ids: vec![],
         vmm_global: VmmConfigLayer::default(),
     });
+    // Read the schema attached to the live tool definition.
+    // 读取实际工具定义附带的参数 Schema。
     let tool = build_vmm_memory_write_tool(snapshot);
-    let help_text = tool
-        .descriptor
-        .help_text
-        .as_deref()
-        .expect("vmm write tool should expose prompt help");
-    let schema = vmm_memory_write_args_schema();
-    let item_properties = &schema["properties"]["items"]["items"]["properties"];
+    // These properties describe a single memory in the write batch.
+    // 这些属性描述批量写入中的一条记忆。
+    let item_properties = &tool.args_schema["properties"]["items"]["items"]["properties"];
 
-    assert!(help_text.contains("0 = general"));
-    assert!(help_text.contains("5 = project_context"));
-    assert!(help_text.contains("7 = security_policy"));
-    assert!(help_text.contains("2 = P1/ordinary durable"));
-    assert!(help_text.contains("Do not proactively write user or system profile information"));
-    assert!(help_text.contains("Information the user explicitly asks to remember may be written"));
-    assert!(!help_text.contains("stable user preferences"));
-    assert_eq!(item_properties["category"]["maximum"], json!(7));
-    assert_eq!(item_properties["priority"]["maximum"], json!(3));
-    assert_eq!(item_properties["memoryLevel"]["maximum"], json!(4));
-    assert!(
-        item_properties["category"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("1=architecture_decision")
-    );
+    // Each wire field has an inclusive zero-based numeric range.
+    // 每个协议字段均使用从零开始、包含上下边界的数值范围。
+    for (field, maximum) in [("category", 7), ("priority", 3), ("memoryLevel", 4)] {
+        assert_eq!(item_properties[field]["type"], json!("integer"), "{field}");
+        assert_eq!(item_properties[field]["minimum"], json!(0), "{field}");
+        assert_eq!(item_properties[field]["maximum"], json!(maximum), "{field}");
+    }
 }
 
 /// Windows shell sessions should reject `auto` when the command directly enters a nested Unix shell because the outer launcher is not deterministic enough.

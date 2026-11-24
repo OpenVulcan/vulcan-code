@@ -26,12 +26,12 @@ fn isolated_custom_provider_removal_identity_is_namespace_safe() {
     assert!(error.contains("custom:"), "{error}");
 }
 
-/// Verifies explicit Codex capability switches survive the custom-provider candidate projection.
-/// 验证显式 Codex 能力开关可完整通过自定义供应商候选投影。
+/// Verifies a custom Codex Responses candidate only allows HTTP/SSE and retains its session header.
+/// 验证自定义 Codex Responses 候选只允许 HTTP/SSE 并保留会话请求头。
 #[test]
 fn custom_codex_provider_candidate_uses_http() {
-    // request represents a user explicitly enabling the opt-in Codex WebSocket capability.
-    // request 表示用户明确启用可选的 Codex WebSocket 能力。
+    // Save a custom provider declaring the Codex Responses protocol.
+    // 保存声明 Codex Responses 协议的自定义供应商。
     let request = PublicAiCustomProviderSaveRequest {
         provider_id: None,
         display_name: String::from("Codex Proxy"),
@@ -56,20 +56,34 @@ fn custom_codex_provider_candidate_uses_http() {
     let candidate =
         prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
             .expect("explicit Codex capability candidate should compile");
-    assert!(
-        candidate
-            .descriptor
-            .service_entries
-            .iter()
-            .flat_map(|entry| &entry.protocol_routes)
-            .all(|route| route.responses_features.is_none())
-    );
+    // Find the declared route and keep its owning entry for the session header check.
+    // 定位声明的协议路由，并保留其所属服务入口以检查会话请求头。
+    let (entry, route) = candidate
+        .descriptor
+        .service_entries
+        .iter()
+        .find_map(|entry| {
+            entry
+                .protocol_routes
+                .iter()
+                .find(|route| {
+                    route.protocol_profile_id
+                        == CustomProviderProtocol::OpenAiCodexResponses.profile_id()
+                })
+                .map(|route| (entry, route))
+        })
+        .expect("candidate must expose the declared Codex Responses route");
+    // The transport guarantee comes from the route's WebSocket policy.
+    // 传输约束由该路由的 WebSocket 策略决定。
+    let responses_features = route
+        .responses_features
+        .as_ref()
+        .expect("Codex Responses route must declare its feature policies");
     assert_eq!(
-        candidate.descriptor.service_entries[0]
-            .session_header
-            .as_deref(),
-        Some("x-custom-session")
+        responses_features.websocket,
+        vulcan_provider_adapters::ResponsesWebsocketPolicy::Disabled
     );
+    assert_eq!(entry.session_header.as_deref(), Some("x-custom-session"));
 }
 
 /// Verifies protocol edits reuse secrets, migrate every credential, and reject partial invalid migrations.
