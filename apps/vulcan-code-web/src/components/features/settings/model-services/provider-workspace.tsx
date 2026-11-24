@@ -125,6 +125,7 @@ export function ProviderWorkspace(props: ProviderWorkspaceProps) {
               mutations={mutations}
               onScope={setScopeId}
               onSnapshot={props.onSnapshot}
+              onUsage={props.onUsage}
               provider={provider}
               scopeId={scope?.id ?? null}
               snapshot={snapshot}

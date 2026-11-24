@@ -12,6 +12,7 @@ import { ConfigurationArchiveDialog } from "@/components/features/settings/model
 import { ProviderConnectPanel } from "@/components/features/settings/model-services/provider-connect";
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status";
 import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings";
+import type { PublicAiAccountUsage } from "@/types";
 
 // Every mutation and read below is a detached mock, never a provider or local configuration write.
 // 下方所有变更和读取均为独立模拟，不写供应商或本地配置。
@@ -19,6 +20,7 @@ const service = vi.hoisted(() => ({
   load: vi.fn(), modelSave: vi.fn(), connectionSave: vi.fn(), providerSave: vi.fn(), prioritySave: vi.fn(),
   manifestGet: vi.fn(), manifestSync: vi.fn(), oauthStart: vi.fn(), oauthStatus: vi.fn(), oauthCommit: vi.fn(),
   oauthCancel: vi.fn(), connectionDelete: vi.fn(), archiveExport: vi.fn(), archivePreview: vi.fn(), archiveImport: vi.fn(),
+  usageQuery: vi.fn(),
 }));
 vi.mock("@/service/settings-actions-service", async (importOriginal) => ({
   ...await importOriginal<object>(), loadPublicAiSettings: service.load,
@@ -32,6 +34,7 @@ vi.mock("@/service/settings-actions-service", async (importOriginal) => ({
   exportPublicAiConfiguration: service.archiveExport,
   previewPublicAiConfigurationImport: service.archivePreview,
   importPublicAiConfiguration: service.archiveImport,
+  queryPublicAiConnectionUsage: service.usageQuery,
 }));
 
 // Shared test ownership guarantees portal cleanup even when an assertion fails.
@@ -223,6 +226,9 @@ it("opens account editing and model management from the icon-only footer shortcu
   const manage = button(manageLabel);
   expect(edit.closest(".vk-ms-account-foot")).not.toBeNull();
   expect(manage.closest(".vk-ms-account-foot")).toBe(edit.closest(".vk-ms-account-foot"));
+  expect(edit.closest(".vk-ms-account-foot")?.querySelector(
+    `[aria-label="${readLocaleMessage("en-US", "settings.credentials.refreshUsage")}"]`,
+  )).toBeNull();
   expect(edit.textContent).toBe("");
   expect(manage.textContent).toBe("");
   vi.useFakeTimers();
@@ -246,6 +252,74 @@ it("opens account editing and model management from the icon-only footer shortcu
   expect(document.querySelector('[role="dialog"] [data-slot="dialog-title"]')?.textContent).toContain(
     readLocaleMessage("en-US", "settings.credentialModels.title"),
   );
+});
+
+// Confirms the footer queries its own account and publishes its data without refreshing the neighboring account.
+// 验证卡片底部查询自己的账号并更新用量，且不会刷新相邻账号。
+it("refreshes usage in the supported account's footer after the edit and model shortcuts", async () => {
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
+  const selected = snapshot.connections.find((entry) => entry.id === "audit-account-1-backup")!;
+  const neighbor = snapshot.connections.find((entry) => entry.id === "audit-account-1")!;
+  const provider = snapshot.providers.find((entry) => entry.id === selected.provider_id)!;
+  const entry = provider.service_entries.find((candidate) => candidate.id === selected.service_entry_id)!;
+  const profile = entry.credential_profiles.find((candidate) => candidate.id === selected.credential_profile_id)!;
+  profile.account_usage_query = "deep_seek_balance";
+  selected.usage_capability = profile.account_usage_query;
+  neighbor.usage_capability = profile.account_usage_query;
+  snapshot.connections = [neighbor, selected];
+
+  // Keep a visible cached balance on the adjacent account to catch cross-account updates.
+  // 给相邻账号保留可见的缓存余额，检测串账号更新。
+  const usage: PublicAiAccountUsage = {
+    credential_id: selected.credential_id,
+    availability: "supported",
+    balance_amount: "9.75",
+    currency: "USD",
+    quota_windows: [],
+  };
+  snapshot.usageCache[neighbor.id] = { ...usage, credential_id: neighbor.credential_id, balance_amount: "21.50" };
+  let finishRefresh!: (usage: PublicAiAccountUsage) => void;
+  service.usageQuery.mockImplementationOnce(() => new Promise<PublicAiAccountUsage>((resolve) => {
+    finishRefresh = resolve;
+  }));
+  service.load.mockResolvedValue(snapshot);
+  await render(<ModelServicesArea />);
+
+  // Find each rendered card by its displayed identity, independent of sorting.
+  // 按可见身份查找各张卡，与排序无关。
+  const cards = [...host.querySelectorAll(".vk-ms-account")];
+  const selectedCard = cards.find((card) => card.querySelector("strong")?.textContent === selected.display_name)!;
+  const neighborCard = cards.find((card) => card.querySelector("strong")?.textContent === neighbor.display_name)!;
+  const shortcuts = [...selectedCard.querySelectorAll<HTMLButtonElement>(".vk-ms-account-shortcuts button")];
+  const refreshLabel = readLocaleMessage("en-US", "settings.credentials.refreshUsage");
+  const editLabel = readLocaleMessage("en-US", "settings.credentials.edit");
+  const modelsLabel = readLocaleMessage("en-US", "settings.credentialModels.manage");
+  const labels = shortcuts.map((shortcut) => shortcut.getAttribute("aria-label"));
+  const refresh = shortcuts.find((shortcut) => shortcut.getAttribute("aria-label") === refreshLabel)!;
+  expect(labels).toContain(editLabel);
+  expect(labels).toContain(modelsLabel);
+  expect(labels.indexOf(refreshLabel)).toBeGreaterThan(labels.indexOf(editLabel));
+  expect(labels.indexOf(refreshLabel)).toBeGreaterThan(labels.indexOf(modelsLabel));
+  expect(service.usageQuery).not.toHaveBeenCalled();
+  await act(async () => refresh.click());
+  expect(refresh.disabled).toBe(true);
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  await act(async () => refresh.click());
+  expect(service.usageQuery).toHaveBeenCalledExactlyOnceWith(selected.id);
+  await act(async () => finishRefresh(usage));
+  expect(refresh.disabled).toBe(false);
+  expect(selectedCard.textContent).toContain("9.75");
+  expect(neighborCard.textContent).toContain("21.50");
+  expect(neighborCard.textContent).not.toContain("9.75");
+
+  // A provider's explicit temporary failure belongs to the same card and allows retry.
+  // 供应商返回的暂时失败显示在同一卡片，并允许重试。
+  const failure = "Fixture temporarily unavailable";
+  service.usageQuery.mockResolvedValueOnce({ ...usage, availability: "temporarily_unavailable", refresh_message: failure });
+  await act(async () => refresh.click());
+  expect(selectedCard.textContent).toContain(failure);
+  expect(neighborCard.textContent).not.toContain(failure);
+  expect(refresh.disabled).toBe(false);
 });
 
 it("keeps a deleting account dialog open and editable after a rejected deletion", async () => {

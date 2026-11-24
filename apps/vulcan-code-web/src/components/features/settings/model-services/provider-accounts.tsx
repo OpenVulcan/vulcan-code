@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, Star, Trash2 } from "lucide-react"
+import { ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import {
@@ -19,7 +19,7 @@ import {
 import { Switch } from "@/ui-kit/primitives/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
-import { savePublicAiConnectionEnabled } from "@/service/settings-actions-service"
+import { queryPublicAiConnectionUsage, savePublicAiConnectionEnabled } from "@/service/settings-actions-service"
 import type {
   PublicAiAccountUsage,
   PublicAiConnection,
@@ -42,6 +42,9 @@ export interface ProviderAccountsProps {
   // usageByConnection holds usage reads newer than the snapshot cache.
   // usageByConnection 保存比快照缓存更新的用量读取。
   usageByConnection: Readonly<Record<string, PublicAiAccountUsage>>
+  // Publishes the refreshed observation for the exact connection to the page.
+  // 将刷新得到的账号用量发布到页面的对应连接。
+  onUsage: (connectionId: string, usage: PublicAiAccountUsage) => void
   alerts: readonly ProviderAlert[]
   // scopeId is the account the model list is narrowed to; onScope toggles it.
   // scopeId 是模型列表收窄到的账号；onScope 切换它。
@@ -64,23 +67,32 @@ export function ProviderAccounts(props: ProviderAccountsProps) {
     <>
       {connections.length > 0 ? (
         <div className="vk-ms-accounts">
-          {connections.map((connection) => (
-            <AccountCard
-              alerts={props.alerts.filter((alert) => alert.connectionId === connection.id)}
-              busy={mutations.pendingKey !== null}
-              connection={connection}
-              key={connection.id}
-              onDelete={() => setDeleting(connection)}
-              onEdit={() => setEditing(connection)}
-              onEnabledChange={(enabled) => run(`account/${connection.id}`, () => savePublicAiConnectionEnabled({ connectionId: connection.id, enabled }))}
-              onManageModels={() => setModelAccess(connection)}
-              onScope={() => props.onScope(props.scopeId === connection.id ? null : connection.id)}
-              provider={provider}
-              scoped={props.scopeId === connection.id}
-              snapshot={snapshot}
-              usage={props.usageByConnection[connection.id] ?? snapshot.usageCache[connection.id]}
-            />
-          ))}
+          {connections.map((connection) => {
+            // Share the pending key with the connection panel's automatic usage read.
+            // 与连接面板的自动用量读取共用等待标识。
+            const usageKey = `usage/${connection.id}`
+            return (
+              <AccountCard
+                alerts={props.alerts.filter((alert) => alert.connectionId === connection.id)}
+                busy={mutations.pendingKey !== null}
+                connection={connection}
+                key={connection.id}
+                onDelete={() => setDeleting(connection)}
+                onEdit={() => setEditing(connection)}
+                onEnabledChange={(enabled) => run(`account/${connection.id}`, () => savePublicAiConnectionEnabled({ connectionId: connection.id, enabled }))}
+                onManageModels={() => setModelAccess(connection)}
+                onRefreshUsage={() => run(usageKey, async () => {
+                  props.onUsage(connection.id, await queryPublicAiConnectionUsage(connection.id))
+                })}
+                onScope={() => props.onScope(props.scopeId === connection.id ? null : connection.id)}
+                provider={provider}
+                refreshingUsage={mutations.pendingKey === usageKey}
+                scoped={props.scopeId === connection.id}
+                snapshot={snapshot}
+                usage={props.usageByConnection[connection.id] ?? snapshot.usageCache[connection.id]}
+              />
+            )
+          })}
         </div>
       ) : (
         <PageEmptyState
@@ -134,11 +146,17 @@ interface AccountCardProps {
   alerts: readonly ProviderAlert[]
   usage: PublicAiAccountUsage | undefined
   busy: boolean
+  // Indicates an in-flight usage query for this account.
+  // 表示此账号正在查询用量。
+  refreshingUsage: boolean
   scoped: boolean
   onScope: () => void
   onEdit: () => void
   onDelete: () => void
   onManageModels: () => void
+  // Queries the current account when the user presses its refresh shortcut.
+  // 用户点击刷新快捷按钮时查询当前账号。
+  onRefreshUsage: () => void
   onEnabledChange: (enabled: boolean) => void
 }
 
@@ -158,10 +176,15 @@ function AccountCard(props: AccountCardProps) {
   const health = retired ? "warn" : healthOf(props.alerts, connection.enabled)
   const catalogError = props.alerts.find((alert) => alert.kind === "catalog_error")?.detail
   const modelCount = snapshot.catalogs[connection.id]?.models.length ?? 0
+  // Use the active connection's projected usage capability and required credential.
+  // 使用生效连接投影的用量能力及所需凭据。
+  const usageSupported = connection.usage_capability !== "unsupported"
+    && (!connection.usage_requires_management_key || connection.has_management_key)
   // Share the translated names between hover hints and accessible button labels.
   // 悬停提示与按钮的无障碍名称共用翻译文案。
   const editLabel = t("settings.credentials.edit")
   const manageLabel = t("settings.credentialModels.manage")
+  const refreshUsageLabel = t("settings.credentials.refreshUsage")
   return (
     <article className="vk-ms-account" data-state={health}>
       <header className="vk-ms-account-top">
@@ -220,6 +243,25 @@ function AccountCard(props: AccountCardProps) {
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>{manageLabel}</TooltipContent>
+              </Tooltip>
+            ) : null}
+            {usageSupported ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <IconButton
+                      aria-busy={props.refreshingUsage}
+                      aria-label={refreshUsageLabel}
+                      disabled={props.busy || !connection.enabled}
+                      onClick={props.onRefreshUsage}
+                      size="xs"
+                      type="button"
+                    >
+                      <RefreshCw aria-hidden="true" className={props.refreshingUsage ? "vk-spin" : undefined} />
+                    </IconButton>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{refreshUsageLabel}</TooltipContent>
               </Tooltip>
             ) : null}
           </div>
@@ -306,7 +348,7 @@ function AccountUsage(props: {
             </a>
           ) : null}
         </p>
-      ) : balanceOnly ? null : (
+      ) : balanceOnly && props.usage?.availability !== "temporarily_unavailable" ? null : (
         <div className="vk-ms-usage-quota">{overview.quotaContent}</div>
       )}
     </div>
