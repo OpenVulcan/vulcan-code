@@ -97,6 +97,7 @@ fn decode_deepseek_balance(body: &str) -> Result<AccountUsageSnapshot, String> {
             unit: balance.currency.clone(),
             starts_at: None,
             resets_at: None,
+            expires_at: None,
             unlimited: false,
             available: response.is_available,
         })

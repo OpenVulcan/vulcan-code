@@ -1623,6 +1623,8 @@
   "composer.accountCard.commandCodeFreeCredits": "無料クレジット",
   "composer.accountCard.commandCodeFiveHourRequests": "5 時間のリクエスト",
   "composer.accountCard.commandCodeWeeklyRequests": "週間リクエスト",
+  "composer.accountCard.subscriptionCredits": "サブスクリプションクレジット",
+  "composer.accountCard.creditExpiry": "{date} に期限切れ",
   "composer.accountCard.reset": "リセット",
   "composer.accountCard.notIncluded": "含まれていません",
   "composer.accountCard.unlimited": "無制限",

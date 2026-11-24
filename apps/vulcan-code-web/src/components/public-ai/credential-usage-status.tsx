@@ -10,6 +10,7 @@ import {
   kimiUsageWindowLabel,
   openDesignUsageWindowLabel,
   opencodeUsageWindowLabel,
+  stepPlanUsageWindowLabel,
   usageMeterTone,
   usageWindowPercentage,
   type CredentialUsageOverviewProps,
@@ -143,6 +144,7 @@ function statusWindowLabel(
   t: (key: TranslationKey) => string,
 ): string {
   switch (query) {
+    case "step_fun_plan_usage": return stepPlanUsageWindowLabel(window, t)
     case "kimi_coding_plan": return kimiUsageWindowLabel(window, t)
     case "command_code_usage": return commandCodeUsageWindowLabel(window, t)
     case "opencode_go": return opencodeUsageWindowLabel(window, t)

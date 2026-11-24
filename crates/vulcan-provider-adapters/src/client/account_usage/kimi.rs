@@ -185,6 +185,7 @@ fn kimi_usage_window(
         unit: String::from("provider_defined"),
         starts_at: None,
         resets_at: reset,
+        expires_at: None,
         unlimited: false,
         available: true,
     }))

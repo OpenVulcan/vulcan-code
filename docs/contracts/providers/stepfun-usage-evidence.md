@@ -45,3 +45,14 @@
 - 重建后 `validate-all` 对十九份清单及完整性索引校验通过，并再次执行 `make.ps1 sync`。
 - 最终 StepFun 清单为 28817 字节，源文件及同步副本 SHA-256 均为 `7d301cf2264e1064f38f4760cb409b98fdff7ec81ec5f5736f65b62db72d7792`；最终索引两份副本 SHA-256 均为 `d717a97f556e03f0f7e1eeaf032fa9ceffff40e552fd5e30d973ba19a80c9c6e`。上节摘要记录的是换行规范化之前的验证结果。
 - 当时的定向测试曾报告两处未使用导入警告；此项只记录该次验证边界，不代表当前构建状态。其中代码导航策略模块现已退役，见[代码导航契约](../code-navigation.md)。
+
+## Step Plan 账号额度查询（2026-11-24）
+
+| 连接入口 | 账号用量地址 | 本次账号的日期字段 |
+| --- | --- | --- |
+| 国内 `step-plan` | `GET https://api.stepfun.com/step_plan/v1/usage` | 同时返回额度重置和到期时间 |
+| 国际 `international-step-plan` | `GET https://api.stepfun.ai/step_plan/v1/usage` | 重置时间为 `null`，返回额度到期时间 |
+
+两条线路均使用各自连接的 Step Plan Key 进行 Bearer 认证。国内字段约定见[阶跃星辰用量查询文档](https://platform.stepfun.com/docs/zh/step-plan/usage)。两个地区均通过 Vulcan Code 的 `PublicAiRuntime::query_connection_usage` 以真实订阅账号验证，返回 `schema_version = 1`。
+
+清单修订 7 为这两个入口的 `plan-key` 声明同一种账号用量查询。客户端按 `plan.name` 展示套餐，将 `quota.credit_buckets` 中每笔额度独立保存为 Credit，使用整数字符串精确计算总额减剩余额度。卡片仅在上游提供重置时间时显示重置，单独显示额度到期时间。该接口提供账号额度快照；前文的 SSE 指标属于单次模型调用。

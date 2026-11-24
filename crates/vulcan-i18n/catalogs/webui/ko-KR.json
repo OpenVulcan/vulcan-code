@@ -1623,6 +1623,8 @@
   "composer.accountCard.commandCodeFreeCredits": "무료 크레딧",
   "composer.accountCard.commandCodeFiveHourRequests": "5시간 요청",
   "composer.accountCard.commandCodeWeeklyRequests": "주간 요청",
+  "composer.accountCard.subscriptionCredits": "구독 크레딧",
+  "composer.accountCard.creditExpiry": "{date} 만료",
   "composer.accountCard.reset": "초기화",
   "composer.accountCard.notIncluded": "포함 안 됨",
   "composer.accountCard.unlimited": "무제한",

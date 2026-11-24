@@ -1,7 +1,7 @@
 import * as React from "react"
 
 import { UsageMeter, type UsageMeterTone } from "@/components/product/usage"
-import { useI18n, type TranslationKey } from "@/i18n"
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n"
 import type {
   PublicAiAccountUsage,
   PublicAiAccountUsageWindow,
@@ -259,6 +259,16 @@ function CredentialUsageSummary(props: {
   if (props.credentialProfile?.account_usage_query === "tavily_credits") {
     return <TavilyUsageSummary window={tavilyPlanWindow} />
   }
+  if (props.credentialProfile?.account_usage_query === "step_fun_plan_usage" && (props.usage.quota_windows.length > 0 || props.usage.refresh_message)) {
+    return (
+      <div className="vk-usage-windows">
+        {props.usage.refresh_message ? <span className="vk-usage-hint">{props.usage.refresh_message}</span> : null}
+        {props.usage.quota_windows.map((window) => (
+          <UsageWindowMetric key={window.id} label={stepPlanUsageWindowLabel(window, t)} window={window} showReset />
+        ))}
+      </div>
+    )
+  }
   if (props.usage.quota_windows.length === 0) {
     return <span className="vk-usage-hint">{t(
       props.credentialProfile?.account_usage_query === "opencode_go"
@@ -291,6 +301,12 @@ function CredentialUsageSummary(props: {
       ))}
     </div>
   )
+}
+
+// Return the localized subscription label for a Step Plan window, preserving other upstream source names.
+// 返回 Step Plan 窗口的本地化订阅标签，其他额度来源沿用上游名称。
+export function stepPlanUsageWindowLabel(window: PublicAiAccountUsageWindow, t: (key: TranslationKey) => string): string {
+  return window.bucket_name === "subscription" ? t("composer.accountCard.subscriptionCredits") : window.display_name
 }
 
 // Resolves OpenCode's closed quota-window identities through the shared language catalog.
@@ -675,7 +691,7 @@ function UsageWindowMetric(props: {
 }) {
   // t resolves quota value labels in the active locale.
   // t 使用当前语言解析额度值标签。
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   // percentage is the normalized progress value for the visual bar.
   // percentage 是用于视觉进度条的规范化进度值。
   const percentage = usageWindowPercentage(props.window)
@@ -694,6 +710,11 @@ function UsageWindowMetric(props: {
       {props.showReset && props.window?.resets_at ? (
         <span className="vk-usage-reset" data-slot="quota-window-reset">
           {t("composer.accountCard.reset")} {usageResetDuration(props.window.resets_at)}
+        </span>
+      ) : null}
+      {props.window?.expires_at ? (
+        <span className="vk-usage-reset" data-slot="quota-window-expiry">
+          {formatMessage(t("composer.accountCard.creditExpiry"), { date: new Date(Number(props.window.expires_at)).toLocaleString(locale) })}
         </span>
       ) : null}
     </div>

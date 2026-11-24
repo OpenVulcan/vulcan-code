@@ -108,6 +108,7 @@ fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
         | AccountUsageQueryKind::KimiCodingPlan
         | AccountUsageQueryKind::OpencodeGo
         | AccountUsageQueryKind::OpenAiCodexUsage
+        | AccountUsageQueryKind::StepFunPlanUsage
         | AccountUsageQueryKind::XiaomiMimoTokenPlan => "token_plan",
         AccountUsageQueryKind::OpenRouterCredits
         | AccountUsageQueryKind::OpenVulcan

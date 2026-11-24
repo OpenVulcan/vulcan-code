@@ -281,6 +281,7 @@ pub(super) async fn query_usage(
             unit: String::from("points"),
             starts_at: Some(balance.starts_at),
             resets_at: Some(balance.expires_at),
+            expires_at: None,
             unlimited: false,
             available: true,
         });

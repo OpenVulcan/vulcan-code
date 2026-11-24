@@ -84,6 +84,7 @@ export interface PublicAiCredentialProfile {
     | "token_rhythm_wallet"
     | "open_ai_codex_usage"
     | "xiaomi_mimo_balance"
+    | "step_fun_plan_usage"
     | "xiaomi_mimo_token_plan";
   authentication?: string;
   key_prefix?: string;
@@ -636,6 +637,7 @@ export interface PublicAiConnection {
     | "token_rhythm_wallet"
     | "open_ai_codex_usage"
     | "xiaomi_mimo_balance"
+    | "step_fun_plan_usage"
     | "xiaomi_mimo_token_plan";
   // Whether usage refresh needs a separate provider-management credential.
   // 用量刷新是否需要独立的供应商管理凭据。
@@ -1577,6 +1579,9 @@ export interface PublicAiAccountUsageWindow {
   unit: string;
   starts_at?: string;
   resets_at?: string;
+  // Optional credit expiry in Unix milliseconds, separate from a periodic reset.
+  // 可选额度到期时间（Unix 毫秒），与周期重置分开。
+  expires_at?: string;
   unlimited: boolean;
   available: boolean;
 }

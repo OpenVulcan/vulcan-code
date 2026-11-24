@@ -353,6 +353,7 @@ fn window(
         unit: String::from("USD"),
         starts_at,
         resets_at,
+        expires_at: None,
         unlimited: false,
         available: true,
     })

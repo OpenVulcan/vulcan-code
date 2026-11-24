@@ -40,6 +40,7 @@ pub(super) fn account_usage_secret_reference<'a>(
         | crate::AccountUsageQueryKind::KimiCodingPlan
         | crate::AccountUsageQueryKind::OpenDesignWallet
         | crate::AccountUsageQueryKind::TokenRhythmWallet
+        | crate::AccountUsageQueryKind::StepFunPlanUsage
         | crate::AccountUsageQueryKind::CommandCodeUsage
         | crate::AccountUsageQueryKind::OpenAiCodexUsage
         | crate::AccountUsageQueryKind::XiaomiMimoBalance
@@ -280,6 +281,7 @@ impl PublicAiRuntime {
                 crate::AccountUsageQueryKind::DeepSeekBalance => true,
                 crate::AccountUsageQueryKind::NodeAiBalance => true,
                 crate::AccountUsageQueryKind::KimiCodingPlan => true,
+                crate::AccountUsageQueryKind::StepFunPlanUsage => true,
                 crate::AccountUsageQueryKind::CommandCodeUsage => true,
                 crate::AccountUsageQueryKind::OpenDesignWallet => true,
                 crate::AccountUsageQueryKind::TokenRhythmWallet => true,

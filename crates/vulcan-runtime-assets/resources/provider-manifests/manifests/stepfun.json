@@ -1,10 +1,10 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "stepfun",
-  "revision": 6,
-  "published_at": "2026-11-08T06:25:07Z",
+  "revision": 7,
+  "published_at": "2026-11-24T11:50:55Z",
   "engine_contract": {
-    "minimum_manifest_engine": 1,
+    "minimum_manifest_engine": 7,
     "required_protocol_profiles": [
       "openai-chat-completions.v1"
     ],
@@ -125,7 +125,7 @@
           "display_name": "Step Plan API Key",
           "credential_mode": "token",
           "billing_kind": "token_plan",
-          "account_usage_query": "unsupported",
+          "account_usage_query": "step_fun_plan_usage",
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -289,7 +289,7 @@
           "display_name": "International Step Plan API Key",
           "credential_mode": "token",
           "billing_kind": "token_plan",
-          "account_usage_query": "unsupported",
+          "account_usage_query": "step_fun_plan_usage",
           "default_usage_scopes": [
             "interactive_agent"
           ]

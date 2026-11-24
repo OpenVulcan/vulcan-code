@@ -544,6 +544,35 @@ fn newer_manifest_engine_requires_client_upgrade() {
     }));
 }
 
+/// Check that a Step Plan query can only activate on an engine that implements it.
+/// 验证只有实现 Step Plan 用量查询的引擎版本才能激活相应清单。
+#[test]
+fn stepfun_plan_usage_requires_declared_engine() {
+    // Use a synthetic profile to exercise validation regardless of the contents of the bundled catalog.
+    // 用合成凭据配置覆盖验证逻辑，使测试独立于随包目录内容。
+    let mut manifest = minimal_manifest();
+    let profile = manifest
+        .services
+        .iter_mut()
+        .flat_map(|entry| &mut entry.credential_profiles)
+        .find(|profile| profile.credential_profile_id == "api-key")
+        .expect("test fixture must contain its API key profile");
+    profile.account_usage_query = AccountUsageQueryKind::StepFunPlanUsage;
+    profile.billing_kind = CredentialBillingKind::TokenPlan;
+    manifest.engine_contract.minimum_manifest_engine =
+        super::super::STEP_FUN_PLAN_USAGE_MIN_ENGINE - 1;
+    // The old engine declaration must produce the capability-specific validation error.
+    // 旧引擎声明必须返回此能力专属的验证错误。
+    let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry()).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "step_fun_plan_usage_requires_engine")
+    );
+    manifest.engine_contract.minimum_manifest_engine = super::super::STEP_FUN_PLAN_USAGE_MIN_ENGINE;
+    validate_manifest(&manifest, ManifestOwnership::System, &registry()).unwrap();
+}
+
 /// Verifies additive total derivation cannot be advertised under an older engine contract.
 /// 验证总额加法派生不能在旧版引擎契约下发布。
 #[test]

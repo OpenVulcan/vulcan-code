@@ -1623,6 +1623,8 @@
   "composer.accountCard.commandCodeFreeCredits": "Créditos gratuitos",
   "composer.accountCard.commandCodeFiveHourRequests": "Solicitações em 5 horas",
   "composer.accountCard.commandCodeWeeklyRequests": "Solicitações semanais",
+  "composer.accountCard.subscriptionCredits": "Créditos da assinatura",
+  "composer.accountCard.creditExpiry": "Expira em {date}",
   "composer.accountCard.reset": "Redefinição",
   "composer.accountCard.notIncluded": "Não incluído",
   "composer.accountCard.unlimited": "Ilimitado",

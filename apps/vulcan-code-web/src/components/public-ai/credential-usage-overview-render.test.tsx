@@ -8,7 +8,10 @@ import { CredentialUsageOverview } from "./credential-usage-overview"
 
 // Catalog keys expose semantic rendering choices without asserting translated prose.
 // 目录键公开语义渲染选择，不断言翻译文案。
-vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock("@/i18n", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/i18n")>(),
+  useI18n: () => ({ locale: "en-US", t: (key: string) => key }),
+}))
 
 // Synthetic connection contains only the public metadata consumed by the shared account card.
 // 合成连接只包含共享账户卡片使用的公开元数据。
@@ -178,5 +181,35 @@ describe("NODEAI shared wallet", () => {
     )
     expect(root.textContent).toContain("composer.accountCard.usageUnavailable")
     expect(root.textContent).not.toContain("composer.accountCard.noQuotaWindows")
+  })
+})
+
+describe("StepFun Step Plan account card", () => {
+  it.each([
+    ["step-plan", "1900000000000"],
+    ["international-step-plan", undefined],
+  ] as const)("renders the credit grant and its independent dates for %s", (entry, reset) => {
+    // Render a complete connection card so the test exercises capability dispatch.
+    // 渲染完整连接卡片以覆盖查询能力分派。
+    const root = document.createElement("div")
+    root.innerHTML = renderToStaticMarkup(
+      <CredentialUsageOverview
+        connection={{ ...connection, provider_id: "stepfun", service_entry_id: entry, usage_capability: "step_fun_plan_usage" }}
+        credentialProfile={{ ...profile, account_usage_query: "step_fun_plan_usage" }}
+        usage={{
+          credential_id: connection.credential_id, availability: "supported", plan_name: "Example Plan",
+          quota_windows: [{ id: "subscription-0", bucket_name: "subscription", display_name: "subscription",
+            remaining: "25", total: "100", unit: "credits", available: true, unlimited: false,
+            resets_at: reset, expires_at: "1900500000000" }],
+        }}
+        showQuotaSection
+      />,
+    )
+    expect(root.textContent).toContain("Example Plan")
+    expect(root.textContent).toContain("25 / 100")
+    expect(root.textContent).toContain("composer.accountCard.subscriptionCredits")
+    expect(root.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("25")
+    expect(root.querySelectorAll('[data-slot="quota-window-reset"]')).toHaveLength(reset ? 1 : 0)
+    expect(root.querySelectorAll('[data-slot="quota-window-expiry"]')).toHaveLength(1)
   })
 })

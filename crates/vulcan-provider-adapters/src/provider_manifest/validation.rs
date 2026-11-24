@@ -395,6 +395,24 @@ fn validate_engine_contract(
             ),
         ));
     }
+    if contract.minimum_manifest_engine < super::STEP_FUN_PLAN_USAGE_MIN_ENGINE
+        && manifest
+            .services
+            .iter()
+            .flat_map(|service| &service.credential_profiles)
+            .any(|profile| {
+                profile.account_usage_query == crate::AccountUsageQueryKind::StepFunPlanUsage
+            })
+    {
+        errors.push(ManifestValidationError::new(
+            "step_fun_plan_usage_requires_engine",
+            "engine_contract.minimum_manifest_engine",
+            format!(
+                "StepFun plan usage requires manifest engine {} or newer.",
+                super::STEP_FUN_PLAN_USAGE_MIN_ENGINE
+            ),
+        ));
+    }
     if contract.minimum_manifest_engine > super::CURRENT_MANIFEST_ENGINE {
         errors.push(ManifestValidationError::new(
             "unsupported_engine_contract",

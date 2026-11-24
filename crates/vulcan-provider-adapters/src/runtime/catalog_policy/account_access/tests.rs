@@ -226,6 +226,7 @@ fn manifest_account_model_access_projects_commandcode_catalog() {
         unit: String::from("USD"),
         starts_at: None,
         resets_at: None,
+        expires_at: None,
         unlimited: false,
         available: true,
     };

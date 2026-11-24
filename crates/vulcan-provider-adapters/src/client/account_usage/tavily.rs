@@ -158,6 +158,7 @@ fn tavily_usage_window(
         unit: String::from("credits"),
         starts_at: None,
         resets_at: None,
+        expires_at: None,
         unlimited,
         available: true,
     })

@@ -22,6 +22,7 @@ export function usageCapabilitySupportsQuotaWindows(
     || capability === "command_code_usage"
     || capability === "open_design_wallet"
     || capability === "open_ai_codex_usage"
+    || capability === "step_fun_plan_usage"
     || capability === "xiaomi_mimo_token_plan"
 }
 

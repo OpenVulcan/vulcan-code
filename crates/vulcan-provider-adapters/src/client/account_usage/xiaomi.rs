@@ -230,6 +230,7 @@ fn decode_usage(body: &str, service: MiMoService) -> Result<AccountUsageSnapshot
                 unit: String::from("credits"),
                 starts_at: Some((starts_at.unix_timestamp() * 1_000).to_string()),
                 resets_at: Some((ends_at.unix_timestamp() * 1_000).to_string()),
+                expires_at: None,
                 unlimited: false,
                 available: true,
             });

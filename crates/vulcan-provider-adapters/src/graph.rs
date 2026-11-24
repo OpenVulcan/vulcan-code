@@ -827,6 +827,9 @@ pub enum AccountUsageQueryKind {
     /// CommandCode account identity, credits, subscription, and usage-summary endpoints.
     /// CommandCode 账号身份、额度、订阅与用量汇总端点。
     CommandCodeUsage,
+    /// Step Plan subscription credit buckets queried with the regional connection key.
+    /// 使用地区连接的密钥查询 Step Plan 订阅额度桶。
+    StepFunPlanUsage,
     /// OpenDesign Design Plan windows and separate wallet balance using its account-control credential.
     /// 使用账户控制凭据查询 OpenDesign Design Plan 窗口及独立钱包余额。
     OpenDesignWallet,

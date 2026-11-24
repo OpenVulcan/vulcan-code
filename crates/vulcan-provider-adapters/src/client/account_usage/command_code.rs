@@ -354,6 +354,7 @@ fn command_code_credit_window(
         unit: String::from("USD"),
         starts_at,
         resets_at,
+        expires_at: None,
         unlimited: false,
         available: true,
     })
@@ -402,6 +403,7 @@ fn command_code_request_window(
         unit: String::from("requests"),
         starts_at: None,
         resets_at: (window.reset_at > 0).then(|| window.reset_at.to_string()),
+        expires_at: None,
         unlimited: false,
         available: true,
     })

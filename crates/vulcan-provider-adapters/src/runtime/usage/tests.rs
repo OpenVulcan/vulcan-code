@@ -21,6 +21,7 @@ fn transient_usage_failure_preserves_account_access_evidence() {
         unit: String::from("USD"),
         starts_at: None,
         resets_at: None,
+        expires_at: None,
         unlimited: false,
         available: true,
     };

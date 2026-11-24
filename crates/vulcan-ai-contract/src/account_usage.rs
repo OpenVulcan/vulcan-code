@@ -48,6 +48,10 @@ pub struct AccountUsageWindow {
     /// 可选窗口重置或结束时间戳。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<String>,
+    /// Provider-reported credit expiry in Unix milliseconds, independent of the next reset.
+    /// 供应商报告的额度到期时间（Unix 毫秒），独立于下次重置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
     /// Whether the provider declares this window unlimited.
     /// 供应商是否声明该窗口无限制。
     #[serde(default)]

@@ -182,6 +182,7 @@ fn minimax_quota_window(input: MiniMaxQuotaWindowInput) -> Result<AccountUsageWi
         unit: String::from("requests"),
         starts_at: Some(input.starts_at.to_string()),
         resets_at: Some(input.resets_at.to_string()),
+        expires_at: None,
         unlimited: input.unlimited,
         available: input.available,
     })

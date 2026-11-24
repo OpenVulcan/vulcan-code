@@ -292,6 +292,7 @@ fn normalize_usage(
             unit: String::from("credits"),
             starts_at: window.window_start,
             resets_at: window.resets_at,
+            expires_at: None,
             unlimited: false,
             available: plan.eligible,
         });

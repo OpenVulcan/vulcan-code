@@ -120,6 +120,7 @@ fn codex_usage_window(
         unit: String::from("percent"),
         starts_at: None,
         resets_at: (window.reset_at > 0).then(|| window.reset_at.to_string()),
+        expires_at: None,
         unlimited: false,
         available: true,
     }
