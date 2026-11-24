@@ -803,6 +803,8 @@ OpenAI 提供三个独立入口。OpenAI API 使用 API Key。Codex 套餐使用
 ChatGPT 套餐使用「使用 ChatGPT 继续」为 Vulcan Code 单独授权。更换登录方式时创建对应入口的账号。
 
 - ChatGPT 套餐授权使用本机安装 ID、动态签发的客户端 ID 和回环 OAuth 回调。账号归属来自验证签名后的 ID token。
+- ID token 的 `aud` 可为字符串或单元素数组，唯一受众必须精确等于已签发的客户端 ID。继续校验签发者、有效期与
+  本次登录的 `nonce`。[OpenAI ID token 校验及示例](https://developers.openai.com/siwc/website#sample-id-token)
 - 套餐目录以当前账号会话访问 `GET https://api.openai.com/v1/models` 得到的可见模型为准。推理使用同一凭据调用 `POST /v1/responses`，采用 HTTP 流、完整输入和本地工具命名空间。
 - 套餐连接用于 Vulcan Code 内的交互会话。当前预览关闭 OpenAI 原生生图工具和 Images API，账号授权与用量在 ChatGPT 设置中管理。
 - 接口或授权流程变化时回查 [OpenAI 官方接入文档](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)。

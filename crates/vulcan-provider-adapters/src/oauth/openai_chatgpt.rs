@@ -84,11 +84,37 @@ struct PlanTokenReply {
 #[derive(Deserialize)]
 struct PlanIdentity {
     iss: String,
-    aud: String,
+    aud: PlanAudience,
     sub: String,
     exp: u64,
     nonce: Option<String>,
     email: Option<String>,
+}
+
+/// Decodes both OIDC audience representations without trusting additional recipients.
+/// 解析 OIDC 受众的两种表示，同时拒绝额外的接收方。
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PlanAudience {
+    /// A single audience encoded as a string.
+    /// 使用字符串表示的单个受众。
+    Single(String),
+    /// Audiences encoded as an array, as in OpenAI's documented ID token.
+    /// 使用数组表示的受众，与 OpenAI 文档的 ID 令牌格式一致。
+    Array(Vec<String>),
+}
+
+impl PlanAudience {
+    /// Returns whether the issued client is the only audience of the verified ID token.
+    /// 判断已签发客户端是否为已验签 ID 令牌的唯一受众。
+    fn matches_client(&self, client_id: &str) -> bool {
+        match self {
+            Self::Single(audience) => audience == client_id,
+            Self::Array(audiences) => {
+                matches!(audiences.as_slice(), [audience] if audience == client_id)
+            }
+        }
+    }
 }
 
 /// Selects the signed JWT's documented algorithm and verification key.
@@ -525,23 +551,30 @@ async fn verify_identity(
     client_id: &str,
     nonce: Option<&str>,
 ) -> Result<PlanIdentity, String> {
-    let invalid = || String::from("ChatGPT ID token could not be verified.");
-    let (signed_input, signature) = token.rsplit_once('.').ok_or_else(invalid)?;
-    let (header, payload) = signed_input.split_once('.').ok_or_else(invalid)?;
+    // Use fixed diagnostics so the callback, JWT and account identifiers never appear in errors.
+    // 诊断使用固定文案，避免回调、JWT 和账号标识出现在错误中。
+    let malformed = || String::from("ChatGPT ID token is malformed.");
+    let (signed_input, signature) = token.rsplit_once('.').ok_or_else(malformed)?;
+    let (header, payload) = signed_input.split_once('.').ok_or_else(malformed)?;
     let header: JwtHeader =
-        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header).map_err(|_| invalid())?)
-            .map_err(|_| invalid())?;
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header).map_err(|_| malformed())?)
+            .map_err(|_| malformed())?;
     if header.alg != "RS256" || header.kid.is_empty() {
-        return Err(invalid());
+        return Err(String::from(
+            "ChatGPT ID token has an unsupported signing header.",
+        ));
     }
     let response = client
         .get(JWKS_URL)
         .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|_| invalid())?;
+        .map_err(|_| String::from("Could not reach the ChatGPT signing-key endpoint."))?;
     if !response.status().is_success() {
-        return Err(invalid());
+        return Err(format!(
+            "ChatGPT signing-key endpoint returned HTTP {}.",
+            response.status().as_u16()
+        ));
     }
     let jwks: JsonWebKeySet =
         decode_bounded_oauth_json_response(response, "ChatGPT signing keys").await?;
@@ -549,31 +582,57 @@ async fn verify_identity(
         .keys
         .into_iter()
         .find(|key| key.kid == header.kid && key.kty == "RSA")
-        .ok_or_else(invalid)?;
+        .ok_or_else(|| String::from("ChatGPT did not publish a signing key for this ID token."))?;
+    let invalid_key = || String::from("ChatGPT published a malformed signing key.");
     let rsa = RsaPublicKeyComponents {
         n: URL_SAFE_NO_PAD
-            .decode(key.n.ok_or_else(invalid)?)
-            .map_err(|_| invalid())?,
+            .decode(key.n.ok_or_else(invalid_key)?)
+            .map_err(|_| invalid_key())?,
         e: URL_SAFE_NO_PAD
-            .decode(key.e.ok_or_else(invalid)?)
-            .map_err(|_| invalid())?,
+            .decode(key.e.ok_or_else(invalid_key)?)
+            .map_err(|_| invalid_key())?,
     };
     rsa.verify(
         &RSA_PKCS1_2048_8192_SHA256,
         signed_input.as_bytes(),
-        &URL_SAFE_NO_PAD.decode(signature).map_err(|_| invalid())?,
+        &URL_SAFE_NO_PAD.decode(signature).map_err(|_| malformed())?,
     )
-    .map_err(|_| invalid())?;
+    .map_err(|_| String::from("ChatGPT ID token signature could not be verified."))?;
+    validate_identity_claims(payload, client_id, nonce, unix_millis()? / 1000)
+}
+
+/// Decodes verified claims and returns the identity for this client and sign-in attempt.
+/// 解析已经验签的声明，返回属于当前客户端和登录尝试的身份。
+fn validate_identity_claims(
+    payload: &str,
+    client_id: &str,
+    nonce: Option<&str>,
+    now_unix_seconds: u64,
+) -> Result<PlanIdentity, String> {
+    let malformed = || String::from("ChatGPT ID token has malformed identity claims.");
     let identity: PlanIdentity =
-        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).map_err(|_| invalid())?)
-            .map_err(|_| invalid())?;
-    if identity.iss != ISSUER
-        || identity.aud != client_id
-        || identity.exp <= unix_millis()? / 1000
-        || identity.sub.trim().is_empty()
-        || nonce.is_some_and(|expected| identity.nonce.as_deref() != Some(expected))
-    {
-        return Err(invalid());
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).map_err(|_| malformed())?)
+            .map_err(|_| malformed())?;
+    if identity.iss != ISSUER {
+        return Err(String::from("ChatGPT ID token issuer did not match."));
+    }
+    if !identity.aud.matches_client(client_id) {
+        return Err(String::from(
+            "ChatGPT ID token audience did not match the issued client.",
+        ));
+    }
+    if identity.exp <= now_unix_seconds {
+        return Err(String::from("ChatGPT ID token has expired."));
+    }
+    if identity.sub.trim().is_empty() {
+        return Err(String::from(
+            "ChatGPT ID token did not identify an account.",
+        ));
+    }
+    if nonce.is_some_and(|expected| identity.nonce.as_deref() != Some(expected)) {
+        return Err(String::from(
+            "ChatGPT ID token did not match this sign-in attempt.",
+        ));
     }
     Ok(identity)
 }
@@ -581,6 +640,34 @@ async fn verify_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
+
+    /// Fixes the verification time so token expiry tests do not depend on the host clock.
+    /// 固定校验时间，避免令牌过期测试依赖宿主时钟。
+    const VERIFICATION_TIME: u64 = 2_000_000_000;
+
+    /// Builds synthetic claims using the supplied audience representation.
+    /// 用传入的受众表示构造合成声明。
+    fn identity_claims(audience: Value) -> Value {
+        json!({
+            "iss": ISSUER,
+            "aud": audience,
+            "sub": "fixture-subject",
+            "exp": VERIFICATION_TIME + 60,
+            "nonce": "fixture-nonce",
+        })
+    }
+
+    /// Checks payload decoding using the same client and nonce as the synthetic sign-in.
+    /// 使用与合成登录相同的客户端和 nonce 校验载荷解析。
+    fn verify_claims_fixture(claims: &Value) -> Result<PlanIdentity, String> {
+        validate_identity_claims(
+            &URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).unwrap()),
+            "oaiapp_fixture",
+            Some("fixture-nonce"),
+            VERIFICATION_TIME,
+        )
+    }
 
     /// Produces a deterministic pending login without opening a real browser.
     /// 构造确定性的等待中登录，无需打开真实浏览器。
@@ -633,6 +720,45 @@ mod tests {
             parse_callback(issued, &fixture).unwrap(),
             Some(("proof".into(), "oaiapp_test".into()))
         );
+    }
+
+    /// Accepts the official array form and the string form only for the issued client.
+    /// 仅当受众为已签发客户端时，接受官方数组格式与字符串格式。
+    #[test]
+    fn identity_accepts_both_encodings_of_the_exact_audience() {
+        for audience in [json!(["oaiapp_fixture"]), json!("oaiapp_fixture")] {
+            let identity = verify_claims_fixture(&identity_claims(audience)).unwrap();
+            assert_eq!(identity.sub, "fixture-subject");
+        }
+        for audience in [
+            json!("oaiapp_other"),
+            json!(["oaiapp_other"]),
+            json!(["oaiapp_fixture", "oaiapp_other"]),
+            json!([]),
+            json!(false),
+        ] {
+            assert!(verify_claims_fixture(&identity_claims(audience)).is_err());
+        }
+    }
+
+    /// Verifies that the array representation cannot relax the other identity checks.
+    /// 验证数组表示不会放宽其他身份校验。
+    #[test]
+    fn array_audience_preserves_identity_checks() {
+        for (claim, value) in [
+            ("iss", json!("https://issuer.example")),
+            ("exp", json!(VERIFICATION_TIME)),
+            ("sub", json!("")),
+            ("nonce", json!("another-attempt")),
+            ("nonce", Value::Null),
+        ] {
+            let mut claims = identity_claims(json!(["oaiapp_fixture"]));
+            claims[claim] = value;
+            assert!(
+                verify_claims_fixture(&claims).is_err(),
+                "Accepted invalid {claim}"
+            );
+        }
     }
 
     /// Rejects identity-only authorization even when the token itself is otherwise well formed.
