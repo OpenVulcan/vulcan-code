@@ -187,8 +187,10 @@ describe("NODEAI shared wallet", () => {
 describe("StepFun Step Plan account card", () => {
   it.each([
     ["step-plan", "1900000000000"],
+    ["step-plan", undefined],
+    ["international-step-plan", "1900000000000"],
     ["international-step-plan", undefined],
-  ] as const)("renders the credit grant and its independent dates for %s", (entry, reset) => {
+  ] as const)("renders the credit grant for %s with resets_at=%s", (entry, reset) => {
     // Render a complete connection card so the test exercises capability dispatch.
     // 渲染完整连接卡片以覆盖查询能力分派。
     const root = document.createElement("div")
