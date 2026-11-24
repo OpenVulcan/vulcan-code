@@ -641,6 +641,30 @@ describe("V1 conversation event window controller", () => {
     expect(controller.snapshot().session_config).toEqual(projectedConfig);
   });
 
+  it("publishes pending models on durable acknowledgement and restores promotion after a disconnect", async () => {
+    // Use distinct models to detect rewinding the picker by an obsolete acknowledgement.
+    // 使用不同模型捕捉过期确认导致的选择器回退。
+    const active = { ...sessionConfig().current_request, provider: "p", connection_id: "account", model: "first" };
+    const next = { ...active, model: "second", set_at_ms: 42 };
+    const pending = { current_request: active, next_request: next };
+    const promoted = { current_request: { ...next, set_at_ms: null }, next_request: null };
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([], { session_config: sessionConfig({ current_request: active }) }),
+      reconnect: async () => reconnectResponse([], {
+        base_memory_revision: 2, memory_revision: 3, durable_revision: 3, request_configs: promoted,
+      }),
+    }));
+    await controller.hydrate(SESSION_ID);
+    controller.applyLive(liveDelta([], { revision: 2, request_configs: pending }));
+    expect(controller.snapshot().session_config?.next_request).toBeNull();
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", request_configs: pending }));
+    expect(controller.snapshot().session_config).toMatchObject(pending);
+    await controller.reconnect();
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", request_configs: pending }));
+    expect(controller.snapshot().session_config).toMatchObject(promoted);
+    controller.dispose();
+  });
+
   it("answer_mode follows durable acknowledgements and never regresses on replay", async () => {
     const controller = new ConversationEventWindowController(rpcMock({ hydrate: async () => response([]) }));
     await controller.hydrate(SESSION_ID);

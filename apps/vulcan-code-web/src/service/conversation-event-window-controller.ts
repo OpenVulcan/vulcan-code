@@ -407,8 +407,7 @@ export class ConversationEventWindowController {
     // 回放的旧确认会被 store 忽略，也不得回退会话配置。
     const accepted = this.store.applyLive(delta);
     if (accepted && delta.durability === "durable") {
-      this.commitAnswerMode(delta.answer_mode);
-      this.commitAccess(delta.access);
+      this.commitSessionControls(delta);
     }
     this.settleToolRequestProgress(delta.events, delta.session_id);
     this.publishSnapshotIfChanged();
@@ -589,8 +588,7 @@ export class ConversationEventWindowController {
     try {
       const accepted = this.store.applyLive(delta);
       if (accepted && delta.durability === "durable") {
-        this.commitAnswerMode(delta.answer_mode);
-        this.commitAccess(delta.access);
+        this.commitSessionControls(delta);
       }
       this.settleToolRequestProgress(delta.events, delta.session_id);
       if (publishSnapshot) this.publishSnapshotIfChanged();
@@ -734,9 +732,9 @@ export class ConversationEventWindowController {
         return;
       }
       try {
-        this.store.applyReconnect(response);
-        this.commitAnswerMode(response.answer_mode);
-        this.commitAccess(response.access);
+        if (this.store.applyReconnect(response)) {
+          this.commitSessionControls(response);
+        }
       } catch (error) {
         // A reconnect replacement that cannot evolve from local state requires one clean durable baseline.
         // 无法从本地状态演进的重连替换需要重新加载一份干净可靠基线。
@@ -764,8 +762,7 @@ export class ConversationEventWindowController {
         try {
           const accepted = this.store.applyLive(delta);
           if (accepted && delta.durability === "durable") {
-            this.commitAnswerMode(delta.answer_mode);
-            this.commitAccess(delta.access);
+            this.commitSessionControls(delta);
           }
           this.settleToolRequestProgress(delta.events, delta.session_id);
         } catch (error) {
@@ -888,6 +885,22 @@ export class ConversationEventWindowController {
     this.openTurnId = response.open_turn_id;
     this.openTurnStartSeq = response.open_turn_start_seq;
     this.sessionConfig = response.session_config;
+  }
+
+  /** Applies the supplied controls only after their owning session revision has been accepted.
+   * 仅在所属会话修订已接纳后应用随附的控件配置。 */
+  private commitSessionControls(update: Pick<ConversationEventLiveDeltaV1, "answer_mode" | "access" | "request_configs">): void {
+    this.commitAnswerMode(update.answer_mode);
+    this.commitAccess(update.access);
+    // Preserve configuration identity across ordinary commits with the same request settings.
+    // 普通提交未改变请求配置时保持配置对象的身份。
+    const requests = update.request_configs;
+    if (requests && this.sessionConfig && (
+      JSON.stringify(requests.current_request) !== JSON.stringify(this.sessionConfig.current_request)
+      || JSON.stringify(requests.next_request) !== JSON.stringify(this.sessionConfig.next_request)
+    )) {
+      this.sessionConfig = { ...this.sessionConfig, ...requests };
+    }
   }
 
   /** Merge confirmed answer mode from accepted owner/generation edges without regressing revisions.

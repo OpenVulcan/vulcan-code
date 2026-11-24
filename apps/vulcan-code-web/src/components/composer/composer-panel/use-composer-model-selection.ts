@@ -1,4 +1,5 @@
 import React from "react";
+import type { ConversationRequestConfigV1 } from "@/service/conversation-event-window-client";
 import {
   confirmedComposerPersistenceValue,
   enqueueComposerPersistence,
@@ -29,9 +30,9 @@ export interface UseComposerModelSelectionOptions {
   // Exact conversation scope whose persisted model and account are being rendered.
   // 当前渲染其持久化模型与账号的精确会话作用域。
   conversationScopeKey: string;
-  // Whether the selected route also has an authoritative materialized session level.
-  // 所选路线是否还有权威的已物化会话档位。
-  useSessionReasoningSelection: boolean;
+  // Drafts omit this field; null means the displayed session is waiting for its own request snapshot.
+  // 草稿省略此字段，null 表示当前会话尚在等待自身的请求快照。
+  sessionRequest?: ConversationRequestConfigV1 | null;
   // Providers and models projected by the shared workbench service.
   // 共享工作台服务投影出的 Provider 与模型。
   providers: ProviderSummary[];
@@ -179,14 +180,27 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     () => modelPickerChoicesFromProviders(options.providers),
     [options.providers],
   );
-  // activeModelChoiceKey follows only the exact service-reported active account.
-  // activeModelChoiceKey 仅跟随后端明确上报的当前精确账号。
-  const activeModelChoiceKey = React.useMemo(() => {
+  // Workbench activity identifies the draft selection and the owner of the global reasoning projection.
+  // 工作台选中项标识草稿选择以及全局思考档位投影所属的路线。
+  const catalogModelChoiceKey = React.useMemo(() => {
     // activeChoice is absent while an established session catalog is being refreshed.
     // 已有会话目录刷新期间，activeChoice 可以暂时缺失。
     const activeChoice = availableModelChoices.find((choice) => choice.active);
     return modelPickerChoiceKey(activeChoice);
   }, [availableModelChoices]);
+  // Keep the full provider/account/model identity even when its catalog row is temporarily absent.
+  // 即使目录行暂缺，也保留供应商、账号、模型三者的完整身份。
+  const request = options.sessionRequest;
+  // A loading session has an explicit null request and must stay isolated from the draft.
+  // 加载中的会话请求明确为 null，此时仍须与草稿隔离。
+  const isSession = request !== undefined;
+  // Only the corresponding owner supplies the displayed route.
+  // 显示的路线只取自相应所有者。
+  const activeModelChoiceKey = isSession
+    ? modelPickerChoiceKey(request?.provider && request.connection_id && request.model
+      ? { providerId: request.provider, connectionId: request.connection_id, modelId: request.model }
+      : undefined)
+    : catalogModelChoiceKey;
   // activeProviderModel resolves the full API rows needed by secondary-route controls.
   // activeProviderModel 解析二级路由控件所需的完整 API 行。
   const activeProviderModel = React.useMemo<ComposerActiveProviderModel | null>(() => {
@@ -233,7 +247,7 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   const reasoningOwnerKey = JSON.stringify([options.conversationScopeKey, selectedModelKey]);
   // effectiveReasoningSelection uses catalog preferences until the service confirms an optimistic route.
   // effectiveReasoningSelection 在服务确认乐观路线前使用目录中的记忆档位。
-  const effectiveReasoningSelection = options.useSessionReasoningSelection && selectedModelKey === activeModelChoiceKey
+  const effectiveReasoningSelection = isSession && selectedModelKey !== "" && selectedModelKey === catalogModelChoiceKey
     ? options.reasoningSelection
     : activeProviderModel?.model.reasoningSelection ?? null;
   // reasoningEffortOptions exposes only levels declared by the active model catalog.
@@ -253,9 +267,14 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // defaultReasoningEffort is the backend execution default for the effective selector.
   // defaultReasoningEffort 是当前生效选择器的后端执行默认档位。
   const defaultReasoningEffort = effectiveReasoningSelection?.defaultEffort ?? null;
-  // serviceSelectedReasoningEffort is the authoritative selected effort from the backend snapshot.
-  // serviceSelectedReasoningEffort 是后端快照中的权威选中档位。
-  const serviceSelectedReasoningEffort = effectiveReasoningSelection?.selectedEffort;
+  // Validate the session effort against this route's current capabilities, which may have changed since persistence.
+  // 会话保存后模型能力可能变化，因此只接受当前路线仍支持的思考档位。
+  const sessionEffort = selectedModelKey === activeModelChoiceKey ? request?.thinking_level : null;
+  // Only the per-model preference can fill an unset session effort across workbench owners.
+  // 跨工作台会话时，未设置的会话档位只从该模型自身的偏好读取。
+  const serviceSelectedReasoningEffort = sessionEffort
+    ? (reasoningEffortOptions.some((option) => option.value === sessionEffort) ? sessionEffort : defaultReasoningEffort)
+    : activeProviderModel?.model.reasoningSelection?.selectedEffort;
 
   React.useLayoutEffect(() => {
     // scopeChanged makes a different conversation's persisted model immediately authoritative.
@@ -265,10 +284,11 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     if (shouldDeferServiceModelChoiceSync(scopeChanged, pendingModelChoiceRef.current)) {
       return;
     }
-    const synchronizedChoice = serviceModelChoiceSyncValue(
-      scopeChanged,
-      activeModelChoiceKey,
-    );
+    // A materialized session clears its selection while its own request is loading.
+    // 已有会话等待自身配置期间清空选择。
+    const synchronizedChoice = isSession
+      ? activeModelChoiceKey
+      : serviceModelChoiceSyncValue(scopeChanged, activeModelChoiceKey);
     if (synchronizedChoice === null) {
       return;
     }
@@ -276,7 +296,7 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     modelRequestVersionRef.current += 1;
     confirmedModelChoiceRef.current = synchronizedChoice;
     setModelChoice(synchronizedChoice);
-  }, [activeModelChoiceKey, options.conversationScopeKey]);
+  }, [activeModelChoiceKey, isSession, options.conversationScopeKey]);
 
   React.useLayoutEffect(() => {
     // scopeChanged restores the new model's choice even if both models offer identical levels.

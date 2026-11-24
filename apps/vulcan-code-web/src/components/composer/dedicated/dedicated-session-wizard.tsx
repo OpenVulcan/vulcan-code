@@ -63,7 +63,6 @@ export function DedicatedSessionWizard(props: {
   // 向导与普通草稿共用按模型记录的思考档位及保存屏障。
   const model = useComposerModelSelection({
     conversationScopeKey: draftSlotKey,
-    useSessionReasoningSelection: false,
     providers: props.providers,
     reasoningSelection: null,
     onSelectModel: props.onSelectWorkbenchModel,

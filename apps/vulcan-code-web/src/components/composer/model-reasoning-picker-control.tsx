@@ -236,7 +236,9 @@ export function ModelReasoningPickerControl(props: {
       providerName: localizedProviderName(choice.providerId, choice.providerName, t),
     }))
   ), [props.providers, t]);
-  const selectedChoice = resolveModelPickerDisplayedChoice(choices, props.value);
+  // A materialized session waiting for its route must never display a foreign catalog selection.
+  // 已物化会话等待自身路线时，不能显示其他会话的目录选中项。
+  const selectedChoice = props.conversationId && !props.value ? undefined : resolveModelPickerDisplayedChoice(choices, props.value);
   const modelLabel = selectedChoice?.modelName ?? props.fallbackLabel;
   const reasoning = describeReasoningSelection(props.reasoningOptions, props.reasoningEffort, t, props.defaultReasoningEffort);
   // unavailable closes the popover when there is neither a model to switch nor a level to adjust.

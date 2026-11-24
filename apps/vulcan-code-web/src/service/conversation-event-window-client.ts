@@ -43,6 +43,10 @@ export interface ConversationRequestConfigV1 {
   set_at_ms: number | null;
 }
 
+/** Request configurations committed together for the session owning the event window.
+ * 事件窗口所属会话同时提交的两份请求配置。 */
+export type ConversationRequestConfigsV1 = Pick<ConversationSessionConfigV1, "current_request" | "next_request">;
+
 /** Session access carried by durable edges and reconnects so a permission change reaches every window.
  * 随可靠边与重连下发的会话授权，使权限修改到达每个窗口。 */
 export interface ConversationSessionAccessV1 {

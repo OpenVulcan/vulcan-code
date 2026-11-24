@@ -57,7 +57,7 @@ it("sends an answer reply through the normal send path, appended to the existing
     outputStyleCatalog: { defaultId: "default", selectedId: "default", entries: [] },
     contextCompactionWindowNodes: [], sessionContextWindowSelection: null, customContextWindowMinTokens: 100_000,
     vmmAvailable: false, isConversationRunning: false, thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE,
-    providers: [], reasoningSelection: null,
+    providers: [], reasoningSelection: null, sessionRequest: null,
     onSelectWorkbenchModel: vi.fn().mockResolvedValue(true),
     onListWorkbenchModelSecondaryRoutes: vi.fn().mockResolvedValue([]),
     onSelectWorkbenchModelSecondaryRoute: vi.fn().mockResolvedValue(true),

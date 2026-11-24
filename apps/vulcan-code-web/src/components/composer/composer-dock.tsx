@@ -284,6 +284,15 @@ export function ComposerDock(props: {
   // answerModeState 在选择转换期间始终绑定精确已加载归属。
   const answerModeState = useSelectedConversationEventWindowSelector(selectAnswerMode, conversationSelectionEqual);
   const permissionModeState = useSelectedConversationEventWindowSelector(selectPermissionMode, conversationSelectionEqual);
+  // Only the displayed session may supply the next request shown in the model picker.
+  // 只有当前显示的会话可以提供模型选择器中显示的下一请求。
+  const selectSessionRequest = React.useCallback((snapshot: ConversationEventWindowControllerSnapshot) => {
+    if (!props.conversationId || snapshot.owner?.session_id !== props.conversationId || !snapshot.session_config) return null;
+    return snapshot.session_config.next_request ?? snapshot.session_config.current_request;
+  }, [props.conversationId]);
+  // Subscribe to this route independently of unrelated workbench refreshes.
+  // 单独订阅当前路线，避免其他工作台刷新影响选择器。
+  const sessionRequest = useSelectedConversationEventWindowSelector(selectSessionRequest, conversationSelectionEqual);
   const visiblePendingPrompts = useVisiblePendingPrompts(props.pendingPrompts);
   const dedicatedMemory = useSelectedConversationEventWindowSelector(selectDedicatedMemory, conversationSelectionEqual);
   // Only the exact selected persisted session may expose its dedicated controls.
@@ -432,6 +441,7 @@ export function ComposerDock(props: {
         onReorderPendingPrompts={props.onReorderPendingPrompts}
         onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
         reasoningSelection={props.reasoningSelection}
+        sessionRequest={sessionRequest}
         sessionPlanMode={props.sessionPlanMode}
         sessionVmmPolicy={props.sessionVmmPolicy}
         outputStyleCatalog={props.outputStyleCatalog}

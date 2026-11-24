@@ -61,7 +61,7 @@ function composerProps(overrides: Partial<React.ComponentProps<typeof ComposerPa
     outputStyleCatalog: { defaultId: "default", selectedId: "default", entries: [] },
     contextCompactionWindowNodes: [], sessionContextWindowSelection: null, customContextWindowMinTokens: 100_000,
     vmmAvailable: false, isConversationRunning: true, thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE,
-    providers: [], reasoningSelection: null,
+    providers: [], reasoningSelection: null, sessionRequest: null,
     onSelectWorkbenchModel: vi.fn().mockResolvedValue(true),
     onListWorkbenchModelSecondaryRoutes: vi.fn().mockResolvedValue([]),
     onSelectWorkbenchModelSecondaryRoute: vi.fn().mockResolvedValue(true),
@@ -359,6 +359,7 @@ it("prepares admitted uploads immediately and uses the original path if the acti
   // 使用同一草稿所有者重新渲染，由后端确认激活模型已更换。
   const propsForModel = (id: string) => composerProps({
     isConversationRunning: false,
+    sessionRequest: { provider: "fixture", connection_id: "connection", model: id, thinking_level: null, set_at_ms: null, temperature: null },
     providers: [{ id: "fixture", name: "Fixture", status: "ready", connectionId: "connection",
       models: [{ id, name: id, active: true, routeRevision: "route-" + id }] }],
   });

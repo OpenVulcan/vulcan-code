@@ -6,7 +6,8 @@ use vulcan_service_api::{
     ConversationEventPageV1Request, ConversationEventReconnectV1Request,
     ConversationEventReconnectV1Response, ConversationEventRehydrateReasonV1,
     ConversationEventRevisionFrontierV1, ConversationEventWindowV1Response,
-    ConversationSessionAccessV1, ConversationSessionConfigV1, ServiceEventEmitter,
+    ConversationRequestConfigsV1, ConversationSessionAccessV1, ConversationSessionConfigV1,
+    ServiceEventEmitter,
 };
 use vulcan_session_core::v1::config::SessionConfig;
 use vulcan_session_core::v1::event::ConversationEvent;
@@ -135,12 +136,18 @@ pub(crate) async fn service_session_event_hydration_v1(
     });
     // Answer mode visibility follows confirmed storage, even when transcript memory is newer.
     // 即使转录内存更新，回答模式可见性仍跟随已确认存储。
+    // Keep the initial picker and subsequent durable updates on the same revision timeline.
+    // 首次加载的模型选择和后续持久更新使用同一修订时间线。
+    let durable_current_request = persisted.state.config.active_request.clone();
+    let durable_next_request = persisted.state.config.pending_request.clone();
     let durable_answer_mode = persisted.state.config.answer_mode.clone();
     let durable_access = persisted.state.access.clone();
     let durable_dedicated = persisted.state.dedicated.clone();
     let (window_generation, events, open_turn_id, open_turn_start_seq, mut session_config) =
         merge_persisted_with_resident(persisted.state, persisted.events, resident, "hydration")?;
     session_config.answer_mode = durable_answer_mode;
+    session_config.active_request = durable_current_request;
+    session_config.pending_request = durable_next_request;
     let open_turn_id =
         open_turn_id.or_else(|| open_turn_id_from_events(&events, open_turn_start_seq));
     Ok(ConversationEventWindowV1Response::hydration(
@@ -277,6 +284,11 @@ pub(crate) async fn service_session_event_reconnect_v1(
         .map_err(|error| format!("failed to read V1 reconnect frontier: {error}"))?;
     let durable_answer_mode = persisted_state.config.answer_mode.clone();
     let durable_access = ConversationSessionAccessV1::from_access(&persisted_state.access);
+    // Use the same persisted revision as the reconnect acknowledgement.
+    // 与重连确认使用同一已落盘修订。
+    let requests = Box::new(ConversationRequestConfigsV1::from_config(
+        &persisted_state.config,
+    ));
     let resident = optional_registered_handle(&registry, session_id)?
         .map(|handle| capture_resident_snapshot(&handle))
         .transpose()?;
@@ -364,6 +376,7 @@ pub(crate) async fn service_session_event_reconnect_v1(
         .map(|mut response| {
             response.answer_mode = Some(durable_answer_mode);
             response.access = Some(durable_access);
+            response.request_configs = Some(requests);
             response
         });
     };
@@ -402,6 +415,7 @@ pub(crate) async fn service_session_event_reconnect_v1(
     .map(|mut response| {
         response.answer_mode = Some(durable_answer_mode);
         response.access = Some(durable_access);
+        response.request_configs = Some(requests);
         response
     })
 }
@@ -696,10 +710,13 @@ fn authoritative_revision_frontier(
             resident.durable_revision, persisted_state.document_revision
         ));
     }
+    // Controls came from this disk read. A later flush may already have advanced the resident
+    // durable cursor; acknowledging it here would cause the client to discard its control update.
+    // 控件取自本次磁盘读取。此后完成的落盘可能已推进驻留持久游标，在此确认它会导致客户端丢弃对应的控件更新。
     ConversationEventRevisionFrontierV1::try_new(
         service_epoch,
         resident.memory_revision,
-        resident.durable_revision,
+        persisted_state.document_revision,
     )
 }
 
@@ -976,6 +993,21 @@ mod tests {
         .expect("resident volatile revision frontier");
         assert_eq!(frontier.memory_revision, 9);
         assert_eq!(frontier.durable_revision, 7);
+
+        // Simulate another flush between reading the persisted config and sampling the resident document.
+        // 模拟读取持久配置之后、取驻留文档快照之前又完成一次落盘。
+        let advanced = ResidentEventSnapshot {
+            durable_revision: 8,
+            ..resident
+        };
+        let raced = authoritative_revision_frontier(
+            "test-service-epoch",
+            &persisted_state,
+            Some(&advanced),
+        )
+        .unwrap();
+        assert_eq!(raced.memory_revision, advanced.memory_revision);
+        assert_eq!(raced.durable_revision, persisted_state.document_revision);
     }
 
     /// A stale resident owner cannot override a newer physical metadata snapshot.

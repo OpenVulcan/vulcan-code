@@ -5,6 +5,7 @@ import {
   enqueueComposerPersistence,
   flushLatestComposerPersistence,
 } from "@/components/composer/composer-persistence-queue";
+import type { ConversationRequestConfigV1 } from "@/service/conversation-event-window-client";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import { ModelReasoningPickerControl } from "@/components/composer/model-reasoning-picker-control";
 import type { ComposerSlashCommandResult, ComposerSubmission } from "@/components/composer/composer-model";
@@ -257,6 +258,9 @@ export function ComposerPanel(props: {
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
+  // The revision-confirmed request for this exact session, once its event window is ready.
+  // 此会话的事件窗口就绪后，由其修订确认的请求。
+  sessionRequest: ConversationRequestConfigV1 | null;
 }) {
   // t translates stable composer labels while model names remain provider data.
   // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
@@ -377,7 +381,7 @@ export function ComposerPanel(props: {
     flushReasoningSelection,
   } = useComposerModelSelection({
     conversationScopeKey: draftSlotKey,
-    useSessionReasoningSelection: Boolean(props.conversationId),
+    sessionRequest: props.conversationId ? props.sessionRequest : undefined,
     providers: props.providers,
     reasoningSelection: props.reasoningSelection,
     onSelectModel: props.onSelectWorkbenchModel,
@@ -959,7 +963,7 @@ export function ComposerPanel(props: {
                   conversationId={props.conversationId}
                   onAccountChange={(choice) => void handlePersistedModelChoiceChange(choice)}
                   defaultReasoningEffort={defaultReasoningEffort}
-                  fallbackLabel={t("composer.modelPicker.placeholder")}
+                  fallbackLabel={props.sessionRequest?.model ?? t("composer.modelPicker.placeholder")}
                   filterPlaceholder={t("composer.modelPicker.filter")}
                   modelOpenSignal={modelPickerOpenSignal}
                   noMatchesLabel={t("composer.modelPicker.noMatches")}

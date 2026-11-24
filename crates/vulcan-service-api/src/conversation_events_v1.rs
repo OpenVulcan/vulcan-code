@@ -174,6 +174,33 @@ pub struct ConversationSessionConfigV1 {
     pub dedicated: Option<DedicatedSessionProfile>,
 }
 
+/// Current and staged request configurations from the same committed session revision.
+/// 同一会话已提交修订上的当前和待生效请求配置。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationRequestConfigsV1 {
+    /// Configuration already in effect for the session.
+    /// 会话当前生效的请求配置。
+    pub current_request: ConversationRequestConfigV1,
+    /// Next-boundary selection, cleared when promoted.
+    /// 下个请求边界的选择，在生效后清空。
+    pub next_request: Option<ConversationRequestConfigV1>,
+}
+
+impl ConversationRequestConfigsV1 {
+    /// Projects both request slots from one session configuration for hydration and live updates.
+    /// 从一份会话配置投影两个请求配置槽，供首次加载与实时更新共用。
+    pub fn from_config(config: &SessionConfig) -> Self {
+        Self {
+            current_request: ConversationRequestConfigV1::from_active(&config.active_request),
+            next_request: config
+                .pending_request
+                .as_ref()
+                .map(ConversationRequestConfigV1::from_pending),
+        }
+    }
+}
+
 impl ConversationSessionConfigV1 {
     /// Projects the sole V1 metadata authority used by selected-session UI.
     /// 投影选中会话 UI 使用的唯一 V1 metadata 权威。
@@ -193,15 +220,15 @@ impl ConversationSessionConfigV1 {
         access: &AccessConfig,
         dedicated: Option<&DedicatedSessionProfile>,
     ) -> Self {
+        // Share the request projection with durable acknowledgements and reconnects.
+        // 与持久化确认和重连共用同一请求配置投影。
+        let requests = ConversationRequestConfigsV1::from_config(config);
         Self {
             answer_mode: config.answer_mode.clone(),
             permission_mode: access.permission,
             unattended: access.unattended.clone(),
-            current_request: ConversationRequestConfigV1::from_active(&config.active_request),
-            next_request: config
-                .pending_request
-                .as_ref()
-                .map(ConversationRequestConfigV1::from_pending),
+            current_request: requests.current_request,
+            next_request: requests.next_request,
             context_window_selection: config.context_window_selection,
             dedicated: dedicated.cloned(),
         }
@@ -411,6 +438,10 @@ pub struct ConversationEventLiveDeltaV1 {
     /// 成功发布候选中的精确会话授权；内存补丁不携带该字段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<Box<ConversationSessionAccessV1>>,
+    /// Confirmed request configurations owned by the session and revision on this message.
+    /// 本消息所属会话和修订已确认的请求配置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_configs: Option<Box<ConversationRequestConfigsV1>>,
     /// Ownership-bound events in ascending seq order. Volatile pushes contain
     /// the exact sparse change set and durable acknowledgements are empty.
     /// 按升序排列的带归属事件。volatile 推送包含精确稀疏变化集，可靠确认为空。
@@ -645,6 +676,7 @@ impl ConversationEventLiveDeltaV1 {
             text_appends: Vec::new(),
             answer_mode: None,
             access: None,
+            request_configs: None,
         })
     }
 
@@ -693,6 +725,7 @@ impl ConversationEventLiveDeltaV1 {
             text_appends: Vec::new(),
             answer_mode: None,
             access: None,
+            request_configs: None,
         })
     }
 
@@ -1107,6 +1140,10 @@ pub struct ConversationEventReconnectV1Response {
     /// 从同一份持久元数据读取的会话授权；要求完整加载时缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<ConversationSessionAccessV1>,
+    /// Confirmed request configurations owned by the session and revision on this message.
+    /// 本消息所属会话和修订已确认的请求配置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_configs: Option<Box<ConversationRequestConfigsV1>>,
     /// Complete ownership-bound recovery range, empty when rehydration is required.
     /// 完整的带归属恢复范围；要求重新 hydration 时为空。
     #[serde(flatten)]
@@ -1154,6 +1191,7 @@ impl ConversationEventReconnectV1Response {
             disposition: ConversationEventReconnectDispositionV1::Recovery,
             answer_mode: None,
             access: None,
+            request_configs: None,
         })
     }
 
@@ -1183,6 +1221,7 @@ impl ConversationEventReconnectV1Response {
             disposition: ConversationEventReconnectDispositionV1::RehydrateRequired(reason),
             answer_mode: None,
             access: None,
+            request_configs: None,
         })
     }
 }

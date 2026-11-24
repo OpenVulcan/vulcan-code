@@ -4,7 +4,7 @@
 // 相同事件形态的稀疏 patch。
 import { CLIENT_ACTION_ID_MAX_BYTES } from "@/generated/protocol-limits";
 import type { AnswerModePreference } from "@/service/answer-mode";
-import type { ConversationSessionAccessV1 } from "@/service/conversation-event-window-client";
+import type { ConversationRequestConfigsV1, ConversationSessionAccessV1 } from "@/service/conversation-event-window-client";
 
 /** JSON value allowed inside manifest-validated tool payloads.
  * 工具 Manifest 已校验载荷内允许的 JSON 值。 */
@@ -1259,6 +1259,9 @@ export interface ConversationEventLivePatch extends ConversationEventWindowBatch
   /** Confirmed session access carried only by durable acknowledgements.
    * 仅可靠确认携带的已确认会话授权。 */
   access?: ConversationSessionAccessV1;
+  /** Request configuration at this durable revision, including promotion or removal of a pending route.
+   * 本持久修订的请求配置，包含待生效路线的提升或移除。 */
+  request_configs?: ConversationRequestConfigsV1;
   /** Stable identity of the service process that emitted this edge.
    * 发出该边的服务进程稳定身份。 */
   service_epoch: string;
@@ -1309,6 +1312,9 @@ export interface ConversationEventReconnectPatch extends ConversationEventWindow
   /** Persisted session access captured with the same storage state.
    * 与同一存储状态共同捕获的持久会话授权。 */
   access?: ConversationSessionAccessV1;
+  /** Request configuration at this durable revision, including promotion or removal of a pending route.
+   * 本持久修订的请求配置，包含待生效路线的提升或移除。 */
+  request_configs?: ConversationRequestConfigsV1;
   /** Stable identity of the service process that produced the recovery range.
    * 生成该恢复范围的服务进程稳定身份。 */
   service_epoch: string;
@@ -1679,7 +1685,7 @@ export class ConversationEventWindowStore {
 
   /** Applies one authoritative reconnect range whose explicit base may span multiple revisions.
    * 应用一段带显式前驱、可跨越多个修订的权威重连范围。 */
-  applyReconnect(patch: ConversationEventReconnectPatch): void {
+  applyReconnect(patch: ConversationEventReconnectPatch): boolean {
     this.assertCurrentOwner(patch);
     assertSafeDocumentRevision(patch.base_memory_revision);
     assertWindowFrontier(patch);
@@ -1695,7 +1701,7 @@ export class ConversationEventWindowStore {
         `reconnect memory revision ${patch.memory_revision} precedes base ${patch.base_memory_revision}`,
       );
     }
-    if (patch.memory_revision < frontier.memory_revision) return;
+    if (patch.memory_revision < frontier.memory_revision) return false;
     if (patch.base_memory_revision !== frontier.memory_revision) {
       throw new ConversationEventRevisionGapError(
         "memory",
@@ -1720,6 +1726,7 @@ export class ConversationEventWindowStore {
       patch.memory_revision,
       patch.durable_revision,
     );
+    return true;
   }
 
   /** Builds one validated live replacement without publishing events or frontiers.

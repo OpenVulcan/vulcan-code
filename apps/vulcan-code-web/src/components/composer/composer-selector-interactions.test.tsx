@@ -12,6 +12,7 @@ import { ModelReasoningPickerControl, describeReasoningSelection } from "./model
 import { ComposerAiCapabilityControl, ContextUsageOrb } from "./composer-capability-controls";
 import { PendingPromptQueueStrip } from "./composer-prompt-controls";
 import { DedicatedComposerContext } from "./dedicated/dedicated-session-controls";
+import type { ConversationRequestConfigV1 } from "@/service/conversation-event-window-client";
 import type { DedicatedMemorySelection } from "@/service/dedicated-memory";
 import { useComposerPlanMode } from "./composer-panel/use-composer-plan-mode";
 import { useComposerModelSelection, type ComposerModelSelectionController } from "./composer-panel/use-composer-model-selection";
@@ -68,6 +69,43 @@ function providers(): ProviderSummary[] {
     models: [{ id: "first", name: "First", active: true }, { id: "second", name: "Second", active: false }] }];
 }
 
+it("keeps the session route visible when a different session activates another catalog model", async () => {
+  // Capture any accidental persistence during passive refreshes.
+  // 捕获被动刷新期间任何意外的持久写入。
+  const persist = vi.fn().mockResolvedValue(true);
+  // One account offers both models so a foreign active flag is a valid catalog choice.
+  // 同一账号提供两个模型，其他会话的选中标记指向真实存在的选项。
+  const foreign = providers().map((provider) => ({
+    ...provider, models: provider.models?.map((model) => ({ ...model, active: model.id === "second" })),
+  }));
+  // Supply Core's exact request alongside an independently changing catalog and render the real trigger.
+  // 同时传入 Core 的精确请求与可独立变化的目录，返回实际选择器按钮。
+  function Picker({ request, catalog }: { request: ConversationRequestConfigV1 | null; catalog: ProviderSummary[] }) {
+    const selection = useComposerModelSelection({
+      conversationScopeKey: "session", sessionRequest: request,
+      providers: catalog, reasoningSelection: null, onSelectModel: persist, onSelectReasoningEffort: persist,
+    });
+    return <ModelReasoningPickerControl conversationId="session" ariaLabel="Route" fallbackLabel="Loading"
+      accountAriaLabel="Account" accounts={selection.activeModelAccounts} accountValue={selection.activeModelChoice?.connectionId ?? ""}
+      providers={catalog} value={selection.modelChoice} modelOpenSignal={0} reasoningOpenSignal={0}
+      reasoningEffort="" reasoningOptions={[]} filterPlaceholder="" noMatchesLabel="" defaultReasoningEffort={null}
+      onAccountChange={persist} onModelChange={persist} onReasoningEffortChange={persist} />;
+  }
+  // Read the label presented to the user, including the unhydrated state.
+  // 读取实际显示给用户的标签，包含首次加载前的状态。
+  const label = () => host.querySelector('[aria-label="Route"]')?.textContent;
+  const request = { provider: "p", connection_id: "a", model: "first", thinking_level: null, temperature: null, set_at_ms: null };
+  await render(<Picker request={request} catalog={providers()} />);
+  expect(label()).toContain("First");
+  await render(<Picker request={request} catalog={foreign} />);
+  expect(label()).toContain("First");
+  await render(<Picker request={null} catalog={foreign} />);
+  expect(label()).toContain("Loading");
+  await render(<Picker request={{ ...request, model: "second" }} catalog={providers()} />);
+  expect(label()).toContain("Second");
+  expect(persist).not.toHaveBeenCalled();
+});
+
 it("restores the target model's remembered effort and adopts the supported fallback after a catalog update", async () => {
   // saved observes the exact route that owns an explicit draft choice.
   // saved 观察显式草稿选择所属的精确路线。
@@ -93,7 +131,6 @@ it("restores the target model's remembered effort and adopts the supported fallb
   function Probe({ catalog }: { catalog: ProviderSummary[] }) {
     selection = useComposerModelSelection({
       conversationScopeKey: "draft:reasoning",
-      useSessionReasoningSelection: false,
       providers: catalog,
       reasoningSelection: null,
       onSelectModel: async () => true,
