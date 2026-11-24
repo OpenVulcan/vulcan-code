@@ -431,7 +431,9 @@ async fn dispatch_pending_prompt_root(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::test_support::{TestHostRuntimeRoot, test_service_state_with_parent_session};
+    use crate::tests::test_support::{
+        TestHostRuntimeRoot, run_with_service_worker_stack, test_service_state_with_parent_session,
+    };
     use std::sync::{Arc, Mutex};
     use vulcan_session_core::v1::{
         ClientActionId, ClientInputSubmission, CollaborationOperationId, CollaborationRunControl,
@@ -442,8 +444,16 @@ mod tests {
     /// 验证准备失败落盘后，真实队列 RPC 会发送所选输入。
     /// Takes no arguments. Checks wire request order, repeat clicks, and reloaded turn ownership.
     /// 不接收参数。检查线协议请求顺序、重复点击和重载后的回合归属。
-    #[tokio::test]
-    async fn failed_turn_queue_row_sends_original_input_once() {
+    #[test]
+    fn failed_turn_queue_row_sends_original_input_once() {
+        run_with_service_worker_stack(verify_failed_turn_queue_dispatch);
+    }
+
+    /// Exercises the exact selected queue item on a local Provider before and after reloading.
+    /// 使用本地供应商检验所选队列项在重载前后的精确派发。
+    /// Takes no arguments and finishes after the wire and durable state assertions.
+    /// 不接收参数，完成线协议和持久状态断言后返回。
+    async fn verify_failed_turn_queue_dispatch() {
         use crate::agent_collaboration::compaction_test_https as https;
         use vulcan_provider_adapters::{CredentialConnection, CredentialMode, PublicAiRuntime};
         use vulcan_session_core::v1::config::ActiveRequestConfig;
@@ -724,8 +734,16 @@ mod tests {
     /// 验证停止回合保留排队消息，恢复后通过 RPC 精确目标接收插队。
     /// Takes no parameters and returns after both durable outcomes are verified.
     /// 无参数，验证两个可靠结果后返回。
-    #[tokio::test]
-    async fn stopped_pending_insertion_preserves_queued_input() {
+    #[test]
+    fn stopped_pending_insertion_preserves_queued_input() {
+        run_with_service_worker_stack(verify_stopped_pending_insertion);
+    }
+
+    /// Exercises the insertion RPC while stopped and after resuming a conversation.
+    /// 在会话停止及恢复后分别验证插队 RPC。
+    /// Takes no arguments and finishes after checking the durable queue and shortcut results.
+    /// 不接收参数，检查持久队列和快捷操作结果后返回。
+    async fn verify_stopped_pending_insertion() {
         let session_id = SessionId::new_v4();
         let root = TestHostRuntimeRoot::new(session_id);
         let mut service = test_service_state_with_parent_session(session_id);

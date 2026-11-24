@@ -10,6 +10,35 @@ use vulcan_workspace_store::workspace_store::{
     SessionV1FlushResult, SessionV1StorageError, SessionV1StoreError,
 };
 
+/// Runs an async service scenario with the production worker stack budget.
+/// 使用生产工作线程的栈预算运行异步服务场景。
+/// `scenario` builds the future on that worker so both construction and polling use its stack.
+/// `scenario` 在该线程上构建 Future，使构建和轮询都使用其栈。
+/// Returns when the scenario finishes and propagates failures to the calling test.
+/// 场景结束后返回，并将失败传回调用测试。
+pub(crate) fn run_with_service_worker_stack<F>(scenario: impl FnOnce() -> F + Send + 'static)
+where
+    F: std::future::Future<Output = ()>,
+{
+    // The service polls deep dispatch and settlement futures on a worker with an explicit stack.
+    // 服务在显式配置栈大小的线程上轮询较深的派发与结算 Future。
+    // Reuse that budget here because the default test harness stack can abort these scenarios.
+    // 此处复用该预算，因为默认测试线程栈可能导致这些场景中止。
+    let worker = std::thread::Builder::new()
+        .stack_size(vulcan_agent_runtime::AGENT_STREAM_WORKER_STACK_BYTES)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build service scenario test runtime")
+                .block_on(scenario());
+        })
+        .expect("start service scenario test worker");
+    if let Err(panic) = worker.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 /// In-memory durable backend used by service tests that only exercise V1 projections.
 /// 供仅验证 V1 投影的服务测试使用的内存可靠后端。
 struct TestSessionV1ProjectionBackend;

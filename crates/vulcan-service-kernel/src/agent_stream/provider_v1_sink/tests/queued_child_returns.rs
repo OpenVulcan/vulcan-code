@@ -2,6 +2,7 @@
 //! 排队子执行链在返回最终回答前结算原始归属。
 
 use super::*;
+use crate::tests::test_support::run_with_service_worker_stack;
 use vulcan_agent_runtime::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use vulcan_agent_runtime::agent_runtime::task_runtime::{
     DetachedTaskRuntimeEvent, TaskV1ExecutionFacts,
@@ -811,30 +812,32 @@ async fn queued_child_successor_preserves_parent_stop_during_recovery() {
 
 /// A queued Provider failure releases its own reservation and reaches the parent exactly once.
 /// 排队供应商失败释放自身预留，并且只向父会话回流一次。
-#[tokio::test]
-async fn queued_child_successor_failure_publishes_durable_result() {
-    queued_child_chain(
-        false,
-        false,
-        false,
-        Some(vulcan_session_boundary::SubagentMailboxEventKind::Failed),
-        QueuedDelivery::Live,
-    )
-    .await;
+#[test]
+fn queued_child_successor_failure_publishes_durable_result() {
+    run_with_service_worker_stack(|| {
+        queued_child_chain(
+            false,
+            false,
+            false,
+            Some(vulcan_session_boundary::SubagentMailboxEventKind::Failed),
+            QueuedDelivery::Live,
+        )
+    });
 }
 
 /// A queued stop seals its exact turn without treating it as successful output.
 /// 排队停止封闭其精确回合，不将其视为成功输出。
-#[tokio::test]
-async fn queued_child_successor_stop_publishes_durable_result() {
-    queued_child_chain(
-        false,
-        false,
-        false,
-        Some(vulcan_session_boundary::SubagentMailboxEventKind::Stopped),
-        QueuedDelivery::Live,
-    )
-    .await;
+#[test]
+fn queued_child_successor_stop_publishes_durable_result() {
+    run_with_service_worker_stack(|| {
+        queued_child_chain(
+            false,
+            false,
+            false,
+            Some(vulcan_session_boundary::SubagentMailboxEventKind::Stopped),
+            QueuedDelivery::Live,
+        )
+    });
 }
 
 /// Normal successful queues retain complete results after every execution gains durable ownership.
