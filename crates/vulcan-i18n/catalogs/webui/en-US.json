@@ -3861,6 +3861,7 @@
   "settings.modelServices.signup": "Get an account",
   "settings.modelServices.more": "More actions",
   "settings.modelServices.affiliate": "AFF",
+  "settings.modelServices.usage.codexUsage": "View Codex usage",
   "settings.modelServices.usage.officialSite": "Check balance on the provider's site",
   "settings.modelServices.head.id": "ID",
   "settings.modelServices.head.protocols": "Protocols",

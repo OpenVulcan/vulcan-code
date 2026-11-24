@@ -32,6 +32,10 @@ import { healthOf, type HealthState, type ProviderAlert } from "./provider-alert
 import { providerSignupUrl } from "./provider-intro"
 import type { SnapshotMutations } from "./use-snapshot-mutations"
 
+// The Codex usage dashboard is the official destination for externally managed ChatGPT Plan usage.
+// Codex 用量页是 ChatGPT 套餐用量的官方查看入口。
+const CODEX_USAGE_DASHBOARD_URL = "https://chatgpt.com/codex/settings/usage"
+
 // ProviderAccountsProps binds one provider's accounts to the page-owned state.
 // ProviderAccountsProps 将单个供应商的账号绑定到页面持有的状态。
 export interface ProviderAccountsProps {
@@ -175,12 +179,9 @@ function AccountCard(props: AccountCardProps) {
   const health = healthOf(props.alerts, connection.enabled)
   const catalogError = props.alerts.find((alert) => alert.kind === "catalog_error")?.detail
   const modelCount = snapshot.catalogs[connection.id]?.models.length ?? 0
-  // The ChatGPT Plan account manages its quota in ChatGPT.
-  // ChatGPT 套餐账号在 ChatGPT 内管理额度。
-  const showUsage = provider.id !== "openai" || connection.service_entry_id !== "chatgpt-plan"
   // Use the active connection's projected usage capability and required credential.
   // 使用生效连接投影的用量能力及所需凭据。
-  const usageSupported = showUsage && connection.usage_capability !== "unsupported"
+  const usageSupported = connection.usage_capability !== "unsupported"
     && (!connection.usage_requires_management_key || connection.has_management_key)
   // Share the translated names between hover hints and accessible button labels.
   // 悬停提示与按钮的无障碍名称共用翻译文案。
@@ -200,14 +201,12 @@ function AccountCard(props: AccountCardProps) {
         <span className="vk-ms-chip">{presentation.title}</span>
         {presentation.tags.map((tag) => <span className="vk-ms-chip" key={tag}>{tag}</span>)}
       </div>
-      {showUsage ? (
-        <AccountUsage
-          connection={connection}
-          profile={profile}
-          signupUrl={providerSignupUrl(provider)}
-          usage={props.usage}
-        />
-      ) : null}
+      <AccountUsage
+        connection={connection}
+        profile={profile}
+        signupUrl={providerSignupUrl(provider)}
+        usage={props.usage}
+      />
       {catalogError ? <p className="vk-ms-account-error" title={catalogError}>{catalogError}</p> : null}
       <footer className="vk-ms-account-foot">
         <span className="vk-ms-status" data-state={health}>
@@ -323,6 +322,8 @@ function AccountMenu({ busy, connection, onDelete }: Pick<AccountCardProps, "bus
 
 // AccountUsage is the card's usage slot: plan and balance facts, then quota windows or where to look instead.
 // AccountUsage 是卡片的用量区：先列套餐与余额，再显示额度窗口或应去何处查看。
+// props supplies the active connection, profile, usage observation and provider site. Returns the shared usage region.
+// props 提供生效连接、凭据配置档、用量观测和供应商网站。返回共用的用量区。
 function AccountUsage(props: {
   connection: PublicAiConnection
   profile: PublicAiCredentialProfile | undefined
@@ -334,6 +335,12 @@ function AccountUsage(props: {
   // Read support from the same live account projection as the refresh shortcut.
   // 从与刷新快捷按钮相同的实时账号视图中获取支持状态。
   const unsupported = props.connection.usage_capability === "unsupported"
+  // Select the Codex dashboard for the exact OpenAI ChatGPT Plan entry.
+  // 为 OpenAI 的 ChatGPT 套餐入口选择 Codex 用量页。
+  const chatGptPlan = props.connection.provider_id === "openai" && props.connection.service_entry_id === "chatgpt-plan"
+  // Other unsupported accounts use their existing provider site.
+  // 其他不支持查询的账号使用已有供应商网站。
+  const officialUrl = chatGptPlan ? CODEX_USAGE_DASHBOARD_URL : props.signupUrl
   const balanceOnly = credentialUsageIsNonPlanAccount(props.profile)
   const { model } = overview
   return (
@@ -345,9 +352,9 @@ function AccountUsage(props: {
       {unsupported ? (
         <p className="vk-ms-usage-note">
           {t("composer.accountCard.usageUnsupported")}
-          {props.signupUrl ? (
-            <a href={props.signupUrl} rel="noreferrer" target="_blank">
-              {t("settings.modelServices.usage.officialSite")}
+          {officialUrl ? (
+            <a href={officialUrl} rel="noreferrer" target="_blank">
+              {t(chatGptPlan ? "settings.modelServices.usage.codexUsage" : "settings.modelServices.usage.officialSite")}
               <ExternalLink aria-hidden="true" className="vk-icon" />
             </a>
           ) : null}

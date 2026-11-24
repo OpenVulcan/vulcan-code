@@ -3861,6 +3861,7 @@
   "settings.modelServices.signup": "Создать аккаунт",
   "settings.modelServices.more": "Другие действия",
   "settings.modelServices.affiliate": "AFF",
+  "settings.modelServices.usage.codexUsage": "Посмотреть использование Codex",
   "settings.modelServices.usage.officialSite": "Проверить баланс на сайте провайдера",
   "settings.modelServices.head.id": "ID",
   "settings.modelServices.head.protocols": "Протоколы",

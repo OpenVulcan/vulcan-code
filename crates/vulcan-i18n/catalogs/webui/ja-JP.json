@@ -3861,6 +3861,7 @@
   "settings.modelServices.signup": "アカウントを作成",
   "settings.modelServices.more": "その他の操作",
   "settings.modelServices.affiliate": "AFF",
+  "settings.modelServices.usage.codexUsage": "Codex の使用量を確認",
   "settings.modelServices.usage.officialSite": "公式サイトで残高を確認",
   "settings.modelServices.head.id": "ID",
   "settings.modelServices.head.protocols": "プロトコル",

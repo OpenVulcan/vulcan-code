@@ -3861,6 +3861,7 @@
   "settings.modelServices.signup": "注册账号",
   "settings.modelServices.more": "更多操作",
   "settings.modelServices.affiliate": "AFF",
+  "settings.modelServices.usage.codexUsage": "查看 Codex 用量",
   "settings.modelServices.usage.officialSite": "前往官网查看余额",
   "settings.modelServices.head.id": "标识",
   "settings.modelServices.head.protocols": "协议",

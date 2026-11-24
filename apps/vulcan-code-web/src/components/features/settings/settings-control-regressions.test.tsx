@@ -323,33 +323,60 @@ it("refreshes usage in the supported account's footer after the edit and model s
   expect(refresh.disabled).toBe(false);
 });
 
-// Verifies that ChatGPT Plan retains account controls and leaves quota management to ChatGPT.
-// 验证 ChatGPT 套餐保留账号操作，并在 ChatGPT 内管理额度。
-it("omits the usage panel and actions for ChatGPT Plan accounts", async () => {
-  // Use the fixture's enabled account and its exact registered entry for the ChatGPT plan card.
-  // 使用夹具中已启用的账号及其注册入口作为 ChatGPT 套餐卡。
+// Verifies the shared usage layout and official destination for ChatGPT Plan and API accounts.
+// 验证 ChatGPT 套餐与 API 账号共用用量布局，并各自指向对应的官方页面。
+it("shows the shared usage summary and the official Codex usage link for ChatGPT Plan", async () => {
+  // The detached snapshot supplies a saved account and a credential profile for each card.
+  // 独立快照为每张卡提供已保存的账号及凭据配置档。
   const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   const connection = snapshot.connections.find((candidate) => candidate.id === "audit-account-1")!;
   const provider = snapshot.providers.find((candidate) => candidate.id === connection.provider_id)!;
   const entry = provider.service_entries.find((candidate) => candidate.id === connection.service_entry_id)!;
+  const tokenProfile = entry.credential_profiles.find((profile) => profile.id === connection.credential_profile_id)!;
   provider.id = "openai";
   provider.display_name = "OpenAI";
-  entry.id = "chatgpt-plan";
-  connection.provider_id = provider.id;
-  connection.service_entry_id = entry.id;
+  provider.promotion = {
+    signup_url: "https://platform.openai.com/",
+    partnership_kind: "none",
+    disclosure_key: "settings.providerPromotion.neutralDisclosure",
+  };
+  provider.service_entries = [
+    { ...entry, id: "public-api", display_name: "OpenAI API" },
+    { ...entry, id: "chatgpt-plan", display_name: "ChatGPT Plan", credential_profiles: [{
+      ...tokenProfile, id: "chatgpt-oauth", credential_mode: "auth", billing_kind: "provider_managed",
+      authorization: { kind: "registered_oauth", provider: "open_ai_chat_gpt" },
+    }] },
+  ];
+  // apiConnection uses the provider's regular external link and acts as a control beside the Plan card.
+  // apiConnection 使用供应商的普通外链，在套餐卡旁作为对照。
+  const apiConnection = snapshot.connections.find((candidate) => candidate.id === "audit-account-1-backup")!;
+  Object.assign(apiConnection, { provider_id: provider.id, service_entry_id: "public-api" });
+  Object.assign(connection, {
+    provider_id: provider.id, service_entry_id: "chatgpt-plan", credential_profile_id: "chatgpt-oauth",
+    credential_mode: "auth", billing_kind: "provider_managed", usage_capability: "unsupported",
+  });
   snapshot.providers = [provider];
-  snapshot.connections = [connection];
+  snapshot.connections = [connection, apiConnection];
   service.load.mockResolvedValue(snapshot);
   await render(<ModelServicesArea />);
 
-  // Check the connected account card rather than the provider's signup links.
-  // 检查已接入账号卡本身，避开供应商注册链接。
-  const card = host.querySelector(".vk-ms-account")!;
-  // Usage is absent while standard account actions remain available.
-  // 用量区不显示，常规账号操作仍可使用。
+  // cards are resolved by account identity so provider ordering cannot affect the assertions.
+  // 按账号身份查找 cards，供应商内部排序不会影响断言。
+  const cards = [...host.querySelectorAll(".vk-ms-account")];
+  const card = cards.find((candidate) => candidate.querySelector("strong")?.textContent === connection.display_name)!;
+  const apiCard = cards.find((candidate) => candidate.querySelector("strong")?.textContent === apiConnection.display_name)!;
+  // Both cards use the standard usage region and link to the destination for their billing plan.
+  // 两张卡都使用标准用量区，并指向各自计费方案的官方页面。
+  const usageLink = card.querySelector(".vk-ms-usage .vk-ms-usage-note a");
+  expect(card.querySelector(".vk-ms-usage-facts b")?.textContent)
+    .toBe(readLocaleMessage("en-US", "composer.accountCard.billingProviderManaged"));
+  expect(usageLink?.getAttribute("href")).toBe("https://chatgpt.com/codex/settings/usage");
+  expect(usageLink?.getAttribute("target")).toBe("_blank");
+  expect(usageLink?.textContent).toBe(readLocaleMessage("en-US", "settings.modelServices.usage.codexUsage"));
+  expect(apiCard.querySelector(".vk-ms-usage .vk-ms-usage-note a")?.getAttribute("href")).toBe(provider.promotion.signup_url);
+  // Refresh remains capability-gated while standard account controls stay available.
+  // 刷新仍由能力声明控制，常规账号操作保留。
   const usageLabel = readLocaleMessage("en-US", "settings.credentials.refreshUsage");
-  expect(card.querySelector(".vk-ms-usage")).toBeNull();
-  expect(card.querySelector('a[href="https://chatgpt.com/settings/usage"]')).toBeNull();
   expect(card.querySelector(`[aria-label="${usageLabel}"]`)).toBeNull();
   expect(card.querySelector('[role="switch"]')).not.toBeNull();
   expect(service.catalogFetch).not.toHaveBeenCalled();

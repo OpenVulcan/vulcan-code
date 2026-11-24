@@ -3861,6 +3861,7 @@
   "settings.modelServices.signup": "Crear una cuenta",
   "settings.modelServices.more": "Más acciones",
   "settings.modelServices.affiliate": "AFF",
+  "settings.modelServices.usage.codexUsage": "Ver el uso de Codex",
   "settings.modelServices.usage.officialSite": "Consultar el saldo en el sitio del proveedor",
   "settings.modelServices.head.id": "ID",
   "settings.modelServices.head.protocols": "Protocolos",

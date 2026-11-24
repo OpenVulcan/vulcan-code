@@ -3861,6 +3861,7 @@
   "settings.modelServices.signup": "계정 만들기",
   "settings.modelServices.more": "더 많은 작업",
   "settings.modelServices.affiliate": "AFF",
+  "settings.modelServices.usage.codexUsage": "Codex 사용량 보기",
   "settings.modelServices.usage.officialSite": "공식 사이트에서 잔액 확인",
   "settings.modelServices.head.id": "ID",
   "settings.modelServices.head.protocols": "프로토콜",
