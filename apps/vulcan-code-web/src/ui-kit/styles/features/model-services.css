@@ -554,6 +554,9 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
   font-size: var(--vk-fs-xs);
 }
 
+.vk-ms-usage-actions { align-items: center; }
+.vk-ms-usage-actions > button { margin-inline-start: auto; }
+
 .vk-ms-usage-quota { min-width: 0; font-size: var(--vk-fs-xs); }
 .vk-ms-usage-quota [data-slot="credential-credit-balances"] { column-gap: 12px; }
 

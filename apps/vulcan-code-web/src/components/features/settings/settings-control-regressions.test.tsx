@@ -20,7 +20,7 @@ const service = vi.hoisted(() => ({
   load: vi.fn(), modelSave: vi.fn(), connectionSave: vi.fn(), providerSave: vi.fn(), prioritySave: vi.fn(),
   manifestGet: vi.fn(), manifestSync: vi.fn(), oauthStart: vi.fn(), oauthStatus: vi.fn(), oauthCommit: vi.fn(),
   oauthCancel: vi.fn(), connectionDelete: vi.fn(), archiveExport: vi.fn(), archivePreview: vi.fn(), archiveImport: vi.fn(),
-  usageQuery: vi.fn(),
+  usageQuery: vi.fn(), catalogFetch: vi.fn(),
 }));
 vi.mock("@/service/settings-actions-service", async (importOriginal) => ({
   ...await importOriginal<object>(), loadPublicAiSettings: service.load,
@@ -35,6 +35,7 @@ vi.mock("@/service/settings-actions-service", async (importOriginal) => ({
   previewPublicAiConfigurationImport: service.archivePreview,
   importPublicAiConfiguration: service.archiveImport,
   queryPublicAiConnectionUsage: service.usageQuery,
+  fetchPublicAiModelCandidates: service.catalogFetch,
 }));
 
 // Shared test ownership guarantees portal cleanup even when an assertion fails.
@@ -320,6 +321,75 @@ it("refreshes usage in the supported account's footer after the edit and model s
   expect(selectedCard.textContent).toContain(failure);
   expect(neighborCard.textContent).not.toContain(failure);
   expect(refresh.disabled).toBe(false);
+});
+
+// Verifies that a plan card reports the result of a fresh, isolated account connection check.
+// 验证套餐卡片显示一次全新、隔离的账号连接检查结果。
+it("checks the ChatGPT plan connection without issuing a quota query", async () => {
+  // Use the fixture's enabled account and its exact registered entry for the ChatGPT plan card.
+  // 使用夹具中已启用的账号及其注册入口作为 ChatGPT 套餐卡。
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
+  const connection = snapshot.connections.find((candidate) => candidate.id === "audit-account-1")!;
+  const provider = snapshot.providers.find((candidate) => candidate.id === connection.provider_id)!;
+  const entry = provider.service_entries.find((candidate) => candidate.id === connection.service_entry_id)!;
+  provider.id = "openai";
+  provider.display_name = "OpenAI";
+  entry.id = "chatgpt-plan";
+  connection.provider_id = provider.id;
+  connection.service_entry_id = entry.id;
+  snapshot.providers = [provider];
+  snapshot.connections = [connection];
+  service.load.mockResolvedValue(snapshot);
+  await render(<ModelServicesArea />);
+
+  // Both controls belong to the usage block, and there is no duplicate external link.
+  // 两项操作均在用量区内，且外部链接只显示一次。
+  const card = host.querySelector(".vk-ms-account")!;
+  const usage = card.querySelector(".vk-ms-usage")!;
+  const authorization = card.querySelectorAll('a[href="https://chatgpt.com/settings/usage"]');
+  const check = button(readLocaleMessage("en-US", "settings.credentials.checkChatGptPlanConnection"));
+  const usageLabel = readLocaleMessage("en-US", "settings.credentials.refreshUsage");
+  expect(authorization).toHaveLength(1);
+  expect(usage.contains(authorization[0])).toBe(true);
+  expect(usage.contains(check)).toBe(true);
+  expect(usage.textContent).not.toContain(readLocaleMessage("en-US", "composer.accountCard.usageUnsupported"));
+  expect(card.querySelector(`[aria-label="${usageLabel}"]`)).toBeNull();
+
+  // An empty candidate result still proves Core consulted the selected account's model catalog.
+  // 候选结果为空也能证明 Core 已读取所选账号的模型目录。
+  const observation = { providerId: provider.id, serviceEntryId: entry.id, candidates: [] };
+  // Keep discovery active to verify visible progress and duplicate-click protection.
+  // 让发现请求保持运行，以验证可见进度及重复点击保护。
+  let finishCheck!: () => void;
+  service.catalogFetch.mockImplementationOnce(() => new Promise((resolve) => {
+    finishCheck = () => resolve(observation);
+  }));
+  // The check never needs a second local settings snapshot.
+  // 检查无需再次读取本地设置快照。
+  const loadCount = service.load.mock.calls.length;
+  await act(async () => { check.click(); check.click(); });
+  expect(service.catalogFetch).toHaveBeenCalledExactlyOnceWith(connection.id, expect.any(AbortSignal));
+  expect(check.disabled).toBe(true);
+  expect(check.getAttribute("aria-busy")).toBe("true");
+  await act(async () => finishCheck());
+  expect(usage.querySelector('[data-slot="chatgpt-plan-connection-checked"][role="status"]')).not.toBeNull();
+  expect(check.disabled).toBe(false);
+  expect(service.load).toHaveBeenCalledTimes(loadCount);
+  expect(service.usageQuery).not.toHaveBeenCalled();
+  expect(card.querySelector(`[aria-label="${usageLabel}"]`)).toBeNull();
+
+  // A remote rejection replaces the previous success with an inline diagnostic and allows retry.
+  // 远端拒绝后用卡片内诊断替换上次成功结果，并允许重试。
+  const denial = "Fixture rejected the account credential";
+  service.catalogFetch.mockRejectedValueOnce(new Error(denial));
+  await act(async () => check.click());
+  expect(usage.querySelector('[data-slot="chatgpt-plan-connection-checked"]')).toBeNull();
+  expect(usage.querySelector('[role="alert"]')?.getAttribute("title")).toBe(denial);
+  expect(check.disabled).toBe(false);
+  service.catalogFetch.mockResolvedValueOnce(observation);
+  await act(async () => check.click());
+  expect(usage.querySelector('[role="alert"]')).toBeNull();
+  expect(usage.querySelector('[data-slot="chatgpt-plan-connection-checked"]')).not.toBeNull();
 });
 
 it("keeps a deleting account dialog open and editable after a rejected deletion", async () => {
