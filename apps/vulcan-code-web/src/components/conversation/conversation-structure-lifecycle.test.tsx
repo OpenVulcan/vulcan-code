@@ -95,8 +95,17 @@ it("evicts offscreen bodies, retains measured shells, and remounts the current p
   expect(observer.observe).toHaveBeenCalledWith(oldShell);
   // Each synthetic intersection is limited to the fields consumed by the observer.
   // 每个合成相交事件只提供观察器使用的字段。
-  const deliver = (changes: { target: Element; isIntersecting: boolean }[]) => {
-    report?.(changes as IntersectionObserverEntry[], observer as unknown as IntersectionObserver);
+  // Deliver mount-band reports even after the hook creates its separate eviction observer.
+  // 即使钩子创建了独立的卸载观察器，也将这些通知交给挂载范围的观察器。
+  const mountReport = report!;
+  const deliver = (changes: { target: Element; isIntersecting: boolean }[], callback = mountReport) => {
+    // Intersection reports include the actual box used to classify a large turn.
+    // 交叉通知携带用于识别长回合的实际几何尺寸。
+    const entries = changes.map((entry) => ({
+      ...entry, boundingClientRect: entry.target.getBoundingClientRect(), intersectionRect: new DOMRect(),
+      intersectionRatio: entry.isIntersecting ? 1 : 0, rootBounds: null, time: 0,
+    }));
+    callback(entries, observer as unknown as IntersectionObserver);
   };
   await act(async () => deliver([{ target: oldShell, isIntersecting: true }]));
   expect(host.textContent).toBe("history:false");
@@ -124,6 +133,21 @@ it("evicts offscreen bodies, retains measured shells, and remounts the current p
   expect(host.textContent).toBe("history:truelive:false");
   await act(async () => { find(false); });
   expect(host.textContent).toBe("live:false");
+  expect(oldShell.style.height).toBe("731px");
+
+  // Crossing the inner edge repeatedly must keep a large mounted body alive. The outer exit still reclaims it.
+  // 在内层边缘多次往返时保留大型正文，最终越过外层边缘时仍会释放它。
+  Object.defineProperty(scrollRef.current!, "clientHeight", { value: 600 });
+  await act(async () => deliver([{ target: oldShell, isIntersecting: true }]));
+  const mountedBody = oldShell.firstElementChild;
+  expect(mountedBody).not.toBeNull();
+  for (const isIntersecting of [false, true, false]) {
+    await act(async () => deliver([{ target: oldShell, isIntersecting }]));
+    expect(oldShell.firstElementChild).toBe(mountedBody);
+  }
+  expect(report).not.toBe(mountReport);
+  await act(async () => deliver([{ target: oldShell, isIntersecting: false }], report));
+  expect(oldShell.firstElementChild).toBeNull();
   expect(oldShell.style.height).toBe("731px");
 });
 

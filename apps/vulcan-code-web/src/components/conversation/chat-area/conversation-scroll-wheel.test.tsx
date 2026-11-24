@@ -47,7 +47,10 @@ it.each(["streaming text", "tool card"] as const)("preserves a small upward whee
     }}>
       <div className="vk-transcript-inner">
         <div className="vk-timeline">
-          <section style={update === "tool card" ? { overflowY: "auto" } : undefined}>Initial content</section>
+          <article data-conversation-row-key="long-turn">
+            <section style={update === "tool card" ? { overflowY: "auto" } : undefined}>Initial content</section>
+            <p>Reading position</p>
+          </article>
         </div>
       </div>
     </div>;
@@ -64,6 +67,12 @@ it.each(["streaming text", "tool card"] as const)("preserves a small upward whee
     // 定位所属视口和鼠标指向的子内容。
     const scrollport = host.querySelector<HTMLElement>("[data-conversation-surface-id]")!;
     const leaf = scrollport.querySelector<HTMLElement>("section")!;
+    // JSDOM has no layout engine. Model a visible paragraph independently of the preceding block.
+    // JSDOM 没有排版引擎，单独描述可见段落和上方区块的几何位置。
+    const paragraph = scrollport.querySelector("p")!;
+    let paragraphTop = contentHeight - scrollport.clientHeight;
+    vi.spyOn(paragraph, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, paragraphTop - scrollport.scrollTop, 600, 300));
+    Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [paragraph] });
     // Deliver each queued content-resize callback; takes no parameters and returns nothing.
     // 派发每个已注册的内容尺寸变化回调，不接收参数，无返回值。
     function notifyResize() {
@@ -115,6 +124,21 @@ it.each(["streaming text", "tool card"] as const)("preserves a small upward whee
 
     // Moving down within the old near-bottom range stays paused until the viewport reaches the bottom.
     // 在原有的近底范围内向下滚动仍保持暂停，直到视口抵达底部。
+    // An upstream expansion shares a frame with the native wheel offset. A later contraction has the opposite sign.
+    // 上方展开与原生滚轮位移发生在同一帧，随后收缩时位移方向相反。
+    scrollport.scrollTop -= 120;
+    contentHeight += 1_950;
+    paragraphTop += 1_950;
+    notifyResize();
+    expect(scrollport.scrollTop).toBe(readingTop - 120 + 1_950);
+    scrollport.dispatchEvent(new Event("scroll"));
+    notifyResize();
+    expect(scrollport.scrollTop).toBe(readingTop - 120 + 1_950);
+    paragraphTop -= 1_950;
+    contentHeight -= 1_950;
+    notifyResize();
+    expect(scrollport.scrollTop).toBe(readingTop - 120);
+
     scrollport.scrollTop = bottom() - 2;
     scrollport.dispatchEvent(new Event("scroll"));
     expect(onFollowTailChange).toHaveBeenLastCalledWith(false);
@@ -128,6 +152,8 @@ it.each(["streaming text", "tool card"] as const)("preserves a small upward whee
   } finally {
     await React.act(async () => root.unmount());
     host.remove();
+    Reflect.deleteProperty(document, "elementsFromPoint");
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   }
 });

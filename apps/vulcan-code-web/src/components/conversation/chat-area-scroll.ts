@@ -46,12 +46,11 @@ export function captureConversationViewportAnchor(element: HTMLElement): Convers
   // viewportRect is the native geometry boundary used by both the fast and fallback paths.
   // viewportRect 是快速路径与回退路径共同使用的原生几何边界。
   const viewportRect = element.getBoundingClientRect();
-  // fastAnchor uses browser hit testing to avoid scanning a long mounted transcript during normal scrolling.
-  // fastAnchor 使用浏览器命中测试，避免在正常滚动期间扫描长转录。
-  const fastAnchor = captureConversationViewportAnchorFromPoint(element, viewportRect);
-  if (fastAnchor) {
-    return fastAnchor;
-  }
+  // Native hit testing avoids scanning a long mounted transcript during normal scrolling.
+  // 使用浏览器命中测试，避免在正常滚动期间扫描长转录。
+  const visibleRow = conversationContentAtViewportTop(element, viewportRect)?.closest<HTMLElement>("[data-conversation-row-key]");
+  const anchor = visibleRow && conversationViewportAnchorForRow(element, visibleRow, viewportRect);
+  if (anchor) return anchor;
   // rows is the mounted Turn collection used only when hit testing is unavailable or obscured.
   // rows 是仅在命中测试不可用或被遮挡时使用的已挂载 Turn 集合。
   const rows = element.querySelectorAll<HTMLElement>("[data-conversation-row-key]");
@@ -141,25 +140,18 @@ export function conversationViewportAllowsTailFollow(element: HTMLElement): bool
   return element.scrollHeight <= element.clientHeight + 24 || distanceFromBottom <= 24;
 }
 
-// captureConversationViewportAnchorFromPoint resolves the top visible Turn through native hit testing.
-// captureConversationViewportAnchorFromPoint 通过原生命中测试解析顶部可见 Turn。
-// Parameters: element is the scrollport and viewportRect is its already-read geometry.
-// 参数：element 是滚动视口；viewportRect 是已读取的视口几何。
-// Returns: a stable row anchor when hit testing reaches a Turn owned by this scrollport.
-// 返回值：命中测试到达当前滚动视口拥有的 Turn 时返回稳定行锚点。
-function captureConversationViewportAnchorFromPoint(
-  element: HTMLElement,
-  viewportRect: DOMRect,
-): ConversationViewportAnchorSnapshot | null {
+// Return the deepest element in a visible turn at the top of the supplied scrollport, or null for an uncovered viewport.
+// 给定滚动容器和已测量的视口，返回其顶部可见回合内最深的元素；未命中正文时返回空值。
+export function conversationContentAtViewportTop(element: HTMLElement, viewportRect: DOMRect): Element | null {
   // ownerDocument supplies elementsFromPoint in real browser environments.
   // ownerDocument 在真实浏览器环境中提供 elementsFromPoint。
   const ownerDocument = element.ownerDocument;
   if (!ownerDocument || typeof ownerDocument.elementsFromPoint !== "function") {
     return null;
   }
-  // probeY samples immediately inside the viewport so a partially visible top row remains selected.
-  // probeY 在视口内部紧邻顶部处采样，使部分可见的顶部行仍能被选中。
-  const probeY = Math.min(viewportRect.bottom - 1, viewportRect.top + 1);
+  // Try the top pixel first. A second point just below it covers the grid gap between two turns.
+  // 优先使用顶部像素；若命中回合之间的网格间隙，再探测稍低的位置。
+  const probeYs = [1, 24].map((inset) => Math.min(viewportRect.bottom - 1, viewportRect.top + inset));
   // probeXs cover centered transcript content and both responsive edges without touching the scrollbar gutter.
   // probeXs 覆盖居中转录内容与两侧响应式边缘，同时避开滚动条槽。
   const probeXs = [
@@ -167,19 +159,13 @@ function captureConversationViewportAnchorFromPoint(
     Math.min(viewportRect.right - 24, viewportRect.left + 48),
     Math.max(viewportRect.left + 24, viewportRect.right - 48),
   ];
-  for (const probeX of probeXs) {
-    for (const hit of ownerDocument.elementsFromPoint(probeX, probeY)) {
-      // row is the nearest stable Turn boundary behind overlays at the probe point.
-      // row 是探测点处覆盖层后方最近的稳定 Turn 边界。
-      const row = hit.closest<HTMLElement>("[data-conversation-row-key]");
-      if (!row || !element.contains(row)) {
-        continue;
-      }
-      // anchor verifies visual intersection before accepting the hit-tested row.
-      // anchor 在接受命中行前验证其视觉相交关系。
-      const anchor = conversationViewportAnchorForRow(element, row, viewportRect);
-      if (anchor) {
-        return anchor;
+  for (const probeY of probeYs) {
+    for (const probeX of probeXs) {
+      for (const hit of ownerDocument.elementsFromPoint(probeX, probeY)) {
+        // Only accept a turn owned by this scrollport behind any floating controls.
+        // 仅接受悬浮控件后方且由本滚动容器拥有的回合。
+        const row = hit.closest<HTMLElement>("[data-conversation-row-key]");
+        if (row && element.contains(row)) return hit;
       }
     }
   }

@@ -136,14 +136,44 @@ export function useConversationTurnWindow(
 
     // Use one native observer for every shell, with a buffer in CSS pixels on either side.
     // 全部外壳共享一个原生观察器，视口上下以 CSS 像素设置缓冲。
+    // Keep tall turns mounted across small reversals at the overscan edge to avoid repeating expensive renders.
+    // 在预加载边缘的小幅往返中保留长回合，避免反复执行高成本的渲染。
+    const retained = new Set<Element>();
+    // Observe only tall turns that have actually left the mount band, including jumps beyond both bands.
+    // 仅观察已离开挂载范围的长回合，同时覆盖一次滚动跳出两层范围的情况。
+    let evictionObserver: IntersectionObserver | null = null;
+    // Retain the supplied shell until the outer observer reports its exit; no return value.
+    // 保留给定外壳直到外层观察器报告移出，无返回值。
+    const retainTallShell = (shell: Element): void => {
+      if (retained.has(shell)) return;
+      retained.add(shell);
+      evictionObserver ??= new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting || !retained.delete(entry.target)) continue;
+          evictionObserver?.unobserve(entry.target);
+          // A removed shell may still have a queued intersection notification.
+          // 已删除的外壳仍可能有排队中的交叉通知。
+          const shellRecord = shells.get(entry.target);
+          if (shellRecord) nearby.delete(shellRecord.key);
+        }
+        updateWindow();
+      }, { root: scrollport, rootMargin: `${2 * TURN_OVERSCAN_PX}px 0px` });
+      evictionObserver.observe(shell);
+    };
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         // The registered shell is the source of the key, even after its body unmounts.
         // 即使正文卸载，已注册的外壳仍是回合键的来源。
         const shell = shells.get(entry.target);
         if (!shell) continue;
-        if (entry.isIntersecting) nearby.add(shell.key);
-        else nearby.delete(shell.key);
+        if (entry.isIntersecting) {
+          if (retained.delete(entry.target)) evictionObserver?.unobserve(entry.target);
+          nearby.add(shell.key);
+        } else if (nearby.has(shell.key) && scrollport.clientHeight > 0 && entry.boundingClientRect.height > scrollport.clientHeight) {
+          retainTallShell(entry.target);
+        } else {
+          nearby.delete(shell.key);
+        }
       }
       updateWindow();
     }, { root: scrollport, rootMargin: `${TURN_OVERSCAN_PX}px 0px` });
@@ -154,6 +184,7 @@ export function useConversationTurnWindow(
       for (const { element: shell, key } of shells.values()) {
         if (shell.parentElement === timeline) continue;
         observer.unobserve(shell);
+        if (retained.delete(shell)) evictionObserver?.unobserve(shell);
         shells.delete(shell);
         nearby.delete(key);
         heights.current.delete(key);
@@ -205,6 +236,7 @@ export function useConversationTurnWindow(
     return () => {
       syncShells.current = null;
       observer.disconnect();
+      evictionObserver?.disconnect();
       scrollport.removeEventListener(CONVERSATION_TURN_WINDOW_EXPAND_EVENT, onRequest);
       timeline.removeEventListener("focusout", scheduleInteractionChange);
       timeline.ownerDocument.removeEventListener("selectionchange", scheduleInteractionChange);

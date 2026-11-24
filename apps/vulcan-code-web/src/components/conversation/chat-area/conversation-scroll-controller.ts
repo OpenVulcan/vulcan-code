@@ -1,6 +1,7 @@
 import React from "react";
 import {
   captureConversationScrollSnapshot,
+  conversationContentAtViewportTop,
   conversationDistanceFromBottom,
   conversationScrollTopForSnapshot,
   conversationViewportAllowsTailFollow,
@@ -266,6 +267,9 @@ export function useConversationScrollController(
   // Explicit upward wheel input requires a return to the bottom before passive following can resume.
   // 明确向上滚动滚轮后，必须回到底部才能恢复自动跟随。
   const wheelReadingRef = React.useRef(false);
+  // Preserve the visible descendant and its transcript coordinate across asynchronous layout changes.
+  // 保留可见正文节点及其在会话中的坐标，用于跨异步重排保持阅读位置。
+  const readingAnchorRef = React.useRef<{ node: Element; contentTop: number } | null>(null);
   // observedScrollTopRef is the last native position processed by the controller ledger.
   // observedScrollTopRef 是控制器账本处理的最后一个原生位置。
   const observedScrollTopRef = React.useRef(0);
@@ -370,7 +374,10 @@ export function useConversationScrollController(
   // Returns: nothing.
   // 返回值：无。
   const publishFollowTail = React.useCallback((followTail: boolean): void => {
-    if (followTail) wheelReadingRef.current = false;
+    if (followTail) {
+      wheelReadingRef.current = false;
+      readingAnchorRef.current = null;
+    }
     if (followTailRef.current === followTail) {
       return;
     }
@@ -421,6 +428,36 @@ export function useConversationScrollController(
     }
     return nextTop;
   }, []);
+
+  // Restore a wheel reader's visible content in the given scrollport; return whether its previous anchor survived.
+  // 在给定滚动容器中恢复滚轮阅读者的可见正文，返回旧锚点是否仍然有效。
+  const reconcileReadingAnchor = React.useCallback((element: HTMLElement): boolean => {
+    if (!wheelReadingRef.current || layoutTransactionRef.current || pendingFrameRef.current !== null
+      || programmaticTargetRef.current || pendingTurnRevealRef.current || scrollbarProgressRef.current !== null) {
+      readingAnchorRef.current = null;
+      return false;
+    }
+    // Transcript coordinates exclude wheel movement even when the wheel and resize share a frame.
+    // 正文坐标排除了滚轮位移，即使尺寸变化与滚轮输入发生在同一帧也只补偿重排。
+    const viewport = element.getBoundingClientRect();
+    // Compare with the last observed content before choosing the next anchor.
+    // 在选取下一个锚点前，先与上次记录的可见正文进行比较。
+    const previous = readingAnchorRef.current;
+    // A virtualized descendant can disappear before the layout event arrives.
+    // 虚拟化可能在布局事件到达前移除先前的正文节点。
+    const survived = previous !== null && element.contains(previous.node);
+    if (survived) {
+      // Measure signed displacement so a shrinking turn above the reader is handled too.
+      // 测量有符号位移，同时覆盖阅读位置上方回合缩短的情况。
+      const delta = previous.node.getBoundingClientRect().top - viewport.top + element.scrollTop - previous.contentTop;
+      if (Math.abs(delta) > 0.5) writeScrollTop(element, element.scrollTop + delta);
+    }
+    // The deepest visible node also tracks late layout changes within a single long turn.
+    // 最深的可见节点也能跟踪同一超长回合内部的延迟重排。
+    const node = conversationContentAtViewportTop(element, viewport);
+    readingAnchorRef.current = node && { node, contentTop: node.getBoundingClientRect().top - viewport.top + element.scrollTop };
+    return survived;
+  }, [writeScrollTop]);
 
   // Apply the held track position to the latest scrollable range.
   // 将指针保持的轨道进度应用到最新滚动范围。
@@ -492,9 +529,11 @@ export function useConversationScrollController(
         || current.surfaceId !== surfaceId || element?.dataset.conversationSurfaceId !== surfaceId) {
         return;
       }
+      readingAnchorRef.current = null;
       restoreSnapshot(element, snapshot);
+      reconcileReadingAnchor(element);
     });
-  }, [cancelPendingFrame, restoreSnapshot, syncTail]);
+  }, [cancelPendingFrame, reconcileReadingAnchor, restoreSnapshot, syncTail]);
 
   // handleScroll classifies observed movement against the programmatic target ledger.
   // handleScroll 根据程序化目标账本对观察到的位移进行分类。
@@ -556,8 +595,9 @@ export function useConversationScrollController(
     }
     if (!followTailRef.current) {
       reconcileTailReserve(element);
+      reconcileReadingAnchor(element);
     }
-  }, [cancelPendingFrame, publishFollowTail, reconcileTailReserve]);
+  }, [cancelPendingFrame, publishFollowTail, reconcileReadingAnchor, reconcileTailReserve]);
 
   // captureAndScheduleLayoutRestore preserves the current semantic viewport across one known geometry change.
   // captureAndScheduleLayoutRestore 在一次已知几何变化中保留当前语义视口。
@@ -637,6 +677,8 @@ export function useConversationScrollController(
     layoutTransactionRef.current = null;
     cancelPendingFrame();
     publishFollowTail(false);
+    wheelReadingRef.current = false;
+    readingAnchorRef.current = null;
     const topGap = anchor instanceof Range ? element.clientHeight / 3 : CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX;
     // Jump directly to an unloaded shell so intermediate turns do not mount during a long animation.
     // 直接跳转到未挂载的外壳，避免长距离动画途中挂载中间回合。
@@ -716,6 +758,7 @@ export function useConversationScrollController(
           - element.getBoundingClientRect().top - CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX);
         return;
       }
+      if (reconcileReadingAnchor(element)) return;
       const { anchor } = (event as CustomEvent<ConversationTurnWindowLayoutDetail>).detail;
       if (!anchor) return;
       writeScrollTop(element, conversationScrollTopForSnapshot(element, {
@@ -724,6 +767,10 @@ export function useConversationScrollController(
         scrollTop: element.scrollTop,
         followTail: false,
       }));
+      // Rebase after the row restore if virtualization replaced the visible descendant.
+      // 若虚拟化替换了可见节点，在按行恢复位置后重新选取正文锚点。
+      readingAnchorRef.current = null;
+      reconcileReadingAnchor(element);
     };
     // Pointer movement takes ownership from reading restores until release.
     // 指针移动接管阅读位置恢复，直至松手。
@@ -736,6 +783,7 @@ export function useConversationScrollController(
         pendingTurnRevealRef.current = null;
         foldLimitRef.current = null;
         wheelReadingRef.current = false;
+        readingAnchorRef.current = null;
         cancelPendingFrame();
         publishFollowTail(false);
       }
@@ -757,7 +805,7 @@ export function useConversationScrollController(
       element.removeEventListener(CONVERSATION_SCROLLBAR_POSITION_EVENT, handleScrollbarPosition);
     };
   }, [options.active, options.scrollRef, options.surfaceId, applyScrollbarPosition, cancelPendingFrame,
-    publishFollowTail, reconcileTailReserve, syncTail, writeScrollTop]);
+    publishFollowTail, reconcileReadingAnchor, reconcileTailReserve, syncTail, writeScrollTop]);
 
   React.useLayoutEffect(() => {
     // surfaceId is the exact active business identity after the latest React commit.
@@ -852,6 +900,8 @@ export function useConversationScrollController(
       }
       if (correctionMode === "tail") {
         syncTail();
+      } else {
+        reconcileReadingAnchor(element);
       }
     });
     observer.observe(content);
@@ -862,6 +912,7 @@ export function useConversationScrollController(
     options.surfaceId,
     applyScrollbarPosition,
     publishFollowTail,
+    reconcileReadingAnchor,
     reconcileTailReserve,
     scheduleSnapshotRestore,
     syncTail,
@@ -950,6 +1001,7 @@ export function useConversationScrollController(
       cancelPendingFrame();
       publishFollowTail(false);
       if (programmaticTargetRef.current) writeScrollTop(element, element.scrollTop);
+      reconcileReadingAnchor(element);
     };
     // handleScrollEnd closes a smooth target that the browser stopped before reaching its destination.
     // handleScrollEnd 关闭浏览器在到达目标前停止的平滑滚动目标。
@@ -979,7 +1031,7 @@ export function useConversationScrollController(
       element.removeEventListener("wheel", handleWheel);
       element.removeEventListener("scrollend", handleScrollEnd);
     };
-  }, [cancelPendingFrame, options.active, options.scrollRef, options.surfaceId, publishFollowTail, writeScrollTop]);
+  }, [cancelPendingFrame, options.active, options.scrollRef, options.surfaceId, publishFollowTail, reconcileReadingAnchor, writeScrollTop]);
 
   React.useEffect(() => {
     // handleLayoutWillChange captures the exact semantic viewport before collapse or shell geometry mutation.
@@ -1016,6 +1068,7 @@ export function useConversationScrollController(
       beginFoldReserve(element);
       // A fold click changes layout, not scroll intent: preserve tail ownership or the existing reader anchor.
       // 折叠点击只改变布局，不改变滚动意图：保留锁底状态或既有阅读锚点。
+      readingAnchorRef.current = null;
       const snapshot = captureConversationScrollSnapshot(element, followTailRef.current);
       layoutTransactionRef.current = {
         surfaceId: detail.surfaceId,
