@@ -246,14 +246,17 @@ impl ProviderExecutionClient {
                 wire_response_capture.observe_failure("headers", &failure);
                 Err(failure)?
             };
-            validate_response_content_type(
-                response.headers(),
-                &transport,
-                url.as_str(),
-            )
-            .inspect_err(|failure| {
-                wire_response_capture.observe_failure("headers", failure);
-            })?;
+            // The official ChatGPT Plan returns complete SSE streams even when its HTTP 200 omits Content-Type.
+            // 官方 ChatGPT 套餐的 HTTP 200 响应即使没有 Content-Type，也可能携带完整的 SSE 流。
+            let headerless_chatgpt_plan_stream = status == reqwest::StatusCode::OK
+                && !response.headers().contains_key(reqwest::header::CONTENT_TYPE)
+                && crate::is_openai_chatgpt_plan(&route.connection.provider_id, &route.entry.id);
+            if !headerless_chatgpt_plan_stream {
+                validate_response_content_type(response.headers(), &transport, url.as_str())
+                    .inspect_err(|failure| {
+                        wire_response_capture.observe_failure("headers", failure);
+                    })?;
+            }
             let mut decoder = client
                 .protocols
                 .create_stream_decoder(

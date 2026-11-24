@@ -4,7 +4,7 @@
 use super::super::ProviderWireRequestTraceDispatch;
 use super::super::request_headers::vulcan_code_user_agent;
 use super::super::test_support::{
-    minimal_request, pinned_openrouter_route, read_test_http_request,
+    bundled_manifest_route, minimal_request, pinned_openrouter_route, read_test_http_request,
 };
 use super::*;
 use serde_json::Value;
@@ -17,6 +17,128 @@ use vulcan_ai_contract::ReasoningEffort;
 use vulcan_llm_core::{OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry};
 
 mod usage_accounting;
+
+/// Exercises complete and invalid headerless streams through the actual ChatGPT Plan HTTP route.
+/// 通过真实的 ChatGPT 套餐 HTTP 线路验证完整及无效的无响应头流。
+#[tokio::test]
+async fn chatgpt_plan_accepts_sse_without_content_type_and_still_requires_completion() {
+    // stream_body includes an assistant delta and an explicit successful terminal event.
+    // stream_body 包含助手文本增量与显式成功终态事件。
+    let stream_body = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fixture\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"msg_fixture\",\"delta\":\"OK\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\"}}\n\n",
+    );
+    // cases exercise the single permitted omission and retain the existing HTTP and stream checks.
+    // cases 验证唯一允许省略响应头的情况，并保留既有的 HTTP 与流校验。
+    let cases = [
+        ("chatgpt-plan", "200 OK", "", stream_body, None),
+        (
+            "chatgpt-plan",
+            "200 OK",
+            "",
+            "<html>not a stream</html>",
+            Some("transport"),
+        ),
+        (
+            "chatgpt-plan",
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            stream_body,
+            Some("response_content_type"),
+        ),
+        (
+            "chatgpt-plan",
+            "202 Accepted",
+            "",
+            stream_body,
+            Some("response_content_type"),
+        ),
+        (
+            "public-api",
+            "200 OK",
+            "",
+            stream_body,
+            Some("response_content_type"),
+        ),
+    ];
+    // client uses production request encoding, header validation, and the incremental SSE decoder.
+    // client 使用生产请求编码、响应头校验及增量 SSE 解码器。
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        Arc::new(ProtocolRegistry::first_batch().unwrap()),
+    );
+    // secret supplies a synthetic Bearer value to both loopback routes.
+    // secret 为两个环回线路提供合成 Bearer 值。
+    let secret = crate::CredentialSecretEnvelope::new_api_key("test-key".into())
+        .unwrap()
+        .execution_secret()
+        .unwrap();
+    for (entry, status, content_type_header, body, expected_failure) in cases {
+        // listener changes only the network address of a manifest-backed route.
+        // listener 仅更改基于清单的线路的网络地址。
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        // route keeps its original provider, entry and protocol identity.
+        // route 保留原始供应商、服务入口及协议身份。
+        let mut route = bundled_manifest_route("openai", entry, OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override =
+            Some(format!("http://{}", listener.local_addr().unwrap()));
+        // peer responds only after reading the actual outbound request.
+        // peer 在读取实际出站请求后才响应。
+        let peer = tokio::spawn(async move {
+            // socket is the one accepted loopback connection for this case.
+            // socket 是本用例接受的唯一环回连接。
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert!(
+                read_test_http_request(&mut socket)
+                    .await
+                    .starts_with("POST /responses ")
+            );
+            // response preserves the exact HTTP status, optional header and body of this case.
+            // response 保留本用例的精确 HTTP 状态、可选响应头及正文。
+            let response = format!(
+                "HTTP/1.1 {status}\r\n{content_type_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        // events collect normalized output through terminal success or the typed failure.
+        // events 收集规范化输出，直至成功终态或强类型失败。
+        let events = client
+            .execute(
+                route,
+                minimal_request(),
+                secret.clone(),
+                "plan-stream-fixture".into(),
+            )
+            .collect::<Vec<_>>()
+            .await;
+        peer.await.unwrap();
+        match expected_failure {
+            Some(subcategory) => {
+                assert!(
+                    matches!(events.last(), Some(Err(failure)) if failure.error.subcategory.as_deref() == Some(subcategory)),
+                    "{entry} {status}: {events:?}"
+                );
+                assert!(
+                    !events
+                        .iter()
+                        .any(|event| matches!(event, Ok(AiStreamEvent::ResponseCompleted)))
+                );
+            }
+            None => {
+                assert!(events.iter().all(Result::is_ok), "{events:?}");
+                assert!(events.iter().any(|event| {
+                    matches!(event, Ok(AiStreamEvent::ResponseTextDelta { delta, .. }) if delta == "OK")
+                }));
+                assert!(matches!(
+                    events.last(),
+                    Some(Ok(AiStreamEvent::ResponseCompleted))
+                ));
+            }
+        }
+    }
+}
 
 /// Verifies the captured API body is the exact JSON body received by the HTTP server.
 /// 验证捕获的 API 正文就是 HTTP 服务器实际收到的精确 JSON 正文。

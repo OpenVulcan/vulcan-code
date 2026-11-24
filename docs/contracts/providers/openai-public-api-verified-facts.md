@@ -42,6 +42,16 @@ Codex 订阅使用 0.170.0 请求独立目录。认证查询返回两款模型�
 - [GPT-6.2 迁移指南](https://developers.openai.com/api/docs/guides/latest-model)
 - [Codex 0.170.0 模型目录](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/models-manager/models.json)
 
+### ChatGPT 套餐的 HTTP 流式响应
+
+ChatGPT 套餐按官方流程向 `POST https://api.openai.com/v1/responses` 发送 `store: false`
+和 `stream: true`。2026-11-24 用已配置账号实测，默认 `Accept` 和显式
+`Accept: text/event-stream` 都出现了缺少 `Content-Type` 的 HTTP 200，且正文均是以
+`response.completed` 结束的 SSE。这个入口允许该响应进入原有 SSE 解析，仍要求明确的
+终态事件。其他状态和入口继续校验响应头，已提供的无效类型仍会报错。
+
+- [ChatGPT 套餐模型目录与流式推理](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+
 ## 同步图片生成
 
 媒体入口注册 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2.6-flare`
