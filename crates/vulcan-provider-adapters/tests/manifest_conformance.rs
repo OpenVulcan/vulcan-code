@@ -633,32 +633,31 @@ fn every_bundled_target_input_schema_is_an_object() {
 /// 断言规则声明的每个协议都是同一清单真实具备的路由协议，规则不得超出入口路由。
 #[test]
 fn every_declared_rule_protocol_is_served_by_its_own_manifest() {
+    use vulcan_provider_adapters::ProviderManifestV1;
+
     for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
-        let document = parse_manifest(&stem, &text);
-        let mut served = BTreeSet::new();
-        for service in document["services"].as_array().expect("services array") {
-            let Some(routes) = service["protocol_routes"].as_array() else {
-                continue;
-            };
-            for route in routes {
-                if let Some(protocol) = route["protocol_profile_id"].as_str() {
-                    served.insert(protocol.to_string());
-                }
-            }
-        }
-        for rule in document["model_rules"]
-            .as_array()
-            .expect("model_rules array")
-        {
-            let rule_id = rule["rule_id"].as_str().unwrap_or("(anonymous)");
-            for protocol in rule["supported_protocols"]
-                .as_array()
-                .expect("supported_protocols array")
+        // The manifest schema allows a rule with a selected protocol and no candidate list.
+        // 清单 Schema 允许规则只声明所选协议，省略候选列表。
+        let manifest: ProviderManifestV1 = serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("manifest `{stem}` must match the schema: {error}"));
+        // Collect the protocols actually served by entries in this manifest.
+        // 收集此清单各入口实际提供的协议。
+        let served = manifest
+            .services
+            .iter()
+            .flat_map(|entry| &entry.protocol_routes)
+            .map(|route| route.protocol_profile_id.as_str())
+            .collect::<BTreeSet<_>>();
+        for rule in &manifest.model_rules {
+            for protocol in rule
+                .supported_protocols
+                .iter()
+                .chain(&rule.selected_protocol)
             {
-                let protocol = protocol.as_str().expect("protocol identifier");
                 assert!(
-                    served.contains(protocol),
-                    "rule `{rule_id}` in manifest `{stem}` declares protocol `{protocol}` that no entry route serves"
+                    served.contains(protocol.as_str()),
+                    "rule `{}` in manifest `{stem}` declares protocol `{protocol}` that no entry route serves",
+                    rule.rule_id,
                 );
             }
         }

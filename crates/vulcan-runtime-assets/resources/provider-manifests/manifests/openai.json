@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 34,
-  "published_at": "2026-11-24T13:58:34Z",
+  "revision": 35,
+  "published_at": "2026-11-24T15:36:40Z",
   "engine_contract": {
     "minimum_manifest_engine": 6,
     "required_protocol_profiles": [
@@ -2135,8 +2135,7 @@
           "Use ordered references and the Codex provider-managed output size."
         ],
         "evidence_refs": [
-          "docs/contracts/providers/openai-public-api-verified-facts.md#codex-套餐图片编辑",
-          "https://github.com/openai/codex/blob/75df5098a6d92b40dc61e7a9964233ce9c359677/codex-rs/ext/image-generation/src/tool.rs"
+          "docs/contracts/providers/openai-public-api-verified-facts.md#codex-套餐图片编辑"
         ]
       }
     },
