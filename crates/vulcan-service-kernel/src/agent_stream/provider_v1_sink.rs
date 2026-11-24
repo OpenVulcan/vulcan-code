@@ -2813,26 +2813,24 @@ impl ProviderV1StreamSink {
         // Quoted file lines are captured once, as the reply stands when it is sealed.
         // 引用的文件行只抓取一次，即回答封口时的状态。
         let mut economy_candidate = None;
-        if terminal.tool_call_count == 0 && terminal.status == ApiCallStatus::Completed {
-            if let Some(active) = self.active.as_mut()
-                && let Some(revision) = active.economy_revision
-            {
-                let handoff = active
-                    .economy_handoff_allowed
-                    .then(|| {
-                        vulcan_session_core::v1::economy::split_summary(&active.assistant_text)
-                    })
-                    .flatten();
-                let summary = handoff.map(|(_, text)| text.to_owned());
-                if let Some((body, _)) = handoff {
-                    active.assistant_text.truncate(body.len());
-                }
-                economy_candidate = Some(vulcan_session_core::v1::economy::EconomyCandidate {
-                    revision,
-                    api: active.api_call_id,
-                    summary,
-                });
+        if terminal.tool_call_count == 0
+            && terminal.status == ApiCallStatus::Completed
+            && let Some(active) = self.active.as_mut()
+            && let Some(revision) = active.economy_revision
+        {
+            let handoff = active
+                .economy_handoff_allowed
+                .then(|| vulcan_session_core::v1::economy::split_summary(&active.assistant_text))
+                .flatten();
+            let summary = handoff.map(|(_, text)| text.to_owned());
+            if let Some((body, _)) = handoff {
+                active.assistant_text.truncate(body.len());
             }
+            economy_candidate = Some(vulcan_session_core::v1::economy::EconomyCandidate {
+                revision,
+                api: active.api_call_id,
+                summary,
+            });
         }
         let code_snapshots = match self.active.as_ref() {
             Some(active) if active.assistant_text_seq.is_some() => {

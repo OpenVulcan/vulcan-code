@@ -735,7 +735,9 @@ fn capture_webui_context_compaction_plan(
 ) -> Result<WebuiContextCompactionPlan, String> {
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
-    let (snapshot, source) = handle
+    // Keep the captured projection paired with evidence from the same durable revision.
+    // 将捕获的投影与同一持久修订的证据配对传递。
+    let projection = handle
         .capture_context_compaction_planning_snapshot_with_source()
         .map_err(|error| format!("failed to capture V1 compaction projection: {error}"))?;
     plan_webui_context_compaction(
@@ -743,8 +745,7 @@ fn capture_webui_context_compaction_plan(
         session_id,
         policy,
         empty_error,
-        snapshot,
-        source,
+        projection,
         retain_text_for_images,
         economy_start,
     )
@@ -783,16 +784,15 @@ pub(crate) fn plan_manual_webui_context_compaction(
         session_id,
         target.context_compaction_policy,
         "Nothing to compact yet: the whole history still fits in the recent turns that compaction keeps verbatim.",
-        snapshot,
-        source,
+        (snapshot, source),
         false,
         None,
     )?;
     Ok((plan, target))
 }
 
-/// Builds the summary plan and media projection from `snapshot` and its matching `source`.
-/// 由 `snapshot` 及配对的 `source` 构建摘要计划和媒体投影。
+/// Builds the summary plan and media projection from the captured `projection` and its source proof.
+/// 由捕获的 `projection` 及其中配对的来源证明构建摘要计划和媒体投影。
 /// `state` supplies resource ownership, `session_id` names the source, and `policy` selects the retained tail.
 /// `state` 提供资源所有权，`session_id` 标识来源，`policy` 选择保留尾部。
 /// Returns the plan or `empty_error` when there is no eligible history, and reports projection errors.
@@ -802,11 +802,16 @@ fn plan_webui_context_compaction(
     session_id: SessionId,
     policy: ContextCompactionPolicy,
     empty_error: &str,
-    snapshot: crate::session_runtime_registry_v1::SessionProviderProjectionSnapshot,
-    source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
+    projection: (
+        crate::session_runtime_registry_v1::SessionProviderProjectionSnapshot,
+        vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
+    ),
     retain_text_for_images: bool,
     economy_start: Option<Seq>,
 ) -> Result<WebuiContextCompactionPlan, String> {
+    // The projection and proof were captured together under the same durable read.
+    // 投影与证明是在同一次持久读取中一并捕获的。
+    let (snapshot, source) = projection;
     let projected_messages = snapshot
         .sourced_items
         .iter()

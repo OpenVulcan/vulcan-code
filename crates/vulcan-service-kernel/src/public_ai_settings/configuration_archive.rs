@@ -92,17 +92,35 @@ struct ConfigurationArchive {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ArchivedAccount {
-    Portable {
-        connection: CredentialConnection,
-        material: CredentialSecretMaterial,
-        management_material: Option<CredentialSecretMaterial>,
-        model_access: Option<ConnectionModelAccessPolicy>,
-        enabled: bool,
-        pending_validation: bool,
-    },
-    SignInRequired {
-        account: ArchiveAccountIdentity,
-    },
+    // Keep the credential payload out of each enum slot while retaining the flat tagged wire format.
+    // 将凭据载荷移出每个枚举槽位，同时保留扁平的带标签归档格式。
+    Portable(Box<PortableAccount>),
+    SignInRequired { account: ArchiveAccountIdentity },
+}
+
+/// Credentials and settings that may be transferred to another installation.
+/// 可迁移到其他安装的凭据与设置。
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PortableAccount {
+    /// Account settings without local secret-store references.
+    /// 去除本机秘密存储引用的账号设置。
+    connection: CredentialConnection,
+    /// Credential used by the model service.
+    /// 模型服务使用的凭据。
+    material: CredentialSecretMaterial,
+    /// Optional credential for account management operations.
+    /// 可选的账号管理操作凭据。
+    management_material: Option<CredentialSecretMaterial>,
+    /// Account-specific model access policy, when configured.
+    /// 已配置时保存该账号专属的模型访问策略。
+    model_access: Option<ConnectionModelAccessPolicy>,
+    /// Whether the account was enabled when exported.
+    /// 导出时账号是否已启用。
+    enabled: bool,
+    /// Whether the account was still pending validation when exported.
+    /// 导出时账号是否仍待验证。
+    pending_validation: bool,
 }
 
 /// Identifies an account for selection or sign-in using user-visible metadata.
@@ -201,7 +219,7 @@ pub(crate) async fn export(
         let mut portable_connection = connection.clone();
         portable_connection.secret_reference.clear();
         portable_connection.management_secret_reference = None;
-        accounts.push(ArchivedAccount::Portable {
+        accounts.push(ArchivedAccount::Portable(Box::new(PortableAccount {
             connection: portable_connection,
             material: secret.material,
             management_material,
@@ -211,7 +229,7 @@ pub(crate) async fn export(
                 .cloned(),
             enabled: config.connection_is_enabled(&connection.id),
             pending_validation: config.connection_is_pending_validation(&connection.id),
-        });
+        })));
     }
     drop(transaction);
     tokio::task::spawn_blocking(move || {
@@ -302,14 +320,17 @@ pub(crate) async fn import(
     for account in input.accounts {
         match account {
             ArchivedAccount::SignInRequired { account } => sign_in_required.push(account),
-            ArchivedAccount::Portable {
-                mut connection,
-                material,
-                management_material,
-                model_access,
-                enabled,
-                pending_validation,
-            } => {
+            ArchivedAccount::Portable(portable) => {
+                // Consume the payload without cloning credential material.
+                // 直接取出载荷，避免复制凭据内容。
+                let PortableAccount {
+                    mut connection,
+                    material,
+                    management_material,
+                    model_access,
+                    enabled,
+                    pending_validation,
+                } = *portable;
                 if is_openai_chatgpt_plan(&connection.provider_id, &connection.service_entry_id)
                     || is_openai_codex_subscription(
                         &connection.provider_id,
@@ -399,9 +420,9 @@ impl ConfigurationArchive {
             .enumerate()
             .map(|(index, archived)| {
                 let (connection_id, account) = match archived {
-                    ArchivedAccount::Portable { connection, .. } => {
-                        let account = ArchiveAccountIdentity::from(&connection);
-                        (Some(connection.id), account)
+                    ArchivedAccount::Portable(portable) => {
+                        let account = ArchiveAccountIdentity::from(&portable.connection);
+                        (Some(portable.connection.id), account)
                     }
                     ArchivedAccount::SignInRequired { account } => (None, account),
                 };
@@ -443,7 +464,7 @@ impl ConfigurationArchive {
             .accounts
             .iter()
             .map(|account| match account {
-                ArchivedAccount::Portable { connection, .. } => connection.provider_id.as_str(),
+                ArchivedAccount::Portable(portable) => portable.connection.provider_id.as_str(),
                 ArchivedAccount::SignInRequired { account } => account.provider_id.as_str(),
             })
             .collect::<BTreeSet<_>>();
@@ -642,7 +663,7 @@ mod tests {
     /// 验证凭据记录能加密往返，并拒绝篡改或错误密码。
     #[test]
     fn fixture_configuration_requires_the_correct_password_and_valid_tag() {
-        let portable = ArchivedAccount::Portable {
+        let portable = ArchivedAccount::Portable(Box::new(PortableAccount {
             connection: CredentialConnection {
                 id: "fixture-connection".into(),
                 provider_id: "custom:fixture".into(),
@@ -662,7 +683,12 @@ mod tests {
             model_access: None,
             enabled: false,
             pending_validation: true,
-        };
+        }));
+        // Tagging the boxed payload must keep the credential fields at the same wire level.
+        // 给装箱后的载荷添加标签时，凭据字段仍应位于相同的序列化层级。
+        let wire = serde_json::to_value(&portable).unwrap();
+        assert_eq!(wire["kind"], "portable");
+        assert!(wire.get("connection").is_some() && wire.get("material").is_some());
         let archive = ConfigurationArchive {
             providers: Vec::new(),
             accounts: vec![
@@ -691,13 +717,14 @@ mod tests {
         assert_ne!(bytes, encrypt(&archive, "test password").unwrap());
         assert!(decrypt(&bytes, "different password").is_err());
         let restored = decrypt(&bytes, "test password").unwrap();
-        assert!(
-            matches!(&restored.accounts[..], [ArchivedAccount::Portable {
-            material: CredentialSecretMaterial::ApiKey { value }, enabled: false, pending_validation: true, ..
-        }, ArchivedAccount::SignInRequired { account }]
-            if value == "fixture-private-key"
-                && account.display_name == "fixture-private-account")
-        );
+        assert!(matches!(
+            &restored.accounts[..],
+            [ArchivedAccount::Portable(portable), ArchivedAccount::SignInRequired { account }]
+                if matches!(&portable.material, CredentialSecretMaterial::ApiKey { value } if value == "fixture-private-key")
+                    && !portable.enabled
+                    && portable.pending_validation
+                    && account.display_name == "fixture-private-account"
+        ));
         let mut original = ZipArchive::new(Cursor::new(&bytes)).unwrap();
         let mut entry = Vec::new();
         original
