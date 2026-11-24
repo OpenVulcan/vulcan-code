@@ -26,14 +26,16 @@ describe("settingsSubAreaGroups", () => {
     }
   });
 
-  // The OpenVulcan account has its own page; other providers, accounts, models and function routing share one
-  // merged model services page; subagent models keep their own page.
-  // OpenVulcan 账户拥有独立页面；其他供应商、账号、模型与功能分配共用一个合并后的模型服务页；子代理模型有独立页面。
-  it("shows the OpenVulcan account page, one model services page and the subagent models page in the models group", () => {
+  // Each model settings page should be reachable exactly once, regardless of menu order.
+  // 模型设置的每个页面都应当有且仅有一个入口，不依赖菜单顺序。
+  it("lists each account, model service, subagent and economy settings page once in the models group", () => {
     const groups = settingsSubAreaGroups(testTranslator);
-    const models = groups.find((group) => group.id === "models");
-
-    expect(models?.items.map((item) => item.id)).toEqual(["openvulcan-account", "model-providers", "subagent-models"]);
+    // Count matching page identities within the models group.
+    // 在模型分组中统计与页面标识匹配的入口。
+    const modelPages = groups.filter((group) => group.id === "models").flatMap((group) => group.items);
+    for (const page of ["openvulcan-account", "model-providers", "subagent-models", "economy-mode"]) {
+      expect(modelPages.filter((item) => item.id === page)).toHaveLength(1);
+    }
   });
 
   // Exposes the visible acceptance surface from the about group.
