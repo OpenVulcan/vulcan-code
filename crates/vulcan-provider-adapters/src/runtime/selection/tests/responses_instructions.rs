@@ -1,5 +1,5 @@
-//! Socket-level verification of instruction placement on manifest-selected Responses routes.
-//! 通过真实 Socket 验证清单所选 Responses 线路的指令位置。
+//! Verifies instructions and input projection on manifest-selected Responses routes.
+//! 验证清单所选 Responses 线路的指令和输入投影。
 
 use crate::execution::test_support::{
     bundled_manifest_route, minimal_request, read_test_http_request,
@@ -14,7 +14,10 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::{io::AsyncWriteExt, net::TcpListener};
-use vulcan_ai_contract::{AiMessage, AiStreamEvent, ContentItem, MessageRole};
+use vulcan_ai_contract::{
+    AiMessage, AiStreamEvent, ContentItem, MessageRole, ResourceKind, ResourceReference,
+    ResourceSourceKind,
+};
 use vulcan_llm_core::{
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
@@ -77,19 +80,48 @@ fn model_fixture(
     // 使用随包服务声明的凭据档。
     let mut account = bundled_manifest_route("openai", entry, protocol).connection;
     account.id = "fixture".into();
+    // Use the matching discovery schema so the plan supplies only evidence present in its account catalog.
+    // 使用对应的发现结构，使套餐只提供其账号目录实际包含的证据。
+    let discovered = if entry == crate::OPENAI_CHATGPT_PLAN_ENTRY_ID {
+        // Reproduce visible entries from the account-scoped plan directory.
+        // 复现套餐账号目录中的可见条目。
+        let discovery = json!({"models": models.iter().map(|id| json!({
+            "slug": id, "display_name": id, "visibility": "list"
+        })).collect::<Vec<_>>()});
+        // Raw discovery proves visibility but does not supply the model's input modalities.
+        // 原始发现证明可见性，但不会提供模型的输入模态。
+        let mut catalog = crate::discovery::parse_openai_chatgpt_plan_catalog(
+            &account.id,
+            1,
+            &discovery.to_string(),
+        )
+        .unwrap();
+        // Apply the metadata client's manifest enrichment before publishing protocol variants.
+        // 发布协议变体前应用元数据客户端的清单补全逻辑。
+        let manifests = runtime.bundled_manifests.read().unwrap();
+        crate::discovery::enrich_compatible_model_catalog_with_manifest(
+            &account.provider_id,
+            entry,
+            Some(&account.credential_profile_id),
+            protocol,
+            &mut catalog,
+            manifests.manifest(&account.provider_id).unwrap(),
+        );
+        catalog
+    } else {
+        // Reproduce ID-only OpenAI catalog entries used by the other selector tests.
+        // 复现其他选择测试使用的仅含 ID 的 OpenAI 目录条目。
+        let discovery =
+            json!({"data": models.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()});
+        parse_openai_model_catalog(&account.id, 1, &discovery.to_string()).unwrap()
+    };
     config
         .connection_graph
         .add_connection(&runtime.providers().unwrap(), account)
         .unwrap();
-    // Each model goes through credential-scoped discovery and the active manifest overlay.
-    // 每个模型都经过凭据作用域内的发现及活动清单覆盖。
-    let discovery = json!({"data":models.iter().map(|id| json!({"id":id})).collect::<Vec<_>>()});
     // Install discovery evidence for the protocol this endpoint actually speaks.
     // 为此端点实际使用的协议安装发现证据。
-    let catalog = with_protocol_variants(
-        parse_openai_model_catalog("fixture", 1, &discovery.to_string()).unwrap(),
-        &[protocol],
-    );
+    let catalog = with_protocol_variants(discovered, &[protocol]);
     install_source_catalog(&runtime, catalog.clone());
     runtime.replace_catalog(catalog).unwrap();
     for model in models {
@@ -368,4 +400,109 @@ fn chatgpt_plan_projects_stateless_responses_and_no_image_generation() {
     assert_eq!(encoded.body["tools"][0]["tools"][0]["name"], "list_files");
     assert!(encoded.body.get("max_output_tokens").is_none());
     assert!(encoded.body.get("previous_response_id").is_none());
+}
+
+/// Verifies that discovered plan models expose their declared input modalities and serialize inline attachments.
+/// 验证套餐发现的模型公开已声明的输入模态，并将附件序列化为内联输入。
+#[test]
+fn chatgpt_plan_discovery_enables_declared_image_and_file_inputs() {
+    // Discovery includes the affected older models, the existing GPT-6.2 rules and one unrecognized model.
+    // 发现包含受影响的旧模型、现有 GPT-6.2 规则和一个未知模型。
+    let models = [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
+    ];
+    // An account-visible ID alone carries no evidence about additional modalities.
+    // 账号可见的 ID 本身不提供额外模态的证据。
+    let unknown_model = "unrecognized-plan-model";
+    // Install the account's entire visible directory before applying exact rules.
+    // 在应用精确规则前安装该账号的完整可见目录。
+    let discovered_models = [models.as_slice(), &[unknown_model]].concat();
+    // The test exercises the bundled provider manifest with the production selector.
+    // 测试通过生产选择器使用随包供应商清单。
+    let (runtime, config) = model_fixture(
+        crate::OPENAI_CHATGPT_PLAN_ENTRY_ID,
+        OPENAI_RESPONSES_PROFILE_ID,
+        &discovered_models,
+    );
+    // Check the capability snapshot that feeds the account model directory.
+    // 检查账号模型目录使用的能力快照。
+    let unknown = runtime
+        .resolve_connection_model_selection(&config, "fixture", "openai", unknown_model)
+        .unwrap();
+    assert!(unknown.model.capabilities.input_resources.is_empty());
+
+    // Encode actual plan request bodies without using a live account.
+    // 使用套餐的真实请求编码构造正文，无需在线账号。
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().unwrap()),
+    );
+    // Carry one text part and two request-local resources supplied by the host.
+    // 携带一条文本及两个由宿主提供的本次请求资源。
+    let mut prompt = message(MessageRole::User, "Review both attachments.");
+    for (kind, mime, filename) in [
+        (ResourceKind::Image, "image/png", "image.png"),
+        (ResourceKind::File, "application/pdf", "document.pdf"),
+    ] {
+        prompt.content.push(ContentItem::Resource {
+            resource: ResourceReference {
+                id: filename.into(),
+                kind,
+                media_type: Some(mime.into()),
+                source_kind: ResourceSourceKind::InlineData,
+                file_name: Some(filename.into()),
+                image_detail: None,
+                resource_path: None,
+                local_path: None,
+                url: Some(format!("data:{mime};base64,AA==")),
+            },
+        });
+    }
+    // Reuse the same input across the affected models to isolate catalog and route differences.
+    // 对相关模型复用同一份输入，以隔离目录和线路差异。
+    let mut request = minimal_request();
+    request.messages = vec![prompt];
+    for model in models {
+        // Resolve the model as a conversation and as the account directory would see it.
+        // 按会话与账号目录看到的结果解析模型。
+        let selected = runtime
+            .resolve_connection_model_selection(&config, "fixture", "openai", model)
+            .unwrap();
+        for kind in [ResourceKind::Image, ResourceKind::File] {
+            assert!(
+                selected.model.capabilities.input_resources.contains(&kind),
+                "ChatGPT Plan model {model} is missing its declared {kind:?} input"
+            );
+        }
+        request.model_id = model.into();
+        // Inspect the fully projected provider content for the user message.
+        // 检查用户消息完整投影后的供应商内容。
+        let encoded = client.encode_request(&selected.route, &request).unwrap();
+        // Find the input by role rather than relying on a prefix's exact length.
+        // 按角色查找输入，不依赖前缀的固定长度。
+        let parts = encoded.body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["role"] == "user")
+            .unwrap()["content"]
+            .as_array()
+            .unwrap();
+        assert!(parts.contains(&json!({"type": "input_text", "text": "Review both attachments."})));
+        assert!(parts.contains(&json!({
+            "type": "input_image", "image_url": "data:image/png;base64,AA=="
+        })));
+        assert!(parts.contains(&json!({
+            "type": "input_file", "file_data": "data:application/pdf;base64,AA==", "filename": "document.pdf"
+        })));
+    }
 }

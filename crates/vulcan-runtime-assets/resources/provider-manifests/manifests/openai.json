@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 32,
-  "published_at": "2026-11-24T00:00:00Z",
+  "revision": 33,
+  "published_at": "2026-11-24T10:14:38Z",
   "engine_contract": {
     "minimum_manifest_engine": 6,
     "required_protocol_profiles": [
@@ -224,6 +224,150 @@
     "default_operation_refs": []
   },
   "model_rules": [
+    {
+      "rule_id": "chatgpt-plan-gpt-5-6-sol",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-5.6-sol"
+      },
+      "core_model_ref": "gpt-5.6-sol",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-5-6-terra",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-5.6-terra"
+      },
+      "core_model_ref": "gpt-5.6-terra",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-5-6-luna",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-5.6-luna"
+      },
+      "core_model_ref": "gpt-5.6-luna",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-6-astra",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6-astra"
+      },
+      "core_model_ref": "gpt-6-astra",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-6-sol",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6-sol"
+      },
+      "core_model_ref": "gpt-6-sol",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-6-luna",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6-luna"
+      },
+      "core_model_ref": "gpt-6-luna",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-6-1-sol",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.1-sol"
+      },
+      "core_model_ref": "gpt-6.1-sol",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
+    {
+      "rule_id": "chatgpt-plan-gpt-6-1-terra",
+      "scope": {
+        "service_entry_ids": [
+          "chatgpt-plan"
+        ],
+        "credential_profile_ids": [
+          "chatgpt-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.1-terra"
+      },
+      "core_model_ref": "gpt-6.1-terra",
+      "selected_protocol": "openai-responses.v1",
+      "provenance_ref": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+    },
     {
       "rule_id": "chatgpt-plan-gpt-6-2-sol",
       "scope": {

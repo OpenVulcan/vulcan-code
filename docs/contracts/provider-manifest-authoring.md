@@ -1047,6 +1047,10 @@ custom 历史只按其原始配对重放，不得借此向无声明的新请求�
 
 Responses 线路可在模型规则中配置 `responses_developer_prefix: true`（清单引擎 6 起），该规则必须选择 `openai-responses.v1`。OpenAI 公开 API Key 和 ChatGPT 套餐入口为 GPT-6.2 Sol 和 Astra 启用该规则。固定 System 正文按原顺序合并为 `input` 的第一条 developer 消息，调用方显式提供的 `request_instructions` 作为本次请求的顶层 `instructions`。已有 developer 消息、工具结果和带时序的宿主事件保留原顺序。模型规则或请求编码变化时，同步核对官方迁移说明。[OpenAI GPT-6.2 迁移说明](https://developers.openai.com/api/docs/guides/latest-model#migration-quickstart)
 
+OpenAI ChatGPT 套餐由账号发现结果决定模型可见范围。已核对的输入模态通过 `chatgpt-plan` 和 `chatgpt-oauth`
+作用域内的精确模型规则引用核心模型清单。符合本地内联预算的图片及文件随 Responses 请求发送；该入口不声明
+独立的 Files API 上传通道。变更套餐模型或附件协议时核对 [OpenAI 套餐预览限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。
+
 `model_rules[].codex_behavior` 是精确模型规则拥有的封闭契约，只能用于
 `openai-codex-responses.v1`。它冻结 wire 方言、补丁/终端/搜索工具形态、并行调用、
 图片细节、verbosity、多智能体版本、说明注入、Node 审核、压缩哈希、工具输出截断

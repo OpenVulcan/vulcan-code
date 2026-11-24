@@ -805,9 +805,12 @@ fn manifest_schema_closes_model_parameter_definitions() {
 type NestedContractCase = (&'static str, &'static [&'static str]);
 
 /// Probe cases shared by the Rust-parser and JSON-Schema closure tests.
+/// Rust 解析与 JSON Schema 封闭性测试共用的检查用例。
 const NESTED_CONTRACT_CASES: &[NestedContractCase] = &[
+    // AgentSpace declares the Responses recovery object used to exercise this shared contract.
+    // AgentSpace 声明的 Responses 恢复对象用于覆盖此共享契约。
     (
-        "openai.json",
+        "agentspace.json",
         &["services", "protocol_routes", "responses_features"],
     ),
     ("alibaba.json", &["usage_profiles", "payload"]),
